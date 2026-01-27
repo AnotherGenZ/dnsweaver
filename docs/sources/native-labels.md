@@ -43,7 +43,7 @@ labels:
 ```
 
 !!! note "Coming Soon"
-    A simpler `dnsweaver.hostnames` label for comma-separated lists is planned. See [#96](https://gitlab.bluewillows.net/root/dnsweaver/-/issues/96).
+    A simpler `dnsweaver.hostnames` label for comma-separated lists is planned.
 
 ### With Options
 
