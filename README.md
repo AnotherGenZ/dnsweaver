@@ -16,6 +16,7 @@ dnsweaver watches Docker events and automatically creates and deletes DNS record
 - 🔀 **Multi-Provider Support** — Route different domains to different DNS providers
 - 🌐 **Split-Horizon DNS** — Internal and external records from the same container labels
 - 🐳 **Docker & Swarm Native** — Works with standalone Docker and Docker Swarm clusters
+- 🏗️ **Multi-Instance Safe** — Run multiple dnsweaver instances on the same DNS zone without conflicts
 - 🔒 **Socket Proxy Compatible** — Connect via TCP to a Docker socket proxy for improved security
 - 🏷️ **Traefik Integration** — Parses `traefik.http.routers.*.rule` labels to extract hostnames
 - 📊 **Observable** — Prometheus metrics, health endpoints, structured logging
@@ -27,6 +28,7 @@ dnsweaver watches Docker events and automatically creates and deletes DNS record
 |----------|--------------|-------|
 | [Technitium](https://maxfield-allison.github.io/dnsweaver/providers/technitium/) | A, AAAA, CNAME, SRV, TXT | Full-featured self-hosted DNS |
 | [Cloudflare](https://maxfield-allison.github.io/dnsweaver/providers/cloudflare/) | A, AAAA, CNAME, TXT | With optional proxy support |
+| [RFC 2136](https://maxfield-allison.github.io/dnsweaver/providers/rfc2136/) | A, AAAA, CNAME, SRV, TXT | BIND, Windows DNS, PowerDNS, Knot |
 | [Pi-hole](https://maxfield-allison.github.io/dnsweaver/providers/pihole/) | A, AAAA, CNAME | API or file mode |
 | [dnsmasq](https://maxfield-allison.github.io/dnsweaver/providers/dnsmasq/) | A, AAAA, CNAME | File-based configuration |
 | [Webhook](https://maxfield-allison.github.io/dnsweaver/providers/webhook/) | Any | Custom integrations |
