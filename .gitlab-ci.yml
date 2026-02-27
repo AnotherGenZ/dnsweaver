@@ -7,8 +7,8 @@ variables:
   GOPROXY: https://proxy.golang.org,direct
   GOFLAGS: "-mod=readonly"
   BINARY_NAME: "dnsweaver"
-  REGISTRY: "registry.bluewillows.net"
-  IMAGE: "registry.bluewillows.net/root/dnsweaver"
+  REGISTRY: "registry.probablyfine.dev"
+  IMAGE: "registry.probablyfine.dev/root/dnsweaver"
   # Deploy target - set these as CI/CD variables or override here
   # DEPLOY_HOST: "swarm-manager.example.com"
   # DEPLOY_USER: "deploy"
