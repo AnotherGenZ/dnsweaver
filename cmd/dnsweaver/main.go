@@ -25,6 +25,7 @@ import (
 	"gitlab.bluewillows.net/root/dnsweaver/providers/cloudflare"
 	"gitlab.bluewillows.net/root/dnsweaver/providers/dnsmasq"
 	"gitlab.bluewillows.net/root/dnsweaver/providers/pihole"
+	"gitlab.bluewillows.net/root/dnsweaver/providers/rfc2136"
 	"gitlab.bluewillows.net/root/dnsweaver/providers/technitium"
 	"gitlab.bluewillows.net/root/dnsweaver/providers/webhook"
 	dnsweaversource "gitlab.bluewillows.net/root/dnsweaver/sources/dnsweaver"
@@ -84,6 +85,7 @@ func run() error {
 		slog.String("go_version", runtime.Version()),
 		slog.Bool("dry_run", cfg.DryRun()),
 		slog.Bool("adopt_existing", cfg.AdoptExisting()),
+		slog.String("instance_id", cfg.InstanceID()),
 	)
 
 	// Create context with cancellation for graceful shutdown
@@ -117,6 +119,14 @@ func run() error {
 	// are retried in the background instead of causing a fatal error.
 	providerRegistry := provider.NewRegistry(logger)
 	registerProviderFactories(providerRegistry)
+
+	// Set instance ID for multi-instance coordination (#84)
+	if cfg.InstanceID() != "" {
+		providerRegistry.SetInstanceID(cfg.InstanceID())
+		logger.Info("multi-instance mode enabled",
+			slog.String("instance_id", cfg.InstanceID()),
+		)
+	}
 
 	providerManager := provider.NewManager(providerRegistry,
 		provider.WithManagerLogger(logger),
@@ -154,6 +164,7 @@ func run() error {
 		AdoptExisting:     cfg.AdoptExisting(),
 		ReconcileInterval: cfg.ReconcileInterval(),
 		Enabled:           true,
+		InstanceID:        cfg.InstanceID(),
 	}
 	rec := reconciler.New(dockerClient, sourceRegistry, providerRegistry,
 		reconciler.WithConfig(reconcilerCfg),
@@ -411,6 +422,9 @@ func registerProviderFactories(registry *provider.Registry) {
 
 	// Register Pi-hole provider factory (local DNS via Pi-hole API or file mode)
 	registry.RegisterFactory("pihole", pihole.Factory())
+
+	// Register RFC 2136 provider factory (BIND, Windows DNS, PowerDNS, etc.)
+	registry.RegisterFactory("rfc2136", rfc2136.Factory())
 }
 
 // initializeProviders initializes all configured providers using the manager.

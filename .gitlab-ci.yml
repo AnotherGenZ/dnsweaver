@@ -1,7 +1,7 @@
 # dnsweaver - GitLab CI/CD Pipeline
 # Streamlined from go-project-template
 
-stages: [validate, test, security, build, docker, mirror, deploy, github-release]
+stages: [validate, test, security, build, pages, docker, mirror, deploy, integration, github-release]
 
 variables:
   GOPROXY: https://proxy.golang.org,direct
@@ -29,11 +29,14 @@ workflow:
   - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     changes: *code-files
 
-# Feature branches: run validate/test/security/build but NOT docker (no image push)
+# Docker builds: main, develop, tags, AND feature branches
+# Feature branch images are tagged as feature-<slug> for easy identification/cleanup
 .rules-docker: &rules-docker
   - if: $CI_COMMIT_TAG
   - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop"
     changes: &docker-files ["{**/*.go,go.mod,go.sum,Dockerfile,.dockerignore}"]
+  - if: $CI_COMMIT_BRANCH =~ /^(feature|bugfix|hotfix|fix)\//
+    changes: *docker-files
 
 .go-base:
   image: golang:1.24-alpine
@@ -145,6 +148,46 @@ build:go:
   rules: *rules-code-changes
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Pages (Documentation Preview)
+# ─────────────────────────────────────────────────────────────────────────────
+
+.pages-base:
+  stage: pages
+  image: python:3.12-alpine
+  before_script:
+    - apk add --no-cache git cairo-dev libffi-dev build-base
+    - pip install mkdocs-material mkdocs-git-revision-date-localized-plugin pillow cairosvg
+
+# Feature branch doc preview - accessible at $CI_PAGES_URL/-/jobs/$CI_JOB_ID/artifacts/public/
+pages:preview:
+  extends: .pages-base
+  script:
+    - mkdocs build --site-dir public
+  artifacts:
+    paths: [public]
+    expire_in: 7 days
+  environment:
+    name: docs/preview/$CI_COMMIT_REF_SLUG
+    url: $CI_JOB_URL/artifacts/public/index.html
+    auto_stop_in: 7 days
+  rules:
+    - if: $CI_COMMIT_BRANCH =~ /^(feature|bugfix|hotfix|fix)\//
+      changes: ["{docs/**/*,mkdocs.yml,README.md}"]
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: ["{docs/**/*,mkdocs.yml,README.md}"]
+
+# Main GitLab Pages deployment (develop/main only)
+pages:
+  extends: .pages-base
+  script:
+    - mkdocs build --site-dir public
+  artifacts:
+    paths: [public]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop" || $CI_COMMIT_BRANCH == "main"
+      changes: ["{docs/**/*,mkdocs.yml,README.md}"]
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Docker (multi-arch)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -159,7 +202,12 @@ build:go:
       if [ -n "$CI_COMMIT_TAG" ]; then TAG="$CI_COMMIT_TAG"; EXTRA="latest"
       elif [ "$CI_COMMIT_BRANCH" = "main" ]; then TAG="edge"; EXTRA=""
       elif [ "$CI_COMMIT_BRANCH" = "develop" ]; then TAG="dev"; EXTRA=""
-      else TAG="$CI_COMMIT_SHORT_SHA"; EXTRA=""; fi
+      else
+        # Feature/bugfix/hotfix branches: use sanitized branch name as tag
+        # feature/132-rfc2136-provider -> feature-132-rfc2136-provider
+        TAG=$(echo "$CI_COMMIT_BRANCH" | sed 's|/|-|g')
+        EXTRA=""
+      fi
       echo "TAG=$TAG" > build.env && echo "EXTRA=$EXTRA" >> build.env
   rules: *rules-docker
 
@@ -282,6 +330,34 @@ deploy:production:
       changes: *docker-files
       when: manual
     - if: $CI_COMMIT_TAG
+      when: manual
+  allow_failure: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Integration Tests (post-deploy validation)
+# ─────────────────────────────────────────────────────────────────────────────
+
+integration:smoke:
+  stage: integration
+  image: alpine:3.20
+  needs:
+    - job: deploy:dev
+      optional: true
+  before_script:
+    - apk add --no-cache bash curl python3
+  script:
+    - |
+      # Verify required variables
+      [ -z "$SWARM_VIP" ] && echo "SWARM_VIP not configured" && exit 0
+      [ -z "$TECHNITIUM_HOST" ] && echo "TECHNITIUM_HOST not configured" && exit 0
+      [ -z "$TECHNITIUM_TOKEN" ] && echo "TECHNITIUM_TOKEN not configured" && exit 0
+      [ -z "$TEST_ZONE" ] && echo "TEST_ZONE not configured" && exit 0
+
+      # Run smoke tests
+      chmod +x scripts/integration-test.sh
+      bash scripts/integration-test.sh --smoke
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
       when: manual
   allow_failure: true
 

@@ -10,7 +10,7 @@
 
 gitlab:
   enabled: true
-  host: 'gitlab.bluewillows.net'
+  host: 'gitlab.probablyfine.dev'
   projectId: 15
   sync:
     branches: { enabled: false }
