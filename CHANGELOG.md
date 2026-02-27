@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-02-27
+
 ### Added
 - **RFC 2136 Dynamic DNS Provider** (#132): Industry-standard DNS update protocol support
   - Works with BIND, Windows DNS, PowerDNS, Knot DNS, Technitium, and any RFC 2136-compliant server
@@ -15,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Per-record ownership verification via `_dnsweaver.<hostname>` TXT records
   - Supports A, AAAA, CNAME, and SRV record types
   - No AXFR required — catalog provides efficient O(n) enumeration
+- **Multi-Instance Coordination** (#84): Instance-scoped ownership for shared DNS zones
+  - New `DNSWEAVER_INSTANCE_ID` config (env var + YAML) identifies each instance
+  - Ownership TXT records now carry instance ID: `heritage=dnsweaver,instance=<id>`
+  - Each instance only manages its own records — no cross-instance interference
+  - Orphan cleanup is instance-scoped: removing a service only cleans that instance's records
+  - Fully backward compatible: empty instance ID preserves legacy single-instance behavior
+  - Enables multiple dnsweaver deployments (e.g., per-node Docker, Pi clusters) sharing a zone
 
 ## [0.7.0] - 2026-01-19
 
@@ -371,7 +380,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitLab CI/CD pipeline with GitHub release automation
 - Docker Hub and GitHub Container Registry publishing
 
-[Unreleased]: https://github.com/maxfield-allison/dnsweaver/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/maxfield-allison/dnsweaver/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/maxfield-allison/dnsweaver/compare/v0.7.0...v0.8.0
 [0.3.0]: https://github.com/maxfield-allison/dnsweaver/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/maxfield-allison/dnsweaver/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/maxfield-allison/dnsweaver/compare/v0.1.1...v0.2.0

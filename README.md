@@ -16,6 +16,7 @@ dnsweaver watches Docker events and automatically creates and deletes DNS record
 - 🔀 **Multi-Provider Support** — Route different domains to different DNS providers
 - 🌐 **Split-Horizon DNS** — Internal and external records from the same container labels
 - 🐳 **Docker & Swarm Native** — Works with standalone Docker and Docker Swarm clusters
+- 🏗️ **Multi-Instance Safe** — Run multiple dnsweaver instances on the same DNS zone without conflicts
 - 🔒 **Socket Proxy Compatible** — Connect via TCP to a Docker socket proxy for improved security
 - 🏷️ **Traefik Integration** — Parses `traefik.http.routers.*.rule` labels to extract hostnames
 - 📊 **Observable** — Prometheus metrics, health endpoints, structured logging
