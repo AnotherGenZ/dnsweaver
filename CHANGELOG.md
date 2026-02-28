@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-02-27
+
+### Fixed
+- **Cloudflare Provider**: Fix JSON parsing failure on API responses — Cloudflare
+  changed `messages` field from `[]string` to `[]object` (matching `errors` shape),
+  causing `json: cannot unmarshal object into Go struct field` on every API call
+
 ## [0.8.0] - 2026-02-27
 
 ### Added

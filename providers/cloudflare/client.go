@@ -26,11 +26,18 @@ type apiError struct {
 	Message string `json:"message"`
 }
 
+// apiMessage represents a message from the Cloudflare API.
+// Cloudflare returns messages as objects with code/message fields (same shape as errors).
+type apiMessage struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
 // apiResponse is the standard Cloudflare API response wrapper.
 type apiResponse struct {
 	Success  bool            `json:"success"`
 	Errors   []apiError      `json:"errors"`
-	Messages []string        `json:"messages"`
+	Messages []apiMessage    `json:"messages"`
 	Result   json.RawMessage `json:"result"`
 }
 
