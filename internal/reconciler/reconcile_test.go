@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"gitlab.bluewillows.net/root/dnsweaver/internal/docker"
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
+	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
 	"gitlab.bluewillows.net/root/dnsweaver/sources/traefik"
 )
 
@@ -18,7 +18,7 @@ import (
 
 func TestReconcile_EmptyWorkloads(t *testing.T) {
 	// Setup: no workloads, no hostnames expected
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	logger := quietLogger()
 
 	sources := source.NewRegistry(logger)
@@ -26,7 +26,7 @@ func TestReconcile_EmptyWorkloads(t *testing.T) {
 
 	providers := provider.NewRegistry(logger)
 
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(DefaultConfig()),
 		WithLogger(logger),
 	)
@@ -52,7 +52,7 @@ func TestReconcile_EmptyWorkloads(t *testing.T) {
 
 func TestReconcile_CreatesRecordsForWorkloads(t *testing.T) {
 	// Setup: one workload with Traefik label
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("my-app", map[string]string{
 		"traefik.http.routers.myapp.rule": "Host(`app.example.com`)",
 	})
@@ -76,7 +76,7 @@ func TestReconcile_CreatesRecordsForWorkloads(t *testing.T) {
 		Domains:    []string{"*.example.com"},
 	})
 
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(DefaultConfig()),
 		WithLogger(logger),
 	)
@@ -105,7 +105,7 @@ func TestReconcile_CreatesRecordsForWorkloads(t *testing.T) {
 
 func TestReconcile_MultipleHostnamesFromOneWorkload(t *testing.T) {
 	// Workload with multiple Host() rules
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("multi-host", map[string]string{
 		"traefik.http.routers.app.rule": "Host(`app1.example.com`) || Host(`app2.example.com`)",
 	})
@@ -129,7 +129,7 @@ func TestReconcile_MultipleHostnamesFromOneWorkload(t *testing.T) {
 		Domains:    []string{"*.example.com"},
 	})
 
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(DefaultConfig()),
 		WithLogger(logger),
 	)
@@ -152,7 +152,7 @@ func TestReconcile_MultipleHostnamesFromOneWorkload(t *testing.T) {
 
 func TestReconcile_MultipleWorkloads(t *testing.T) {
 	// Setup: multiple workloads with different hostnames
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("app1", map[string]string{
 		"traefik.http.routers.app1.rule": "Host(`app1.example.com`)",
 	})
@@ -182,7 +182,7 @@ func TestReconcile_MultipleWorkloads(t *testing.T) {
 		Domains:    []string{"*.example.com"},
 	})
 
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(DefaultConfig()),
 		WithLogger(logger),
 	)
@@ -207,7 +207,7 @@ func TestReconcile_MultipleWorkloads(t *testing.T) {
 
 func TestReconcile_DryRunNoChanges(t *testing.T) {
 	// Setup: dry-run mode should not create records
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("my-app", map[string]string{
 		"traefik.http.routers.myapp.rule": "Host(`app.example.com`)",
 	})
@@ -234,7 +234,7 @@ func TestReconcile_DryRunNoChanges(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DryRun = true
 
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(cfg),
 		WithLogger(logger),
 	)
@@ -262,7 +262,7 @@ func TestReconcile_DryRunNoChanges(t *testing.T) {
 
 func TestReconcile_DockerListError(t *testing.T) {
 	// Setup: Docker client returns an error
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.SetListError(errors.New("connection refused"))
 
 	logger := quietLogger()
@@ -270,7 +270,7 @@ func TestReconcile_DockerListError(t *testing.T) {
 	sources := source.NewRegistry(logger)
 	providers := provider.NewRegistry(logger)
 
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(DefaultConfig()),
 		WithLogger(logger),
 	)
@@ -287,7 +287,7 @@ func TestReconcile_DockerListError(t *testing.T) {
 
 func TestReconcile_NoMatchingProvider(t *testing.T) {
 	// Setup: hostname doesn't match any provider
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("my-app", map[string]string{
 		"traefik.http.routers.myapp.rule": "Host(`app.other-domain.com`)",
 	})
@@ -311,7 +311,7 @@ func TestReconcile_NoMatchingProvider(t *testing.T) {
 		Domains:    []string{"*.example.com"}, // Only matches example.com
 	})
 
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(DefaultConfig()),
 		WithLogger(logger),
 	)
@@ -340,7 +340,7 @@ func TestReconcile_NoMatchingProvider(t *testing.T) {
 
 func TestReconcile_DuplicateHostnameAcrossWorkloads(t *testing.T) {
 	// Setup: same hostname in multiple workloads (first wins)
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("first-app", map[string]string{
 		"traefik.http.routers.first.rule": "Host(`app.example.com`)",
 	})
@@ -367,7 +367,7 @@ func TestReconcile_DuplicateHostnameAcrossWorkloads(t *testing.T) {
 		Domains:    []string{"*.example.com"},
 	})
 
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(DefaultConfig()),
 		WithLogger(logger),
 	)
@@ -394,7 +394,7 @@ func TestReconcile_DuplicateHostnameAcrossWorkloads(t *testing.T) {
 
 func TestReconcile_OrphanCleanup(t *testing.T) {
 	// Setup: provider has a record that isn't in any workload
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("current-app", map[string]string{
 		"traefik.http.routers.current.rule": "Host(`current.example.com`)",
 	})
@@ -448,7 +448,7 @@ func TestReconcile_OrphanCleanup(t *testing.T) {
 	})
 
 	// First reconciliation to establish known hostnames
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(Config{
 			Enabled:           true,
 			CleanupOrphans:    true,
@@ -480,7 +480,7 @@ func TestReconcile_OrphanCleanup(t *testing.T) {
 
 func TestReconcile_DisabledReturnsEmpty(t *testing.T) {
 	// This is already tested in reconciler_test.go but adding here for completeness
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("my-app", map[string]string{
 		"traefik.http.routers.myapp.rule": "Host(`app.example.com`)",
 	})
@@ -492,7 +492,7 @@ func TestReconcile_DisabledReturnsEmpty(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Enabled = false
 
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(cfg),
 		WithLogger(logger),
 	)
@@ -513,7 +513,7 @@ func TestReconcile_DisabledReturnsEmpty(t *testing.T) {
 
 func TestReconcile_KnownHostnamesUpdated(t *testing.T) {
 	// Verify that knownHostnames is updated after reconciliation
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("app1", map[string]string{
 		"traefik.http.routers.app1.rule": "Host(`app1.example.com`)",
 	})
@@ -540,7 +540,7 @@ func TestReconcile_KnownHostnamesUpdated(t *testing.T) {
 		Domains:    []string{"*.example.com"},
 	})
 
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(DefaultConfig()),
 		WithLogger(logger),
 	)
@@ -578,7 +578,7 @@ func TestReconcile_KnownHostnamesUpdated(t *testing.T) {
 
 func TestReconcile_OwnershipRecordsCreated(t *testing.T) {
 	// Verify ownership TXT records are created when OwnershipTracking is enabled
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("my-app", map[string]string{
 		"traefik.http.routers.myapp.rule": "Host(`app.example.com`)",
 	})
@@ -605,7 +605,7 @@ func TestReconcile_OwnershipRecordsCreated(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.OwnershipTracking = true
 
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(cfg),
 		WithLogger(logger),
 	)
@@ -627,7 +627,7 @@ func TestReconcile_OwnershipRecordsCreated(t *testing.T) {
 
 func TestReconcile_NoOwnershipWhenDisabled(t *testing.T) {
 	// Verify ownership TXT records are NOT created when OwnershipTracking is disabled
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("my-app", map[string]string{
 		"traefik.http.routers.myapp.rule": "Host(`app.example.com`)",
 	})
@@ -654,7 +654,7 @@ func TestReconcile_NoOwnershipWhenDisabled(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.OwnershipTracking = false
 
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(cfg),
 		WithLogger(logger),
 	)
@@ -683,7 +683,7 @@ func TestReconcile_NoOwnershipWhenDisabled(t *testing.T) {
 
 func TestRecoverOwnership_SkipsWhenDisabled(t *testing.T) {
 	// RecoverOwnership should skip when CleanupOrphans or OwnershipTracking is disabled
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	logger := quietLogger()
 	sources := source.NewRegistry(logger)
 	providers := provider.NewRegistry(logger)
@@ -704,7 +704,7 @@ func TestRecoverOwnership_SkipsWhenDisabled(t *testing.T) {
 			cfg.CleanupOrphans = tc.cleanupOrphans
 			cfg.OwnershipTracking = tc.ownershipTracking
 
-			r := New(dockerMock, sources, providers,
+			r := New([]workload.Lister{dockerMock}, sources, providers,
 				WithConfig(cfg),
 				WithLogger(logger),
 			)
@@ -724,7 +724,7 @@ func TestRecoverOwnership_SkipsWhenDisabled(t *testing.T) {
 
 func TestRecoverOwnership_RecoversHostnamesFromProvider(t *testing.T) {
 	// RecoverOwnership should populate knownHostnames from ownership records
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	logger := quietLogger()
 	sources := source.NewRegistry(logger)
 
@@ -760,7 +760,7 @@ func TestRecoverOwnership_RecoversHostnamesFromProvider(t *testing.T) {
 	cfg.CleanupOrphans = true
 	cfg.OwnershipTracking = true
 
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(cfg),
 		WithLogger(logger),
 	)
@@ -798,7 +798,7 @@ func TestRecoverOwnership_RecoversHostnamesFromProvider(t *testing.T) {
 
 func TestRecoverOwnership_MultipleProviders(t *testing.T) {
 	// RecoverOwnership should recover from all providers
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	logger := quietLogger()
 	sources := source.NewRegistry(logger)
 
@@ -846,7 +846,7 @@ func TestRecoverOwnership_MultipleProviders(t *testing.T) {
 	cfg.CleanupOrphans = true
 	cfg.OwnershipTracking = true
 
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(cfg),
 		WithLogger(logger),
 	)
@@ -872,7 +872,7 @@ func TestRecoverOwnership_MultipleProviders(t *testing.T) {
 // BUG: Currently the code uses case-sensitive map keys, so this test FAILS.
 func TestReconcile_CaseSensitivity(t *testing.T) {
 	// Two workloads with same hostname in different cases
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("app-lowercase", map[string]string{
 		"traefik.http.routers.app1.rule": "Host(`app.example.com`)",
 	})
@@ -899,7 +899,7 @@ func TestReconcile_CaseSensitivity(t *testing.T) {
 		Domains:    []string{"*.example.com"},
 	})
 
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(DefaultConfig()),
 		WithLogger(logger),
 	)
@@ -929,7 +929,7 @@ func TestReconcile_CaseSensitivity(t *testing.T) {
 // 3. New record creation FAILS
 // Result: Hostname has NO DNS record - partial failure state
 func TestReconcile_ProviderCreateFailsAfterDelete(t *testing.T) {
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("my-app", map[string]string{
 		"traefik.http.routers.myapp.rule": "Host(`app.example.com`)",
 	})
@@ -972,7 +972,7 @@ func TestReconcile_ProviderCreateFailsAfterDelete(t *testing.T) {
 		Domains:    []string{"*.example.com"},
 	})
 
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(DefaultConfig()),
 		WithLogger(logger),
 	)
@@ -1009,7 +1009,7 @@ func TestReconcile_ProviderCreateFailsAfterDelete(t *testing.T) {
 // TestReconcile_FirstRunAfterRestart verifies that the first reconciliation
 // after restart (empty knownHostnames) doesn't delete valid records as orphans.
 func TestReconcile_FirstRunAfterRestart(t *testing.T) {
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("my-app", map[string]string{
 		"traefik.http.routers.myapp.rule": "Host(`app.example.com`)",
 	})
@@ -1047,7 +1047,7 @@ func TestReconcile_FirstRunAfterRestart(t *testing.T) {
 		Domains:    []string{"*.example.com"},
 	})
 
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(Config{
 			Enabled:           true,
 			CleanupOrphans:    true,
@@ -1086,7 +1086,7 @@ func TestReconcile_FirstRunAfterRestart(t *testing.T) {
 // TestReconcile_AdoptExistingEnabled verifies that AdoptExisting=true creates
 // ownership TXT records for pre-existing DNS records.
 func TestReconcile_AdoptExistingEnabled(t *testing.T) {
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("my-app", map[string]string{
 		"traefik.http.routers.myapp.rule": "Host(`app.example.com`)",
 	})
@@ -1123,7 +1123,7 @@ func TestReconcile_AdoptExistingEnabled(t *testing.T) {
 	cfg.AdoptExisting = true
 	cfg.OwnershipTracking = true
 
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(cfg),
 		WithLogger(logger),
 	)
@@ -1149,7 +1149,7 @@ func TestReconcile_AdoptExistingEnabled(t *testing.T) {
 // TestReconcile_AdoptExistingDisabled verifies that AdoptExisting=false does NOT
 // create ownership TXT records for pre-existing DNS records.
 func TestReconcile_AdoptExistingDisabled(t *testing.T) {
-	dockerMock := newTestMockWorkloadLister(docker.ModeSwarm)
+	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("my-app", map[string]string{
 		"traefik.http.routers.myapp.rule": "Host(`app.example.com`)",
 	})
@@ -1185,7 +1185,7 @@ func TestReconcile_AdoptExistingDisabled(t *testing.T) {
 	cfg.AdoptExisting = false // Explicitly disabled
 	cfg.OwnershipTracking = true
 
-	r := New(dockerMock, sources, providers,
+	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(cfg),
 		WithLogger(logger),
 	)

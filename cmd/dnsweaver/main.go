@@ -22,6 +22,7 @@ import (
 	"gitlab.bluewillows.net/root/dnsweaver/internal/watcher"
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
+	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
 	"gitlab.bluewillows.net/root/dnsweaver/providers/cloudflare"
 	"gitlab.bluewillows.net/root/dnsweaver/providers/dnsmasq"
 	"gitlab.bluewillows.net/root/dnsweaver/providers/pihole"
@@ -166,7 +167,11 @@ func run() error {
 		Enabled:           true,
 		InstanceID:        cfg.InstanceID(),
 	}
-	rec := reconciler.New(dockerClient, sourceRegistry, providerRegistry,
+	// Wrap Docker client in platform-agnostic adapter
+	dockerLister := docker.NewWorkloadListerAdapter(dockerClient)
+	listers := []workload.Lister{dockerLister}
+
+	rec := reconciler.New(listers, sourceRegistry, providerRegistry,
 		reconciler.WithConfig(reconcilerCfg),
 		reconciler.WithLogger(logger),
 	)

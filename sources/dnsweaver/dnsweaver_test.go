@@ -3,6 +3,8 @@ package dnsweaver
 import (
 	"context"
 	"testing"
+
+	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
 )
 
 func TestDNSWeaver_Name(t *testing.T) {
@@ -37,7 +39,10 @@ func TestDNSWeaver_Discover(t *testing.T) {
 func TestDNSWeaver_Extract_Empty(t *testing.T) {
 	d := New(WithLogger(testLogger()))
 
-	hostnames, err := d.Extract(context.Background(), nil)
+	hostnames, err := d.Extract(context.Background(), workload.Workload{
+		Platform: workload.PlatformDocker,
+		Kind:     workload.KindContainer,
+	})
 
 	if err != nil {
 		t.Errorf("Extract(nil) error = %v", err)
@@ -54,7 +59,11 @@ func TestDNSWeaver_Extract_SimpleHostname(t *testing.T) {
 		"dnsweaver.hostname": "app.example.com",
 	}
 
-	hostnames, err := d.Extract(context.Background(), labels)
+	hostnames, err := d.Extract(context.Background(), workload.Workload{
+		Labels:   labels,
+		Platform: workload.PlatformDocker,
+		Kind:     workload.KindContainer,
+	})
 
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
@@ -89,7 +98,11 @@ func TestDNSWeaver_Extract_NamedRecordWithHints(t *testing.T) {
 		"dnsweaver.records.myapp.ttl":      "600",
 	}
 
-	hostnames, err := d.Extract(context.Background(), labels)
+	hostnames, err := d.Extract(context.Background(), workload.Workload{
+		Labels:   labels,
+		Platform: workload.PlatformDocker,
+		Kind:     workload.KindContainer,
+	})
 
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
@@ -138,7 +151,11 @@ func TestDNSWeaver_Extract_SRVRecord(t *testing.T) {
 		"dnsweaver.records.mc.weight":   "5",
 	}
 
-	hostnames, err := d.Extract(context.Background(), labels)
+	hostnames, err := d.Extract(context.Background(), workload.Workload{
+		Labels:   labels,
+		Platform: workload.PlatformDocker,
+		Kind:     workload.KindContainer,
+	})
 
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
@@ -181,7 +198,11 @@ func TestDNSWeaver_Extract_MixedWithNonDnsweaverLabels(t *testing.T) {
 		"dnsweaver.hostname": "dns.example.com",
 	}
 
-	hostnames, err := d.Extract(context.Background(), labels)
+	hostnames, err := d.Extract(context.Background(), workload.Workload{
+		Labels:   labels,
+		Platform: workload.PlatformDocker,
+		Kind:     workload.KindContainer,
+	})
 
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
@@ -208,7 +229,11 @@ func TestDNSWeaver_Extract_MultipleRecords(t *testing.T) {
 		"dnsweaver.records.public.provider": "cloudflare",
 	}
 
-	hostnames, err := d.Extract(context.Background(), labels)
+	hostnames, err := d.Extract(context.Background(), workload.Workload{
+		Labels:   labels,
+		Platform: workload.PlatformDocker,
+		Kind:     workload.KindContainer,
+	})
 
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
