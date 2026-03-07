@@ -30,6 +30,7 @@ import (
 	"log/slog"
 
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
+	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
 )
 
 const sourceName = "dnsweaver"
@@ -79,12 +80,12 @@ func (d *DNSWeaver) Name() string {
 //
 // Returns an empty slice if no dnsweaver labels are found.
 // Malformed labels are logged and skipped.
-func (d *DNSWeaver) Extract(ctx context.Context, labels map[string]string) ([]source.Hostname, error) {
-	if len(labels) == 0 {
+func (d *DNSWeaver) Extract(ctx context.Context, w workload.Workload) ([]source.Hostname, error) {
+	if len(w.Labels) == 0 {
 		return nil, nil
 	}
 
-	extractions := d.parser.ExtractHostnames(labels)
+	extractions := d.parser.ExtractHostnames(w.Labels)
 
 	hostnames := make([]source.Hostname, 0, len(extractions))
 	for _, e := range extractions {
@@ -132,6 +133,12 @@ func (d *DNSWeaver) Discover(ctx context.Context) ([]source.Hostname, error) {
 // SupportsDiscovery returns false since native labels don't support file discovery.
 func (d *DNSWeaver) SupportsDiscovery() bool {
 	return false
+}
+
+// SupportedPlatforms returns an empty slice, meaning the dnsweaver source works
+// with all platforms. Both Docker labels and K8s annotations use the same format.
+func (d *DNSWeaver) SupportedPlatforms() []workload.Platform {
+	return nil
 }
 
 // Ensure DNSWeaver implements source.Source

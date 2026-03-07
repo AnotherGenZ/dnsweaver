@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"gitlab.bluewillows.net/root/dnsweaver/internal/docker"
 	"gitlab.bluewillows.net/root/dnsweaver/internal/metrics"
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
+	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
 )
 
 // Common error messages used in reconciliation actions.
@@ -64,25 +64,16 @@ func DefaultConfig() Config {
 	}
 }
 
-// WorkloadLister is the interface required for listing Docker workloads.
-// This abstraction enables testing without a real Docker connection.
-type WorkloadLister interface {
-	// ListWorkloads returns all workloads (services in Swarm, containers in standalone).
-	ListWorkloads(ctx context.Context) ([]docker.Workload, error)
-	// Mode returns the Docker operating mode (swarm or standalone).
-	Mode() docker.Mode
-}
-
 // Reconciler coordinates DNS record synchronization between sources and providers.
 //
 // The reconciler:
-//  1. Scans Docker workloads (services in Swarm, containers in standalone)
-//  2. Extracts hostnames from workload labels using registered sources
+//  1. Scans workloads from all registered platform listers (Docker, Kubernetes, etc.)
+//  2. Extracts hostnames from each workload using registered sources
 //  3. For each hostname, finds matching provider(s) based on domain patterns
 //  4. Ensures DNS records exist for discovered hostnames
 //  5. Optionally removes orphan records (hostnames no longer in workloads)
 type Reconciler struct {
-	docker    WorkloadLister
+	listers   []workload.Lister
 	sources   *source.Registry
 	providers *provider.Registry
 	config    Config
@@ -115,17 +106,17 @@ func WithConfig(cfg Config) Option {
 // New creates a new Reconciler with the given dependencies.
 //
 // The reconciler requires:
-//   - docker: WorkloadLister for listing workloads (typically *docker.Client)
+//   - listers: one or more workload.Lister implementations (Docker, Kubernetes, etc.)
 //   - sources: Registry of hostname extractors (Traefik, etc.)
 //   - providers: Registry of DNS provider instances
 func New(
-	dockerClient WorkloadLister,
+	listers []workload.Lister,
 	sources *source.Registry,
 	providers *provider.Registry,
 	opts ...Option,
 ) *Reconciler {
 	r := &Reconciler{
-		docker:         dockerClient,
+		listers:        listers,
 		sources:        sources,
 		providers:      providers,
 		config:         DefaultConfig(),
@@ -165,25 +156,28 @@ func (r *Reconciler) Reconcile(ctx context.Context) (*Result, error) {
 
 	result := NewResult(r.config.DryRun)
 
-	// Step 1: List all workloads
-	workloads, err := r.docker.ListWorkloads(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("listing workloads: %w", err)
+	// Step 1: List all workloads from all platform listers
+	var allWorkloads []workload.Workload
+	for _, lister := range r.listers {
+		workloads, err := lister.ListWorkloads(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("listing workloads from %s: %w", lister.Platform(), err)
+		}
+		r.logger.Debug("scanned workloads from platform",
+			slog.String("platform", string(lister.Platform())),
+			slog.Int("count", len(workloads)),
+		)
+		allWorkloads = append(allWorkloads, workloads...)
 	}
-	result.WorkloadsScanned = len(workloads)
-
-	r.logger.Debug("scanned workloads",
-		slog.Int("count", len(workloads)),
-		slog.String("mode", r.docker.Mode().String()),
-	)
+	result.WorkloadsScanned = len(allWorkloads)
 
 	// Step 2: Extract hostnames from each workload
-	discoveredHostnames := r.extractHostnames(ctx, workloads, result)
+	discoveredHostnames := r.extractHostnames(ctx, allWorkloads, result)
 
 	result.HostnamesDiscovered = len(discoveredHostnames)
 
 	r.logger.Info("hostname extraction complete",
-		slog.Int("workloads", len(workloads)),
+		slog.Int("workloads", len(allWorkloads)),
 		slog.Int("hostnames", len(discoveredHostnames)),
 	)
 
@@ -236,20 +230,20 @@ func (r *Reconciler) Reconcile(ctx context.Context) (*Result, error) {
 
 // extractHostnames extracts hostnames from workloads and file sources.
 // Returns a map of normalized hostname -> source.Hostname.
-func (r *Reconciler) extractHostnames(ctx context.Context, workloads []docker.Workload, result *Result) map[string]*source.Hostname {
+func (r *Reconciler) extractHostnames(ctx context.Context, workloads []workload.Workload, result *Result) map[string]*source.Hostname {
 	// Track hostname -> first workload that defined it (for duplicate detection)
 	// Use map to source.Hostname to preserve RecordHints from native labels
 	discoveredHostnames := make(map[string]*source.Hostname)
 	hostnameOrigins := make(map[string]string) // hostname -> workload name
 
-	for _, workload := range workloads {
-		hostnames := r.sources.ExtractAll(ctx, workload.Labels)
+	for _, w := range workloads {
+		hostnames := r.sources.ExtractAll(ctx, w)
 
 		// Validate hostnames and log warnings for invalid ones
 		validation := hostnames.ValidateAll()
 		for _, inv := range validation.Invalid {
 			r.logger.Warn("skipping invalid hostname from workload",
-				slog.String("workload", workload.Name),
+				slog.String("workload", w.Name),
 				slog.String("hostname", inv.Hostname.Name),
 				slog.String("source", inv.Hostname.Source),
 				slog.String("error", inv.Error.Error()),
@@ -260,7 +254,7 @@ func (r *Reconciler) extractHostnames(ctx context.Context, workloads []docker.Wo
 
 		if len(hostnames) > 0 {
 			r.logger.Debug("extracted hostnames from workload",
-				slog.String("workload", workload.Name),
+				slog.String("workload", w.Name),
 				slog.Int("count", len(hostnames)),
 				slog.Any("hostnames", hostnames.Names()),
 			)
@@ -275,12 +269,12 @@ func (r *Reconciler) extractHostnames(ctx context.Context, workloads []docker.Wo
 				r.logger.Warn("duplicate hostname found in multiple workloads",
 					slog.String("hostname", hostname.Name),
 					slog.String("first_workload", existingWorkload),
-					slog.String("duplicate_workload", workload.Name),
+					slog.String("duplicate_workload", w.Name),
 				)
 				result.HostnamesDuplicate++
 				// First workload wins - don't update hostnameOrigins
 			} else {
-				hostnameOrigins[normalizedName] = workload.Name
+				hostnameOrigins[normalizedName] = w.Name
 				discoveredHostnames[normalizedName] = hostname
 			}
 		}
