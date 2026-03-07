@@ -854,7 +854,7 @@ func TestEnsureOwnershipRecord_CreatesWhenEnabled(t *testing.T) {
 	}
 
 	inst, _ := providers.Get("test-dns")
-	r.ensureOwnershipRecord(context.Background(), "app.example.com", inst)
+	r.ensureOwnershipRecord(context.Background(), "app.example.com", inst, nil)
 
 	created := mock.GetCreated()
 	var foundOwnership bool
@@ -896,7 +896,7 @@ func TestEnsureOwnershipRecord_SkipsWhenDisabled(t *testing.T) {
 	}
 
 	inst, _ := providers.Get("test-dns")
-	r.ensureOwnershipRecord(context.Background(), "app.example.com", inst)
+	r.ensureOwnershipRecord(context.Background(), "app.example.com", inst, nil)
 
 	created := mock.GetCreated()
 	for _, c := range created {

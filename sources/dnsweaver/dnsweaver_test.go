@@ -259,7 +259,11 @@ func TestDNSWeaver_Extract_MetadataFlowsToRecordHints(t *testing.T) {
 		"dnsweaver.records.myapp.meta.custom": "value",
 	}
 
-	hostnames, err := d.Extract(context.Background(), labels)
+	hostnames, err := d.Extract(context.Background(), workload.Workload{
+		Labels:   labels,
+		Platform: workload.PlatformDocker,
+		Kind:     workload.KindContainer,
+	})
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
 	}
@@ -290,7 +294,11 @@ func TestDNSWeaver_Extract_SimpleHostnameProxied(t *testing.T) {
 		"dnsweaver.proxied":  "false",
 	}
 
-	hostnames, err := d.Extract(context.Background(), labels)
+	hostnames, err := d.Extract(context.Background(), workload.Workload{
+		Labels:   labels,
+		Platform: workload.PlatformDocker,
+		Kind:     workload.KindContainer,
+	})
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
 	}
