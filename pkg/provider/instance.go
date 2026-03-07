@@ -292,8 +292,9 @@ func (pi *ProviderInstance) DeleteSRVRecord(ctx context.Context, hostname string
 // CreateOwnershipRecord creates a TXT record to mark ownership of a hostname.
 // The TXT record is named "_dnsweaver.{hostname}" with a value that includes
 // the instance ID when configured for multi-instance coordination.
-func (pi *ProviderInstance) CreateOwnershipRecord(ctx context.Context, hostname string) error {
-	record := OwnershipRecord(hostname, pi.TTL, pi.InstanceID)
+// If metadata is non-nil, it is serialized into the TXT value for persistence.
+func (pi *ProviderInstance) CreateOwnershipRecord(ctx context.Context, hostname string, metadata map[string]string) error {
+	record := OwnershipRecord(hostname, pi.TTL, pi.InstanceID, metadata)
 
 	start := time.Now()
 	err := pi.Provider.Create(ctx, record)
@@ -316,7 +317,7 @@ func (pi *ProviderInstance) CreateOwnershipRecord(ctx context.Context, hostname 
 
 // DeleteOwnershipRecord removes the TXT ownership record for a hostname.
 func (pi *ProviderInstance) DeleteOwnershipRecord(ctx context.Context, hostname string) error {
-	record := OwnershipRecord(hostname, pi.TTL, pi.InstanceID)
+	record := OwnershipRecord(hostname, pi.TTL, pi.InstanceID, nil)
 
 	start := time.Now()
 	err := pi.Provider.Delete(ctx, record)

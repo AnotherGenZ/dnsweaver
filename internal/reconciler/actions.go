@@ -240,14 +240,14 @@ func (r *Reconciler) ensureRecordForProvider(ctx context.Context, hostname *sour
 				slog.String("provider", inst.Name()),
 				slog.String("target", target),
 			)
-			r.ensureOwnershipRecord(ctx, hostname.Name, inst)
+			r.ensureOwnershipRecord(ctx, hostname.Name, inst, metadata)
 		} else if r.config.AdoptExisting {
 			r.logger.Info("adopting existing record",
 				slog.String("hostname", hostname.Name),
 				slog.String("provider", inst.Name()),
 				slog.String("target", target),
 			)
-			r.ensureOwnershipRecord(ctx, hostname.Name, inst)
+			r.ensureOwnershipRecord(ctx, hostname.Name, inst, metadata)
 		} else {
 			r.logger.Info("existing record found, skipping adoption (set ADOPT_EXISTING=true to manage)",
 				slog.String("hostname", hostname.Name),
@@ -300,7 +300,7 @@ func (r *Reconciler) ensureRecordForProvider(ctx context.Context, hostname *sour
 			slog.String("type", string(recordType)),
 			slog.String("target", target),
 		)
-		r.ensureOwnershipRecord(ctx, hostname.Name, inst)
+		r.ensureOwnershipRecord(ctx, hostname.Name, inst, metadata)
 		return action
 	}
 
@@ -316,7 +316,7 @@ func (r *Reconciler) ensureRecordForProvider(ctx context.Context, hostname *sour
 				slog.String("hostname", hostname.Name),
 				slog.String("provider", inst.Name()),
 			)
-			r.ensureOwnershipRecord(ctx, hostname.Name, inst)
+			r.ensureOwnershipRecord(ctx, hostname.Name, inst, metadata)
 		} else if provider.IsTypeConflict(err) {
 			action.Type = ActionSkip
 			action.Status = StatusSkipped
@@ -344,19 +344,19 @@ func (r *Reconciler) ensureRecordForProvider(ctx context.Context, hostname *sour
 			slog.String("target", target),
 		)
 		action.Status = StatusSuccess
-		r.ensureOwnershipRecord(ctx, hostname.Name, inst)
+		r.ensureOwnershipRecord(ctx, hostname.Name, inst, metadata)
 	}
 
 	return action
 }
 
 // ensureOwnershipRecord creates the ownership TXT record if tracking is enabled.
-func (r *Reconciler) ensureOwnershipRecord(ctx context.Context, hostname string, inst *provider.ProviderInstance) {
+func (r *Reconciler) ensureOwnershipRecord(ctx context.Context, hostname string, inst *provider.ProviderInstance, metadata map[string]string) {
 	if !r.config.OwnershipTracking {
 		return
 	}
 
-	if err := inst.CreateOwnershipRecord(ctx, hostname); err != nil {
+	if err := inst.CreateOwnershipRecord(ctx, hostname, metadata); err != nil {
 		// Don't warn if ownership record already exists
 		if !provider.IsConflict(err) {
 			r.logger.Warn("failed to create ownership record",
