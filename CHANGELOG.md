@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Kubernetes Platform Support**: Full Kubernetes-native DNS management
+  - K8s watcher with informer-based event watching (#138) — real-time detection
+    of Ingress, IngressRoute (Traefik CRD), HTTPRoute (Gateway API), and Service resources
+  - K8s source with annotation-driven configuration (#139) — hostnames, provider hints,
+    TTL, proxied, and metadata via `dnsweaver.dev/*` annotations
+  - Deployment manifests: Helm chart, Kustomize base, and raw RBAC manifests (#140)
+  - Comprehensive Kubernetes deployment and source documentation
+  - Platform selector (`DNSWEAVER_PLATFORM`) — run in `docker`, `kubernetes`, or `both` mode
+- **Per-Record Metadata System** (#141): Extensible key-value metadata on DNS records
+  - `Metadata map[string]string` field on `Record` and `RecordHints` (Phase 2)
+  - Cloudflare per-record proxied control via `Record.Metadata["proxied"]` (Phase 3)
+  - Source-level proxied field and `meta.*` label parsing in dnsweaver source (Phase 4)
+  - Metadata persistence in ownership TXT records (Phase 5)
+  - Metadata recovery from ownership TXT on startup for reconciliation (Phase 6)
+- **Workload Abstraction** (#137): Platform-agnostic workload interface replacing
+  Docker-specific container/service types — enables multi-platform source support
+
+### Changed
+- **Cloudflare proxied default**: Changed from `false` to `true` to match Cloudflare's
+  own default behavior — new records are proxied unless explicitly disabled
+
+### Fixed
+- **CI/CD**: Bumped Go version in CI pipeline and Dockerfile to 1.25 to match `go.mod`
+
 ## [0.8.1] - 2026-02-27
 
 ### Fixed
