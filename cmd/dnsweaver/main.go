@@ -33,6 +33,7 @@ import (
 	"gitlab.bluewillows.net/root/dnsweaver/providers/technitium"
 	"gitlab.bluewillows.net/root/dnsweaver/providers/webhook"
 	dnsweaversource "gitlab.bluewillows.net/root/dnsweaver/sources/dnsweaver"
+	k8ssource "gitlab.bluewillows.net/root/dnsweaver/sources/kubernetes"
 	"gitlab.bluewillows.net/root/dnsweaver/sources/traefik"
 )
 
@@ -450,10 +451,33 @@ func registerSources(registry *source.Registry, cfg *config.Config, logger *slog
 				slog.String("name", name),
 				slog.Bool("file_discovery", src.SupportsDiscovery()),
 			)
+		case "kubernetes":
+			src := k8ssource.New(k8ssource.WithLogger(logger))
+			if err := registry.Register(src); err != nil {
+				return fmt.Errorf("registering kubernetes source: %w", err)
+			}
+			logger.Info("registered source",
+				slog.String("name", name),
+			)
 		default:
 			logger.Warn("unknown source, skipping", slog.String("source", name))
 		}
 	}
+
+	// Auto-register kubernetes source when K8s platform is enabled.
+	// This source is always needed for K8s workloads (reads pre-extracted
+	// hostnames from resource converters). It doesn't need to be explicitly
+	// listed in DNSWEAVER_SOURCES — it's platform-implied.
+	if cfg.UseKubernetes() {
+		if registry.Get("kubernetes") == nil {
+			src := k8ssource.New(k8ssource.WithLogger(logger))
+			if err := registry.Register(src); err != nil {
+				return fmt.Errorf("registering kubernetes source: %w", err)
+			}
+			logger.Info("auto-registered kubernetes source for K8s platform")
+		}
+	}
+
 	return nil
 }
 
