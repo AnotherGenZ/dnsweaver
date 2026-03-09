@@ -95,7 +95,7 @@ func TestParser_NamedRecord_AllFields(t *testing.T) {
 	labels := map[string]string{
 		"dnsweaver.records.myapp.hostname": "app.example.com",
 		"dnsweaver.records.myapp.type":     "A",
-		"dnsweaver.records.myapp.target":   "10.1.20.100",
+		"dnsweaver.records.myapp.target":   "10.0.0.100",
 		"dnsweaver.records.myapp.provider": "internal-dns",
 		"dnsweaver.records.myapp.ttl":      "600",
 	}
@@ -113,8 +113,8 @@ func TestParser_NamedRecord_AllFields(t *testing.T) {
 	if e.Type != "A" {
 		t.Errorf("type = %q, want %q", e.Type, "A")
 	}
-	if e.Target != "10.1.20.100" {
-		t.Errorf("target = %q, want %q", e.Target, "10.1.20.100")
+	if e.Target != "10.0.0.100" {
+		t.Errorf("target = %q, want %q", e.Target, "10.0.0.100")
 	}
 	if e.Provider != "internal-dns" {
 		t.Errorf("provider = %q, want %q", e.Provider, "internal-dns")
@@ -194,7 +194,7 @@ func TestParser_MultipleRecords(t *testing.T) {
 		// Named record 1 - IPv4
 		"dnsweaver.records.v4.hostname": "app.example.com",
 		"dnsweaver.records.v4.type":     "A",
-		"dnsweaver.records.v4.target":   "10.1.20.100",
+		"dnsweaver.records.v4.target":   "10.0.0.100",
 		// Named record 2 - IPv6
 		"dnsweaver.records.v6.hostname": "app.example.com",
 		"dnsweaver.records.v6.type":     "AAAA",
@@ -231,7 +231,7 @@ func TestParser_MissingHostname(t *testing.T) {
 	// Named record with type but no hostname - should be skipped
 	labels := map[string]string{
 		"dnsweaver.records.myapp.type":   "A",
-		"dnsweaver.records.myapp.target": "10.1.20.100",
+		"dnsweaver.records.myapp.target": "10.0.0.100",
 	}
 
 	extractions := parser.ExtractHostnames(labels)

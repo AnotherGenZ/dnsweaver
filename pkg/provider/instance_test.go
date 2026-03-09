@@ -231,11 +231,11 @@ func TestProviderInstanceConfig_Validate_Complete(t *testing.T) {
 		RecordType:     RecordTypeA,
 		Target:         "10.0.0.100",
 		TTL:            300,
-		Domains:        []string{"*.local.bluewillows.net"},
+		Domains:        []string{"*.local.example.net"},
 		ExcludeDomains: []string{"admin.*"},
 		ProviderConfig: map[string]string{
 			"url":  "http://dns:5380",
-			"zone": "local.bluewillows.net",
+			"zone": "local.example.net",
 		},
 	}
 
@@ -250,10 +250,10 @@ func TestProviderInstanceConfig_Validate_CNAME_Complete(t *testing.T) {
 		Name:           "public-dns",
 		TypeName:       "cloudflare",
 		RecordType:     RecordTypeCNAME,
-		Target:         "bluewillows.net",
+		Target:         "example.net",
 		TTL:            300,
-		Domains:        []string{"*.bluewillows.net"},
-		ExcludeDomains: []string{"*.local.bluewillows.net"},
+		Domains:        []string{"*.example.net"},
+		ExcludeDomains: []string{"*.local.example.net"},
 		ProviderConfig: map[string]string{
 			"zone_id": "abc123",
 		},
@@ -272,11 +272,11 @@ func TestProviderInstanceConfig_Validate_AAAA_Complete(t *testing.T) {
 		RecordType:     RecordTypeAAAA,
 		Target:         "2001:db8::1",
 		TTL:            300,
-		Domains:        []string{"*.local.bluewillows.net"},
+		Domains:        []string{"*.local.example.net"},
 		ExcludeDomains: []string{"admin.*"},
 		ProviderConfig: map[string]string{
 			"url":  "http://dns:5380",
-			"zone": "local.bluewillows.net",
+			"zone": "local.example.net",
 		},
 	}
 

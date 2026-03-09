@@ -56,7 +56,7 @@ func TestParseRecordHints(t *testing.T) {
 	t.Run("full hints", func(t *testing.T) {
 		hints := parseRecordHints(map[string]string{
 			AnnotationRecordType: "A",
-			AnnotationTarget:     "10.30.0.100",
+			AnnotationTarget:     "10.0.0.100",
 			AnnotationTTL:        "300",
 			AnnotationProvider:   "internal-dns",
 		})
@@ -67,8 +67,8 @@ func TestParseRecordHints(t *testing.T) {
 		if hints.Type != "A" {
 			t.Errorf("Type = %q, want %q", hints.Type, "A")
 		}
-		if hints.Target != "10.30.0.100" {
-			t.Errorf("Target = %q, want %q", hints.Target, "10.30.0.100")
+		if hints.Target != "10.0.0.100" {
+			t.Errorf("Target = %q, want %q", hints.Target, "10.0.0.100")
 		}
 		if hints.TTL != 300 {
 			t.Errorf("TTL = %d, want %d", hints.TTL, 300)

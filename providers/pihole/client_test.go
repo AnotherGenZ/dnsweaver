@@ -152,7 +152,7 @@ func TestAPIClient_List(t *testing.T) {
 			customDNS: customDNSResponse{
 				Data: [][]string{
 					{"10.0.0.100", "app.example.com"},
-					{"10.1.20.211", "db.example.com"},
+					{"10.0.0.101", "db.example.com"},
 				},
 			},
 			cname:        cnameResponse{Data: [][]string{}},
@@ -186,7 +186,7 @@ func TestAPIClient_List(t *testing.T) {
 			customDNS: customDNSResponse{
 				Data: [][]string{
 					{"10.0.0.100", "app.example.com"},
-					{"10.1.20.211", "other.different.com"},
+					{"10.0.0.101", "other.different.com"},
 				},
 			},
 			cname:        cnameResponse{Data: [][]string{}},

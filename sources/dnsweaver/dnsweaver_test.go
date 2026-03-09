@@ -93,7 +93,7 @@ func TestDNSWeaver_Extract_NamedRecordWithHints(t *testing.T) {
 	labels := map[string]string{
 		"dnsweaver.records.myapp.hostname": "app.example.com",
 		"dnsweaver.records.myapp.type":     "A",
-		"dnsweaver.records.myapp.target":   "10.1.20.100",
+		"dnsweaver.records.myapp.target":   "10.0.0.100",
 		"dnsweaver.records.myapp.provider": "internal-dns",
 		"dnsweaver.records.myapp.ttl":      "600",
 	}
@@ -128,8 +128,8 @@ func TestDNSWeaver_Extract_NamedRecordWithHints(t *testing.T) {
 	if h.RecordHints.Type != "A" {
 		t.Errorf("RecordHints.Type = %q, want %q", h.RecordHints.Type, "A")
 	}
-	if h.RecordHints.Target != "10.1.20.100" {
-		t.Errorf("RecordHints.Target = %q, want %q", h.RecordHints.Target, "10.1.20.100")
+	if h.RecordHints.Target != "10.0.0.100" {
+		t.Errorf("RecordHints.Target = %q, want %q", h.RecordHints.Target, "10.0.0.100")
 	}
 	if h.RecordHints.Provider != "internal-dns" {
 		t.Errorf("RecordHints.Provider = %q, want %q", h.RecordHints.Provider, "internal-dns")
@@ -357,7 +357,7 @@ func TestDNSWeaver_Extract_K8sAnnotation_NamedRecords(t *testing.T) {
 		Annotations: map[string]string{
 			"dnsweaver.dev/records.myapp.hostname": "app.example.com",
 			"dnsweaver.dev/records.myapp.type":     "A",
-			"dnsweaver.dev/records.myapp.target":   "10.30.0.100",
+			"dnsweaver.dev/records.myapp.target":   "10.0.0.100",
 			"dnsweaver.dev/records.myapp.ttl":      "300",
 			"dnsweaver.dev/records.myapp.provider": "internal-dns",
 		},
@@ -386,8 +386,8 @@ func TestDNSWeaver_Extract_K8sAnnotation_NamedRecords(t *testing.T) {
 	if h.RecordHints.Type != "A" {
 		t.Errorf("Type = %q, want %q", h.RecordHints.Type, "A")
 	}
-	if h.RecordHints.Target != "10.30.0.100" {
-		t.Errorf("Target = %q, want %q", h.RecordHints.Target, "10.30.0.100")
+	if h.RecordHints.Target != "10.0.0.100" {
+		t.Errorf("Target = %q, want %q", h.RecordHints.Target, "10.0.0.100")
 	}
 	if h.RecordHints.TTL != 300 {
 		t.Errorf("TTL = %d, want %d", h.RecordHints.TTL, 300)

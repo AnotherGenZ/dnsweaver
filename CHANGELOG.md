@@ -20,8 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Updated project structure in contributing guide (added `sources/`, `internal/kubernetes/`,
     `pkg/workload/`, `pkg/sshutil/`, `providers/rfc2136/`; removed obsolete `internal/sources/`)
   - Added 11 missing CHANGELOG version comparison links (v0.3.1–v0.7.0)
-  - Replaced internal IP `10.30.0.100` with generic `10.0.0.100` in Kubernetes source docs
-    and annotations code comment
+  - Used standard documentation IPs in Kubernetes source docs and code examples
   - Fixed placeholder GitLab social link in mkdocs.yml
   - Added `instance_id` field and RFC 2136 provider example to config.example.yml
 - **Helm Chart**: Bumped chart version to 0.2.0 and appVersion to 0.9.1

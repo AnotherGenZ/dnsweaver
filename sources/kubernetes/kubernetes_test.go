@@ -285,7 +285,7 @@ func TestKubernetes_Extract_RecordHints(t *testing.T) {
 		Name: "default/with-hints",
 		Annotations: map[string]string{
 			AnnotationRecordType: "A",
-			AnnotationTarget:     "10.30.0.100",
+			AnnotationTarget:     "10.0.0.100",
 			AnnotationTTL:        "300",
 			AnnotationProvider:   "internal-dns",
 		},
@@ -311,8 +311,8 @@ func TestKubernetes_Extract_RecordHints(t *testing.T) {
 		if h.RecordHints.Type != "A" {
 			t.Errorf("hostnames[%d].RecordHints.Type = %q, want %q", i, h.RecordHints.Type, "A")
 		}
-		if h.RecordHints.Target != "10.30.0.100" {
-			t.Errorf("hostnames[%d].RecordHints.Target = %q, want %q", i, h.RecordHints.Target, "10.30.0.100")
+		if h.RecordHints.Target != "10.0.0.100" {
+			t.Errorf("hostnames[%d].RecordHints.Target = %q, want %q", i, h.RecordHints.Target, "10.0.0.100")
 		}
 		if h.RecordHints.TTL != 300 {
 			t.Errorf("hostnames[%d].RecordHints.TTL = %d, want %d", i, h.RecordHints.TTL, 300)
