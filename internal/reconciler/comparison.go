@@ -3,6 +3,8 @@
 package reconciler
 
 import (
+	"fmt"
+
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
 )
@@ -141,7 +143,7 @@ func formatSRVKey(srv *provider.SRVData) string {
 	if srv == nil {
 		return ""
 	}
-	return string(rune(srv.Priority)) + ":" + string(rune(srv.Weight)) + ":" + string(rune(srv.Port))
+	return fmt.Sprintf("%d:%d:%d", srv.Priority, srv.Weight, srv.Port)
 }
 
 // recordNeedsUpdate checks if an existing record needs to be updated to match desired.

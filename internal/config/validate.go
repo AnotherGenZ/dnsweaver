@@ -25,6 +25,30 @@ func (e *ValidationError) Error() string {
 func validateConfig(cfg *Config) []string {
 	var errs []string
 
+	// Validate enum fields that can come from file or env vars
+	switch cfg.Global.LogLevel {
+	case "debug", "info", "warn", "error":
+		// Valid
+	default:
+		errs = append(errs, fmt.Sprintf("invalid log_level %q (must be debug, info, warn, or error)", cfg.Global.LogLevel))
+	}
+
+	switch cfg.Global.LogFormat {
+	case "json", "text":
+		// Valid
+	default:
+		errs = append(errs, fmt.Sprintf("invalid log_format %q (must be json or text)", cfg.Global.LogFormat))
+	}
+
+	switch cfg.Global.DockerMode {
+	case "auto", "swarm", "standalone":
+		// Valid
+	case "":
+		// Will use default
+	default:
+		errs = append(errs, fmt.Sprintf("invalid docker_mode %q (must be auto, swarm, or standalone)", cfg.Global.DockerMode))
+	}
+
 	// Validate platform value
 	switch cfg.Global.Platform {
 	case "docker", "kubernetes", "both":
@@ -59,9 +83,12 @@ func validateTargetRecordType(inst *ProviderInstanceConfig) []string {
 
 	switch inst.RecordType {
 	case provider.RecordTypeA:
-		// A records must have an IP address as target
-		if net.ParseIP(inst.Target) == nil {
+		// A records must have an IPv4 address as target
+		ip := net.ParseIP(inst.Target)
+		if ip == nil {
 			errs = append(errs, fmt.Sprintf("%sTARGET: A records must point to an IP address, got %q", prefix, inst.Target))
+		} else if ip.To4() == nil {
+			errs = append(errs, fmt.Sprintf("%sTARGET: A records must point to an IPv4 address, got IPv6 %q (use AAAA record type instead)", prefix, inst.Target))
 		}
 	case provider.RecordTypeAAAA:
 		// AAAA records must have an IPv6 address as target

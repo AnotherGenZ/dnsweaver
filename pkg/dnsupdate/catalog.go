@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/miekg/dns"
 )
@@ -51,6 +52,7 @@ const (
 // The catalog is self-describing: chunks are discovered by querying
 // sequentially until NXDOMAIN is returned.
 type Catalog struct {
+	mu     sync.Mutex
 	client *Client
 	zone   string
 	logger *slog.Logger
@@ -84,6 +86,13 @@ func (c *Catalog) chunkRecordName(chunkIndex int) string {
 // This should be called before any read operations.
 // Safe to call multiple times; subsequent calls refresh the cache.
 func (c *Catalog) Load(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.loadLocked(ctx)
+}
+
+// loadLocked is the internal implementation of Load. Caller must hold c.mu.
+func (c *Catalog) loadLocked(ctx context.Context) error {
 	c.chunks = nil
 	c.hostnames = make(map[string]int)
 	c.loaded = false
@@ -143,8 +152,11 @@ func (c *Catalog) Load(ctx context.Context) error {
 // Returns a sorted copy to ensure consistent ordering.
 // Loads the catalog if not already loaded.
 func (c *Catalog) Hostnames(ctx context.Context) ([]string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if !c.loaded {
-		if err := c.Load(ctx); err != nil {
+		if err := c.loadLocked(ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -162,8 +174,11 @@ func (c *Catalog) Hostnames(ctx context.Context) ([]string, error) {
 // Contains checks if a hostname is in the catalog.
 // Loads the catalog if not already loaded.
 func (c *Catalog) Contains(ctx context.Context, hostname string) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if !c.loaded {
-		if err := c.Load(ctx); err != nil {
+		if err := c.loadLocked(ctx); err != nil {
 			return false, err
 		}
 	}
@@ -211,6 +226,9 @@ var ErrHostnameTooLong = fmt.Errorf("hostname exceeds maximum length of %d bytes
 //
 // Returns ErrHostnameTooLong if the hostname exceeds CatalogMaxHostnameLen (253 bytes).
 func (c *Catalog) Add(ctx context.Context, hostname string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	hostname = normalizeHostname(hostname)
 
 	// Validate hostname length
@@ -224,7 +242,7 @@ func (c *Catalog) Add(ctx context.Context, hostname string) error {
 	}
 
 	// Load current state
-	if err := c.Load(ctx); err != nil {
+	if err := c.loadLocked(ctx); err != nil {
 		return fmt.Errorf("loading catalog: %w", err)
 	}
 
@@ -280,10 +298,13 @@ func (c *Catalog) Add(ctx context.Context, hostname string) error {
 // This performs an atomic DNS update.
 // If the chunk becomes empty (and is not chunk 0), it is deleted.
 func (c *Catalog) Remove(ctx context.Context, hostname string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	hostname = normalizeHostname(hostname)
 
 	// Load current state
-	if err := c.Load(ctx); err != nil {
+	if err := c.loadLocked(ctx); err != nil {
 		return fmt.Errorf("loading catalog: %w", err)
 	}
 
@@ -458,8 +479,11 @@ func (c *Catalog) reindexAfterDelete(deletedIndex int) {
 // This rewrites all chunks to DNS using byte-based packing.
 // Use sparingly as it rewrites all chunks.
 func (c *Catalog) Compact(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if !c.loaded {
-		if err := c.Load(ctx); err != nil {
+		if err := c.loadLocked(ctx); err != nil {
 			return fmt.Errorf("loading catalog: %w", err)
 		}
 	}
@@ -539,8 +563,11 @@ func (c *Catalog) Compact(ctx context.Context) error {
 // Clear removes all catalog records from DNS.
 // Use with caution - this removes all tracking state.
 func (c *Catalog) Clear(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if !c.loaded {
-		if err := c.Load(ctx); err != nil {
+		if err := c.loadLocked(ctx); err != nil {
 			return fmt.Errorf("loading catalog: %w", err)
 		}
 	}
@@ -564,6 +591,9 @@ func (c *Catalog) Clear(ctx context.Context) error {
 
 // Stats returns catalog statistics including byte usage per chunk.
 func (c *Catalog) Stats() CatalogStats {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	stats := CatalogStats{
 		Loaded:             c.loaded,
 		ChunkCount:         len(c.chunks),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"time"
 
 	"gitlab.bluewillows.net/root/dnsweaver/internal/matcher"
@@ -224,8 +225,8 @@ func (pi *ProviderInstance) GetExistingRecords(ctx context.Context, hostname str
 
 	var matching []Record
 	for _, r := range allRecords {
-		// Only return DNS data records for the hostname (skip TXT ownership markers)
-		if r.Hostname == hostname {
+		// Case-insensitive hostname comparison per RFC 1035 Section 2.3.3
+		if strings.EqualFold(r.Hostname, hostname) {
 			switch r.Type {
 			case RecordTypeA, RecordTypeAAAA, RecordTypeCNAME, RecordTypeSRV:
 				matching = append(matching, r)
