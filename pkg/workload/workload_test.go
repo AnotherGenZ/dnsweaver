@@ -233,7 +233,7 @@ func TestWorkload_KubernetesLikeUsage(t *testing.T) {
 		},
 		Annotations: map[string]string{
 			"dnsweaver.dev/record-type": "A",
-			"dnsweaver.dev/target":      "10.30.0.100",
+			"dnsweaver.dev/target":      "10.0.0.100",
 		},
 		Hostnames: []string{"myapp.example.com", "www.example.com"},
 		Metadata: map[string]string{

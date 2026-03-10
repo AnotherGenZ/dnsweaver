@@ -112,7 +112,7 @@ environment:
   - DNSWEAVER_DMZ_TOKEN_FILE=/run/secrets/technitium_token
   - DNSWEAVER_DMZ_ZONE=dmz.example.com
   - DNSWEAVER_DMZ_RECORD_TYPE=A
-  - DNSWEAVER_DMZ_TARGET=10.1.0.100
+  - DNSWEAVER_DMZ_TARGET=10.0.1.100
   - DNSWEAVER_DMZ_DOMAINS=*.dmz.example.com
 ```
 

@@ -279,21 +279,21 @@ func TestGlobToRegex(t *testing.T) {
 }
 
 // TestRealWorldSplitHorizon tests the exact use case from Issue #21:
-// - *.local.bluewillows.net → Technitium
-// - *.bluewillows.net (excluding *.local.*) → Cloudflare
+// - *.local.example.net → Technitium
+// - *.example.net (excluding *.local.*) → Cloudflare
 func TestRealWorldSplitHorizon(t *testing.T) {
-	// Technitium matcher - handles *.local.bluewillows.net
+	// Technitium matcher - handles *.local.example.net
 	techMatcher, err := NewDomainMatcher(DomainMatcherConfig{
-		Includes: []string{"*.local.bluewillows.net"},
+		Includes: []string{"*.local.example.net"},
 	})
 	if err != nil {
 		t.Fatalf("failed to create technitium matcher: %v", err)
 	}
 
-	// Cloudflare matcher - handles *.bluewillows.net except *.local.*
+	// Cloudflare matcher - handles *.example.net except *.local.*
 	cfMatcher, err := NewDomainMatcher(DomainMatcherConfig{
-		Includes: []string{"*.bluewillows.net"},
-		Excludes: []string{"*.local.bluewillows.net"},
+		Includes: []string{"*.example.net"},
+		Excludes: []string{"*.local.example.net"},
 	})
 	if err != nil {
 		t.Fatalf("failed to create cloudflare matcher: %v", err)
@@ -304,12 +304,12 @@ func TestRealWorldSplitHorizon(t *testing.T) {
 		wantTech bool
 		wantCF   bool
 	}{
-		{"sonarr.local.bluewillows.net", true, false},
-		{"sonarr.bluewillows.net", false, true},
-		{"grafana.local.bluewillows.net", true, false},
-		{"grafana.bluewillows.net", false, true},
-		{"deep.nested.local.bluewillows.net", true, false},
-		{"bluewillows.net", false, false}, // Root domain - neither matches
+		{"sonarr.local.example.net", true, false},
+		{"sonarr.example.net", false, true},
+		{"grafana.local.example.net", true, false},
+		{"grafana.example.net", false, true},
+		{"deep.nested.local.example.net", true, false},
+		{"example.net", false, false}, // Root domain - neither matches
 	}
 
 	for _, tt := range tests {

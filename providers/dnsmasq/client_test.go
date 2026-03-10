@@ -195,7 +195,7 @@ cname=www.example.com,app.example.com
 
 func TestClient_ParseConfigContent_WithZoneFilter(t *testing.T) {
 	content := `address=/app.example.com/10.0.0.100
-address=/app.other.com/10.1.20.211
+address=/app.other.com/10.0.0.101
 cname=www.example.com,app.example.com
 `
 
@@ -375,7 +375,7 @@ func TestClient_Delete(t *testing.T) {
 	mockFS := newMockFileSystem()
 	mockFS.files["/etc/dnsmasq.d/test.conf"] = []byte(`# Managed by dnsweaver
 address=/app.example.com/10.0.0.100
-address=/other.example.com/10.1.20.211
+address=/other.example.com/10.0.0.101
 `)
 
 	client := NewClient("/etc/dnsmasq.d", "test.conf", "echo reload", "",
@@ -397,14 +397,14 @@ address=/other.example.com/10.1.20.211
 	if strings.Contains(content, "address=/app.example.com/10.0.0.100") {
 		t.Errorf("file should not contain deleted record, got: %s", content)
 	}
-	if !strings.Contains(content, "address=/other.example.com/10.1.20.211") {
+	if !strings.Contains(content, "address=/other.example.com/10.0.0.101") {
 		t.Errorf("file should still contain other record, got: %s", content)
 	}
 }
 
 func TestClient_Delete_NonExistent(t *testing.T) {
 	mockFS := newMockFileSystem()
-	mockFS.files["/etc/dnsmasq.d/test.conf"] = []byte("address=/other.example.com/10.1.20.211\n")
+	mockFS.files["/etc/dnsmasq.d/test.conf"] = []byte("address=/other.example.com/10.0.0.101\n")
 
 	client := NewClient("/etc/dnsmasq.d", "test.conf", "echo reload", "",
 		WithFileSystem(mockFS))
