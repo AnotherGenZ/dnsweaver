@@ -367,6 +367,8 @@ func (r *Reconciler) RemoveHostname(ctx context.Context, hostname string) (*Resu
 		return result, nil
 	}
 
+	hostname = source.NormalizeHostname(hostname)
+
 	r.logger.Debug("removing hostname",
 		slog.String("hostname", hostname),
 		slog.Bool("dry_run", r.config.DryRun),
