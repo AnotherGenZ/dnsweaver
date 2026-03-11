@@ -49,8 +49,13 @@ Or via environment variables:
 
 ```bash
 DNSWEAVER_PLATFORM=kubernetes
-DNSWEAVER_SOURCE=dnsweaver,kubernetes
+DNSWEAVER_SOURCES=dnsweaver,kubernetes
 ```
+
+!!! tip "Auto-registration"
+    When `platform` is set to `kubernetes` or `both`, the kubernetes source is
+    **automatically registered** even if not listed in `sources` or `DNSWEAVER_SOURCES`.
+    You only need to list it explicitly if you want to control source ordering.
 
 ## Annotations
 
@@ -61,7 +66,7 @@ The Kubernetes source reads `dnsweaver.dev/*` annotations from resources to over
 | Annotation | Type | Default | Description |
 | :--------- | :--- | :------ | :---------- |
 | `dnsweaver.dev/enabled` | `bool` | `true` | Set to `"false"` to skip this resource entirely |
-| `dnsweaver.dev/record-type` | `string` | _(from provider)_ | Override record type: `A`, `AAAA`, `CNAME`, `SRV` |
+| `dnsweaver.dev/record-type` | `string` | _(from provider)_ | Override record type: `A`, `AAAA`, `CNAME`, `SRV`, `TXT` |
 | `dnsweaver.dev/target` | `string` | _(from provider)_ | Override DNS target (IP or hostname) |
 | `dnsweaver.dev/ttl` | `int` | _(from provider)_ | Override TTL in seconds |
 | `dnsweaver.dev/provider` | `string` | _(auto-matched)_ | Route to a specific DNS provider by name |

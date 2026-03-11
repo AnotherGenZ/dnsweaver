@@ -164,7 +164,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body io.Rea
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := httputil.ReadBody(resp, 0)
 	if err != nil {
 		return nil, fmt.Errorf("reading response body: %w", err)
 	}

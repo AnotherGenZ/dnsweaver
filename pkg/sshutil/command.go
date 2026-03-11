@@ -157,7 +157,8 @@ func (cr *SSHCommandRunner) RunScript(ctx context.Context, script string) (*Comm
 }
 
 // RunWithSudo executes a command with sudo on the remote system.
-// If password is non-empty, it will be provided to sudo via stdin.
+// If password is non-empty, it will be provided to sudo via stdin pipe
+// (avoids exposing the password in /proc/*/cmdline).
 func (cr *SSHCommandRunner) RunWithSudo(ctx context.Context, command, password string) (*CommandResult, error) {
 	cr.mu.RLock()
 	defer cr.mu.RUnlock()
@@ -181,11 +182,12 @@ func (cr *SSHCommandRunner) RunWithSudo(ctx context.Context, command, password s
 	session.Stdout = &stdout
 	session.Stderr = &stderr
 
-	// Build sudo command
-	sudoCmd := command
+	// Build sudo command — pipe password via stdin to avoid /proc exposure
+	var sudoCmd string
 	if password != "" {
-		// Use sudo -S to read password from stdin
-		sudoCmd = fmt.Sprintf("echo '%s' | sudo -S %s", escapeShellArg(password), command)
+		// Use sudo -S to read password from stdin (sent via session pipe)
+		sudoCmd = "sudo -S " + command
+		session.Stdin = strings.NewReader(password + "\n")
 	} else {
 		// Assume passwordless sudo
 		sudoCmd = "sudo " + command

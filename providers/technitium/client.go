@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -140,7 +139,7 @@ func (c *Client) doRequest(ctx context.Context, endpoint string, params url.Valu
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httputil.ReadBody(resp, 0)
 	if err != nil {
 		return nil, fmt.Errorf("reading response body: %w", err)
 	}

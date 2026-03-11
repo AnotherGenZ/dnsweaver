@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -316,18 +317,9 @@ func parseIntEnv(s string) (int, error) {
 	if s == "" {
 		return 0, nil
 	}
-	var n int
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			if c == '-' && n == 0 {
-				continue
-			}
-			return 0, errInvalidInt
-		}
-		n = n*10 + int(c-'0')
-	}
-	if len(s) > 0 && s[0] == '-' {
-		n = -n
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return 0, errInvalidInt
 	}
 	return n, nil
 }

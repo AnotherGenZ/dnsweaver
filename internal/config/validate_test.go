@@ -21,10 +21,11 @@ func TestValidateTargetRecordType(t *testing.T) {
 			wantErr:    false,
 		},
 		{
-			name:       "A record with IPv6 is valid",
+			name:       "A record with IPv6 is invalid",
 			recordType: provider.RecordTypeA,
 			target:     "2001:db8::1",
-			wantErr:    false,
+			wantErr:    true,
+			errMatch:   "A records must point to an IPv4 address",
 		},
 		{
 			name:       "A record with hostname is invalid",
@@ -90,7 +91,10 @@ func TestValidateTargetRecordType(t *testing.T) {
 
 func TestValidateConfig_DuplicateProviderNames(t *testing.T) {
 	cfg := &Config{
-		Global:        &GlobalConfig{},
+		Global: &GlobalConfig{
+			LogLevel:  "info",
+			LogFormat: "text",
+		},
 		ProviderNames: []string{"dns1", "dns1"},
 		ProviderInstances: []*ProviderInstanceConfig{
 			{Name: "dns1", TypeName: "technitium", RecordType: "A", Target: "10.0.0.1"},

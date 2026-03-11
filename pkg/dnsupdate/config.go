@@ -2,6 +2,7 @@ package dnsupdate
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -117,14 +118,23 @@ func (c *Config) Validate() error {
 
 // GetServer returns the server address with port.
 // If no port is specified, appends the default DNS port (53).
+// Handles IPv6 addresses correctly (e.g., "[::1]:53", "[::1]").
 func (c *Config) GetServer() string {
 	if c.Server == "" {
 		return ""
 	}
 
-	// Check if port is already included
-	if strings.Contains(c.Server, ":") {
+	// Try to split host:port — works for "host:port", "[::1]:port", etc.
+	_, _, err := net.SplitHostPort(c.Server)
+	if err == nil {
+		// Already has a port
 		return c.Server
+	}
+
+	// No port specified — append default.
+	// For bare IPv6 like "::1", wrap in brackets first.
+	if strings.Contains(c.Server, ":") {
+		return fmt.Sprintf("[%s]:%d", c.Server, DefaultPort)
 	}
 
 	return fmt.Sprintf("%s:%d", c.Server, DefaultPort)

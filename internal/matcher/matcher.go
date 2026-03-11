@@ -95,6 +95,9 @@ func (m *DomainMatcher) Matches(hostname string) bool {
 	// Normalize hostname to lowercase for matching
 	hostname = strings.ToLower(hostname)
 
+	// Strip trailing dot (FQDN notation) so "app.example.com." matches "*.example.com"
+	hostname = strings.TrimSuffix(hostname, ".")
+
 	// Check excludes first
 	for _, ex := range m.excludes {
 		if ex.regex.MatchString(hostname) {

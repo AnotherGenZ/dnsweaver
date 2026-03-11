@@ -71,13 +71,19 @@ type CommandRunner interface {
 }
 
 // osCommandRunner implements CommandRunner using the real OS.
+// Commands are split on whitespace and executed directly (no shell).
+// This prevents command injection via the reload_command config field.
 type osCommandRunner struct {
 	logger *slog.Logger
 }
 
 func (r *osCommandRunner) Run(ctx context.Context, command string) error {
 	r.logger.Debug("executing command", slog.String("command", command))
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	args := strings.Fields(command)
+	if len(args) == 0 {
+		return fmt.Errorf("empty command")
+	}
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...) //nolint:gosec // Intentional: reload_command is operator-configured, not user input
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("command failed: %w, output: %s", err, string(output))
