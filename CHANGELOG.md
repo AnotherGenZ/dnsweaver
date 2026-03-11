@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-03-11
+
+### Fixed
+- **Critical Correctness** (#148):
+  - `parseIntEnv` replaced with `strconv.Atoi` to prevent silent integer overflow on 32-bit platforms
+  - `formatSRVKey` uses `fmt.Sprintf` instead of `string(rune(int))` which produced Unicode characters instead of numeric keys
+  - Thread-safe DNS record `Catalog` — all public methods now protected by `sync.Mutex`
+  - Enum validation for `log_level`, `log_format`, and `docker_mode` config fields
+  - `RemoveHostname` normalizes hostname before operations (RFC 1035)
+  - A record validation rejects IPv6 addresses (must use AAAA)
+  - `GetExistingRecords` uses case-insensitive comparison per RFC 1035
+- **Concurrency & Safety** (#149):
+  - `_FILE` secret read failure is now a hard error — no longer silently falls through to direct env var
+  - Signal handler registered early (before initialization) so SIGINT/SIGTERM during startup triggers graceful shutdown
+  - Reconciliation concurrency guard — `TryLock` prevents overlapping reconciliation from timer + events
+  - `SetEnabled`/`SetDryRun` use `atomic.Bool` for thread-safe access from concurrent goroutines
+  - Mass deletion circuit breaker — orphan cleanup aborts if >50% of known hostnames would be deleted
+  - Kubernetes `AddEventHandler` errors now propagated (previously logged and silently dropped)
+  - `sync.WaitGroup` ensures periodic reconciliation goroutine completes during shutdown
+- **Provider & Security Hardening** (#150):
+  - dnsmasq `GetServer()` uses `net.SplitHostPort` — correct IPv6 address parsing
+  - Domain matcher strips trailing dots before comparison for consistent matching
+  - Pi-hole v6 URL path values escaped with `url.PathEscape` to prevent injection
+  - dnsmasq reload command validated against shell metacharacters
+  - SSH `RunWithSudo` pipes password via stdin instead of `echo` (no `/proc` exposure)
+  - HTTP response bodies capped at 10 MB via `httputil.ReadBody` across all providers
+- **Documentation Alignment** (#151):
+  - Added dnsmasq provider example to `config.example.yml`
+  - Documented `_FILE` suffix support for `TSIG_SECRET` and `SSH_PASSWORD`
+  - Fixed `DNSWEAVER_SOURCE` (singular) → `DNSWEAVER_SOURCES` (plural) in K8s deployment docs
+  - Documented Kubernetes source auto-registration behavior
+  - `record-type` annotation and K8s source doc consistently list A, AAAA, CNAME, SRV, TXT
+- **Helm Chart**: Bumped appVersion to 0.9.2
+
 ## [0.9.1] - 2026-03-09
 
 ### Fixed
@@ -432,7 +466,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitLab CI/CD pipeline with GitHub release automation
 - Docker Hub and GitHub Container Registry publishing
 
-[Unreleased]: https://github.com/maxfield-allison/dnsweaver/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/maxfield-allison/dnsweaver/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/maxfield-allison/dnsweaver/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/maxfield-allison/dnsweaver/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/maxfield-allison/dnsweaver/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/maxfield-allison/dnsweaver/compare/v0.8.0...v0.8.1
