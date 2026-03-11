@@ -125,7 +125,7 @@ dnsweaver supports per-resource annotation overrides using the `dnsweaver.dev/` 
 | Annotation | Values | Description |
 | :--------- | :----- | :---------- |
 | `dnsweaver.dev/enabled` | `true` / `false` | Enable/disable DNS management for this resource |
-| `dnsweaver.dev/record-type` | `A`, `AAAA`, `CNAME`, `SRV` | Override the record type |
+| `dnsweaver.dev/record-type` | `A`, `AAAA`, `CNAME`, `SRV`, `TXT` | Override the record type |
 | `dnsweaver.dev/target` | IP or hostname | Override the DNS target |
 | `dnsweaver.dev/ttl` | seconds (e.g., `300`) | Override the TTL |
 | `dnsweaver.dev/provider` | provider name | Route to a specific provider |

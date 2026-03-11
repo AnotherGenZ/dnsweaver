@@ -9,7 +9,7 @@
 // Resource-level annotations (applied to ALL hostnames on the resource):
 //
 //	dnsweaver.dev/enabled: "true"          # Opt-in/out of DNS management
-//	dnsweaver.dev/record-type: A           # Override record type (A, AAAA, CNAME, SRV)
+//	dnsweaver.dev/record-type: A           # Override record type (A, AAAA, CNAME, SRV, TXT)
 //	dnsweaver.dev/target: 10.0.0.100      # Override record target
 //	dnsweaver.dev/ttl: "300"               # Override TTL in seconds
 //	dnsweaver.dev/provider: internal-dns   # Route to specific provider instance

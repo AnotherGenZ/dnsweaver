@@ -3,6 +3,8 @@ package httputil
 
 import (
 	"crypto/tls"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -133,4 +135,33 @@ func NewClientWithTransport(timeout time.Duration, transport *http.Transport) *h
 // Equivalent to NewClient(nil).
 func DefaultClient() *http.Client {
 	return NewClient(nil)
+}
+
+// Response size limits for protection against OOM from oversized responses.
+const (
+	// MaxResponseSize is the default maximum response body size (10 MB).
+	// This prevents OOM if a server sends an unexpectedly large response.
+	MaxResponseSize int64 = 10 * 1024 * 1024
+)
+
+// ReadBody reads and returns the response body, limiting the size to prevent OOM.
+// If maxBytes is 0, MaxResponseSize is used.
+// Returns an error if the response exceeds the limit.
+func ReadBody(resp *http.Response, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 {
+		maxBytes = MaxResponseSize
+	}
+
+	// Read up to maxBytes+1 to detect if the response exceeds the limit
+	limited := io.LimitReader(resp.Body, maxBytes+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("reading response body: %w", err)
+	}
+
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("response body exceeds maximum size of %d bytes", maxBytes)
+	}
+
+	return data, nil
 }

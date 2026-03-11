@@ -10,10 +10,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
+	"gitlab.bluewillows.net/root/dnsweaver/pkg/httputil"
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
 )
 
@@ -120,7 +122,7 @@ func (c *V6APIClient) authenticate(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := httputil.ReadBody(resp, 0)
 	if err != nil {
 		return fmt.Errorf("reading auth response: %w", err)
 	}
@@ -203,7 +205,7 @@ func (c *V6APIClient) doRequest(ctx context.Context, method, path string, reqBod
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := httputil.ReadBody(resp, 0)
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
@@ -331,8 +333,8 @@ func (c *V6APIClient) createHostEntry(ctx context.Context, record piholeRecord) 
 	// Format: "IP HOSTNAME"
 	value := fmt.Sprintf("%s %s", record.Target, record.Hostname)
 
-	// URL-encode the value for the path
-	path := fmt.Sprintf("/api/config/dns/hosts/%s", value)
+	// URL-encode the value for the path to prevent path injection
+	path := fmt.Sprintf("/api/config/dns/hosts/%s", url.PathEscape(value))
 
 	_, err := c.doRequest(ctx, http.MethodPut, path, nil)
 	if err != nil {
@@ -359,7 +361,7 @@ func (c *V6APIClient) createCNAMEEntry(ctx context.Context, record piholeRecord)
 	// Format: "alias,target"
 	value := fmt.Sprintf("%s,%s", record.Hostname, record.Target)
 
-	path := fmt.Sprintf("/api/config/dns/cnameRecords/%s", value)
+	path := fmt.Sprintf("/api/config/dns/cnameRecords/%s", url.PathEscape(value))
 
 	_, err := c.doRequest(ctx, http.MethodPut, path, nil)
 	if err != nil {
@@ -397,7 +399,7 @@ func (c *V6APIClient) deleteHostEntry(ctx context.Context, record piholeRecord) 
 	// Format: "IP HOSTNAME"
 	value := fmt.Sprintf("%s %s", record.Target, record.Hostname)
 
-	path := fmt.Sprintf("/api/config/dns/hosts/%s", value)
+	path := fmt.Sprintf("/api/config/dns/hosts/%s", url.PathEscape(value))
 
 	_, err := c.doRequest(ctx, http.MethodDelete, path, nil)
 	if err != nil {
@@ -423,7 +425,7 @@ func (c *V6APIClient) deleteCNAMEEntry(ctx context.Context, record piholeRecord)
 	// Format: "alias,target"
 	value := fmt.Sprintf("%s,%s", record.Hostname, record.Target)
 
-	path := fmt.Sprintf("/api/config/dns/cnameRecords/%s", value)
+	path := fmt.Sprintf("/api/config/dns/cnameRecords/%s", url.PathEscape(value))
 
 	_, err := c.doRequest(ctx, http.MethodDelete, path, nil)
 	if err != nil {
