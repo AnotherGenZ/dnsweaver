@@ -7,12 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-03-11
+
 ### Fixed
 - **Source Registry**: `dnsweaver.enabled=false` (Docker) and `dnsweaver.dev/enabled=false`
   (K8s) now opt out of ALL sources at the registry level, not just the dnsweaver native
   source. Previously the traefik source still extracted hostnames from disabled workloads.
   Fixes [#75](https://github.com/maxfield-allison/dnsweaver/issues/75),
   [#152](https://gitlab.bluewillows.net/root/dnsweaver/-/issues/152).
+- **Helm Chart**: Bumped appVersion to 0.9.3
 
 ## [0.9.2] - 2026-03-11
 
@@ -474,6 +477,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docker Hub and GitHub Container Registry publishing
 
 [Unreleased]: https://github.com/maxfield-allison/dnsweaver/compare/v0.9.2...HEAD
+[0.9.3]: https://github.com/maxfield-allison/dnsweaver/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/maxfield-allison/dnsweaver/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/maxfield-allison/dnsweaver/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/maxfield-allison/dnsweaver/compare/v0.8.1...v0.9.0
