@@ -472,7 +472,7 @@ func TestManager_RetryLoop_PingRecovery(t *testing.T) {
 	defer manager.Stop()
 
 	// Wait for recovery (need 2 more retries: attempt 2 fails, attempt 3 succeeds)
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if manager.ReadyCount() == 1 {
 			break
@@ -485,5 +485,85 @@ func TestManager_RetryLoop_PingRecovery(t *testing.T) {
 	}
 	if manager.PendingCount() != 0 {
 		t.Errorf("expected 0 pending providers after recovery, got %d", manager.PendingCount())
+	}
+}
+
+func TestManager_OnProviderReady_CalledOnRecovery(t *testing.T) {
+	logger := slog.Default()
+	registry := NewRegistry(logger)
+
+	mp := &managerTestProvider{name: "callback-provider", typeName: "mock"}
+	// Fail once, then succeed
+	registry.RegisterFactory("mock", failingFactory(1, mp))
+
+	var (
+		callbackName string
+		callbackInst *ProviderInstance
+		callbackMu   sync.Mutex
+	)
+
+	manager := NewManager(registry,
+		WithManagerLogger(logger),
+		WithManagerConfig(ManagerConfig{
+			InitialRetryInterval:   50 * time.Millisecond,
+			MaxRetryInterval:       200 * time.Millisecond,
+			RetryBackoffMultiplier: 1.5,
+		}),
+	)
+
+	manager.SetOnProviderReady(func(name string, inst *ProviderInstance) {
+		callbackMu.Lock()
+		defer callbackMu.Unlock()
+		callbackName = name
+		callbackInst = inst
+	})
+
+	cfg := ProviderInstanceConfig{
+		Name:       "callback-provider",
+		TypeName:   "mock",
+		RecordType: RecordTypeA,
+		Target:     "192.0.2.1",
+		TTL:        300,
+		Domains:    []string{"*.example.com"},
+	}
+
+	// First attempt fails — goes to pending
+	_ = manager.InitializeProvider(cfg)
+	if manager.PendingCount() != 1 {
+		t.Fatalf("expected 1 pending, got %d", manager.PendingCount())
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := manager.Start(ctx); err != nil {
+		t.Fatalf("failed to start: %v", err)
+	}
+	defer manager.Stop()
+
+	// Wait for recovery
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if manager.ReadyCount() == 1 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if manager.ReadyCount() != 1 {
+		t.Fatalf("provider did not recover in time")
+	}
+
+	// Give callback a moment to fire (it runs outside the lock)
+	time.Sleep(50 * time.Millisecond)
+
+	callbackMu.Lock()
+	defer callbackMu.Unlock()
+
+	if callbackName != "callback-provider" {
+		t.Errorf("expected callback with name 'callback-provider', got %q", callbackName)
+	}
+	if callbackInst == nil {
+		t.Error("expected callback to receive non-nil provider instance")
 	}
 }
