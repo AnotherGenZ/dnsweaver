@@ -146,6 +146,31 @@ func (c *Config) LogFormat() string {
 	return c.Global.LogFormat
 }
 
+// LogFile returns the configured log file path. Empty means stdout only.
+func (c *Config) LogFile() string {
+	return c.Global.LogFile
+}
+
+// LogMaxSize returns the max log file size in MB before rotation.
+func (c *Config) LogMaxSize() int {
+	return c.Global.LogMaxSize
+}
+
+// LogMaxBackups returns the number of old log files to keep.
+func (c *Config) LogMaxBackups() int {
+	return c.Global.LogMaxBackups
+}
+
+// LogMaxAge returns the number of days to retain old log files.
+func (c *Config) LogMaxAge() int {
+	return c.Global.LogMaxAge
+}
+
+// LogCompress returns whether rotated log files should be compressed.
+func (c *Config) LogCompress() bool {
+	return c.Global.LogCompress
+}
+
 // DryRun returns whether dry-run mode is enabled.
 func (c *Config) DryRun() bool {
 	return c.Global.DryRun

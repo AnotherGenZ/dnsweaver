@@ -8,6 +8,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -17,6 +18,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"gopkg.in/natefinch/lumberjack.v2"
 
 	"gitlab.bluewillows.net/root/dnsweaver/internal/config"
 	"gitlab.bluewillows.net/root/dnsweaver/internal/docker"
@@ -80,7 +83,7 @@ func run() error {
 	}
 
 	// Set up structured logging
-	logger := setupLogger(cfg.LogLevel(), cfg.LogFormat())
+	logger := setupLogger(cfg)
 	slog.SetDefault(logger)
 
 	// Set build info metrics
@@ -94,6 +97,7 @@ func run() error {
 		slog.Bool("dry_run", cfg.DryRun()),
 		slog.Bool("adopt_existing", cfg.AdoptExisting()),
 		slog.String("instance_id", cfg.InstanceID()),
+		slog.String("log_file", cfg.LogFile()),
 	)
 
 	// Create context with cancellation for graceful shutdown
@@ -445,14 +449,28 @@ func run() error {
 	return nil
 }
 
-func setupLogger(level, format string) *slog.Logger {
-	logLevel := parseLogLevel(level)
+func setupLogger(cfg *config.Config) *slog.Logger {
+	logLevel := parseLogLevel(cfg.LogLevel())
+
+	var output io.Writer = os.Stdout
+
+	if logFile := cfg.LogFile(); logFile != "" {
+		output = &lumberjack.Logger{
+			Filename:   logFile,
+			MaxSize:    cfg.LogMaxSize(),
+			MaxBackups: cfg.LogMaxBackups(),
+			MaxAge:     cfg.LogMaxAge(),
+			Compress:   cfg.LogCompress(),
+		}
+	}
+
+	opts := &slog.HandlerOptions{Level: logLevel}
 
 	var handler slog.Handler
-	if format == "text" {
-		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})
+	if cfg.LogFormat() == "text" {
+		handler = slog.NewTextHandler(output, opts)
 	} else {
-		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})
+		handler = slog.NewJSONHandler(output, opts)
 	}
 
 	return slog.New(handler)

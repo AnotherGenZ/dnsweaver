@@ -12,6 +12,11 @@ func clearGlobalEnv(t *testing.T) {
 	envVars := []string{
 		"DNSWEAVER_LOG_LEVEL",
 		"DNSWEAVER_LOG_FORMAT",
+		"DNSWEAVER_LOG_FILE",
+		"DNSWEAVER_LOG_MAX_SIZE",
+		"DNSWEAVER_LOG_MAX_BACKUPS",
+		"DNSWEAVER_LOG_MAX_AGE",
+		"DNSWEAVER_LOG_COMPRESS",
 		"DNSWEAVER_DRY_RUN",
 		"DNSWEAVER_CLEANUP_ORPHANS",
 		"DNSWEAVER_OWNERSHIP_TRACKING",
@@ -46,6 +51,21 @@ func TestLoadGlobalConfig_Defaults(t *testing.T) {
 	if cfg.LogFormat != DefaultLogFormat {
 		t.Errorf("LogFormat = %q, want %q", cfg.LogFormat, DefaultLogFormat)
 	}
+	if cfg.LogFile != "" {
+		t.Errorf("LogFile = %q, want empty", cfg.LogFile)
+	}
+	if cfg.LogMaxSize != DefaultLogMaxSize {
+		t.Errorf("LogMaxSize = %d, want %d", cfg.LogMaxSize, DefaultLogMaxSize)
+	}
+	if cfg.LogMaxBackups != DefaultLogMaxBackups {
+		t.Errorf("LogMaxBackups = %d, want %d", cfg.LogMaxBackups, DefaultLogMaxBackups)
+	}
+	if cfg.LogMaxAge != DefaultLogMaxAge {
+		t.Errorf("LogMaxAge = %d, want %d", cfg.LogMaxAge, DefaultLogMaxAge)
+	}
+	if cfg.LogCompress != DefaultLogCompress {
+		t.Errorf("LogCompress = %v, want %v", cfg.LogCompress, DefaultLogCompress)
+	}
 	if cfg.DryRun != DefaultDryRun {
 		t.Errorf("DryRun = %v, want %v", cfg.DryRun, DefaultDryRun)
 	}
@@ -78,6 +98,11 @@ func TestLoadGlobalConfig_Defaults(t *testing.T) {
 	}
 	if cfg.InstanceID != DefaultInstanceID {
 		t.Errorf("InstanceID = %q, want %q", cfg.InstanceID, DefaultInstanceID)
+		os.Setenv("DNSWEAVER_LOG_FILE", "/var/log/dnsweaver.log")
+		os.Setenv("DNSWEAVER_LOG_MAX_SIZE", "50")
+		os.Setenv("DNSWEAVER_LOG_MAX_BACKUPS", "3")
+		os.Setenv("DNSWEAVER_LOG_MAX_AGE", "14")
+		os.Setenv("DNSWEAVER_LOG_COMPRESS", "false")
 	}
 }
 
@@ -93,6 +118,11 @@ func TestLoadGlobalConfig_CustomValues(t *testing.T) {
 	os.Setenv("DNSWEAVER_HEALTH_PORT", "9090")
 	os.Setenv("DNSWEAVER_DOCKER_HOST", "tcp://localhost:2375")
 	os.Setenv("DNSWEAVER_DOCKER_MODE", "swarm")
+	os.Setenv("DNSWEAVER_LOG_FILE", "/var/log/dnsweaver.log")
+	os.Setenv("DNSWEAVER_LOG_MAX_SIZE", "50")
+	os.Setenv("DNSWEAVER_LOG_MAX_BACKUPS", "3")
+	os.Setenv("DNSWEAVER_LOG_MAX_AGE", "14")
+	os.Setenv("DNSWEAVER_LOG_COMPRESS", "false")
 	// Note: DNSWEAVER_SOURCE is deprecated; GlobalConfig.Source is now always the default.
 	// Source list is controlled by DNSWEAVER_SOURCES via parseSources().
 
@@ -107,6 +137,21 @@ func TestLoadGlobalConfig_CustomValues(t *testing.T) {
 	}
 	if cfg.LogFormat != "text" {
 		t.Errorf("LogFormat = %q, want %q", cfg.LogFormat, "text")
+	}
+	if cfg.LogFile != "/var/log/dnsweaver.log" {
+		t.Errorf("LogFile = %q, want %q", cfg.LogFile, "/var/log/dnsweaver.log")
+	}
+	if cfg.LogMaxSize != 50 {
+		t.Errorf("LogMaxSize = %d, want %d", cfg.LogMaxSize, 50)
+	}
+	if cfg.LogMaxBackups != 3 {
+		t.Errorf("LogMaxBackups = %d, want %d", cfg.LogMaxBackups, 3)
+	}
+	if cfg.LogMaxAge != 14 {
+		t.Errorf("LogMaxAge = %d, want %d", cfg.LogMaxAge, 14)
+	}
+	if cfg.LogCompress {
+		t.Error("LogCompress = true, want false")
 	}
 	if !cfg.DryRun {
 		t.Error("DryRun = false, want true")
@@ -155,6 +200,42 @@ func TestLoadGlobalConfig_InvalidValues(t *testing.T) {
 			envVar:   "DNSWEAVER_DOCKER_MODE",
 			value:    "kubernetes",
 			errMatch: "DOCKER_MODE",
+		},
+		{
+			name:     "invalid log max size not a number",
+			envVar:   "DNSWEAVER_LOG_MAX_SIZE",
+			value:    "abc",
+			errMatch: "LOG_MAX_SIZE",
+		},
+		{
+			name:     "log max size too small",
+			envVar:   "DNSWEAVER_LOG_MAX_SIZE",
+			value:    "0",
+			errMatch: "LOG_MAX_SIZE",
+		},
+		{
+			name:     "invalid log max backups not a number",
+			envVar:   "DNSWEAVER_LOG_MAX_BACKUPS",
+			value:    "abc",
+			errMatch: "LOG_MAX_BACKUPS",
+		},
+		{
+			name:     "log max backups negative",
+			envVar:   "DNSWEAVER_LOG_MAX_BACKUPS",
+			value:    "-1",
+			errMatch: "LOG_MAX_BACKUPS",
+		},
+		{
+			name:     "invalid log max age not a number",
+			envVar:   "DNSWEAVER_LOG_MAX_AGE",
+			value:    "abc",
+			errMatch: "LOG_MAX_AGE",
+		},
+		{
+			name:     "log max age negative",
+			envVar:   "DNSWEAVER_LOG_MAX_AGE",
+			value:    "-1",
+			errMatch: "LOG_MAX_AGE",
 		},
 		{
 			name:     "invalid TTL not a number",

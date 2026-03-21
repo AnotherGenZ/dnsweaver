@@ -12,6 +12,10 @@ import (
 const (
 	DefaultLogLevel          = "info"
 	DefaultLogFormat         = "json"
+	DefaultLogMaxSize        = 100  // megabytes
+	DefaultLogMaxBackups     = 5    // number of old log files to keep
+	DefaultLogMaxAge         = 30   // days to retain old logs
+	DefaultLogCompress       = true // compress rotated log files
 	DefaultDryRun            = false
 	DefaultCleanupOrphans    = true
 	DefaultCleanupOnStop     = true
@@ -36,8 +40,13 @@ const (
 // These are parsed from DNSWEAVER_* environment variables.
 type GlobalConfig struct {
 	// Logging configuration
-	LogLevel  string // debug, info, warn, error
-	LogFormat string // json, text
+	LogLevel      string // debug, info, warn, error
+	LogFormat     string // json, text
+	LogFile       string // Path to log file; empty means stdout only
+	LogMaxSize    int    // Max size in MB before rotation
+	LogMaxBackups int    // Number of old log files to keep
+	LogMaxAge     int    // Days to retain old log files
+	LogCompress   bool   // Compress rotated log files with gzip
 
 	// Behavior
 	DryRun            bool          // If true, don't make actual DNS changes
@@ -81,6 +90,7 @@ func loadGlobalConfig() (*GlobalConfig, []string) {
 	cfg := &GlobalConfig{
 		LogLevel:   getEnv("DNSWEAVER_LOG_LEVEL"),
 		LogFormat:  getEnv("DNSWEAVER_LOG_FORMAT"),
+		LogFile:    getEnv("DNSWEAVER_LOG_FILE"),
 		DockerHost: getEnv("DNSWEAVER_DOCKER_HOST"),
 		DockerMode: getEnv("DNSWEAVER_DOCKER_MODE"),
 		Source:     DefaultSource, // Deprecated: derived from DNSWEAVER_SOURCES via parseSources()
@@ -132,6 +142,52 @@ func loadGlobalConfig() (*GlobalConfig, []string) {
 		// Valid
 	default:
 		errs = append(errs, fmt.Sprintf("DNSWEAVER_LOG_FORMAT: invalid value %q (must be json or text)", cfg.LogFormat))
+	}
+
+	// Parse log rotation settings (only relevant when LogFile is set)
+	if maxSizeStr := getEnv("DNSWEAVER_LOG_MAX_SIZE"); maxSizeStr != "" {
+		maxSize, err := strconv.Atoi(maxSizeStr)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("DNSWEAVER_LOG_MAX_SIZE: invalid integer %q", maxSizeStr))
+		} else if maxSize < 1 {
+			errs = append(errs, "DNSWEAVER_LOG_MAX_SIZE: must be at least 1 (MB)")
+		} else {
+			cfg.LogMaxSize = maxSize
+		}
+	} else {
+		cfg.LogMaxSize = DefaultLogMaxSize
+	}
+
+	if maxBackupsStr := getEnv("DNSWEAVER_LOG_MAX_BACKUPS"); maxBackupsStr != "" {
+		maxBackups, err := strconv.Atoi(maxBackupsStr)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("DNSWEAVER_LOG_MAX_BACKUPS: invalid integer %q", maxBackupsStr))
+		} else if maxBackups < 0 {
+			errs = append(errs, "DNSWEAVER_LOG_MAX_BACKUPS: must be non-negative")
+		} else {
+			cfg.LogMaxBackups = maxBackups
+		}
+	} else {
+		cfg.LogMaxBackups = DefaultLogMaxBackups
+	}
+
+	if maxAgeStr := getEnv("DNSWEAVER_LOG_MAX_AGE"); maxAgeStr != "" {
+		maxAge, err := strconv.Atoi(maxAgeStr)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("DNSWEAVER_LOG_MAX_AGE: invalid integer %q", maxAgeStr))
+		} else if maxAge < 0 {
+			errs = append(errs, "DNSWEAVER_LOG_MAX_AGE: must be non-negative")
+		} else {
+			cfg.LogMaxAge = maxAge
+		}
+	} else {
+		cfg.LogMaxAge = DefaultLogMaxAge
+	}
+
+	if compressStr := getEnv("DNSWEAVER_LOG_COMPRESS"); compressStr != "" {
+		cfg.LogCompress = parseBool(compressStr, DefaultLogCompress)
+	} else {
+		cfg.LogCompress = DefaultLogCompress
 	}
 
 	// Validate Docker mode
