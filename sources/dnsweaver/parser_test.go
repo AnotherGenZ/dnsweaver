@@ -3,6 +3,7 @@ package dnsweaver
 import (
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -689,5 +690,174 @@ func TestParser_NamedRecord_NoMetadata(t *testing.T) {
 
 	if extractions[0].Metadata != nil {
 		t.Errorf("Metadata = %v, want nil when no metadata labels", extractions[0].Metadata)
+	}
+}
+
+// ---- Tests for dnsweaver.hostnames (plural, comma-separated) ----
+
+func TestParser_HostnamesLabel_Basic(t *testing.T) {
+	parser := NewParser(WithParserLogger(testLogger()))
+
+	labels := map[string]string{
+		"dnsweaver.hostnames": "app1.example.com,app2.example.com,app3.example.com",
+	}
+
+	extractions := parser.ExtractHostnames(labels)
+	if len(extractions) != 3 {
+		t.Fatalf("expected 3 extractions, got %d", len(extractions))
+	}
+
+	want := []string{"app1.example.com", "app2.example.com", "app3.example.com"}
+	for i, w := range want {
+		if extractions[i].Hostname != w {
+			t.Errorf("extraction[%d].Hostname = %q, want %q", i, extractions[i].Hostname, w)
+		}
+	}
+}
+
+func TestParser_HostnamesLabel_WhitespaceTrimmed(t *testing.T) {
+	parser := NewParser(WithParserLogger(testLogger()))
+
+	labels := map[string]string{
+		"dnsweaver.hostnames": " app1.example.com , app2.example.com , app3.example.com ",
+	}
+
+	extractions := parser.ExtractHostnames(labels)
+	if len(extractions) != 3 {
+		t.Fatalf("expected 3 extractions, got %d", len(extractions))
+	}
+
+	for _, e := range extractions {
+		if strings.HasPrefix(e.Hostname, " ") || strings.HasSuffix(e.Hostname, " ") {
+			t.Errorf("hostname %q has untrimmed whitespace", e.Hostname)
+		}
+	}
+}
+
+func TestParser_HostnamesLabel_EmptyValuesSkipped(t *testing.T) {
+	parser := NewParser(WithParserLogger(testLogger()))
+
+	labels := map[string]string{
+		"dnsweaver.hostnames": "app1.example.com,,app2.example.com, ,",
+	}
+
+	extractions := parser.ExtractHostnames(labels)
+	if len(extractions) != 2 {
+		t.Fatalf("expected 2 extractions (empty values skipped), got %d", len(extractions))
+	}
+
+	if extractions[0].Hostname != "app1.example.com" {
+		t.Errorf("extraction[0].Hostname = %q, want %q", extractions[0].Hostname, "app1.example.com")
+	}
+	if extractions[1].Hostname != "app2.example.com" {
+		t.Errorf("extraction[1].Hostname = %q, want %q", extractions[1].Hostname, "app2.example.com")
+	}
+}
+
+func TestParser_HostnamesLabel_SingleHostname(t *testing.T) {
+	parser := NewParser(WithParserLogger(testLogger()))
+
+	labels := map[string]string{
+		"dnsweaver.hostnames": "only.example.com",
+	}
+
+	extractions := parser.ExtractHostnames(labels)
+	if len(extractions) != 1 {
+		t.Fatalf("expected 1 extraction, got %d", len(extractions))
+	}
+	if extractions[0].Hostname != "only.example.com" {
+		t.Errorf("Hostname = %q, want %q", extractions[0].Hostname, "only.example.com")
+	}
+}
+
+func TestParser_HostnamesLabel_WithTTL(t *testing.T) {
+	parser := NewParser(WithParserLogger(testLogger()))
+
+	labels := map[string]string{
+		"dnsweaver.hostnames": "app1.example.com,app2.example.com",
+		"dnsweaver.ttl":       "300",
+	}
+
+	extractions := parser.ExtractHostnames(labels)
+	if len(extractions) != 2 {
+		t.Fatalf("expected 2 extractions, got %d", len(extractions))
+	}
+
+	for i, e := range extractions {
+		if e.TTL != 300 {
+			t.Errorf("extraction[%d].TTL = %d, want 300", i, e.TTL)
+		}
+	}
+}
+
+func TestParser_HostnamesLabel_WithProxied(t *testing.T) {
+	parser := NewParser(WithParserLogger(testLogger()))
+
+	labels := map[string]string{
+		"dnsweaver.hostnames": "app1.example.com,app2.example.com",
+		"dnsweaver.proxied":   "true",
+	}
+
+	extractions := parser.ExtractHostnames(labels)
+	if len(extractions) != 2 {
+		t.Fatalf("expected 2 extractions, got %d", len(extractions))
+	}
+
+	for i, e := range extractions {
+		if e.Metadata == nil || e.Metadata["proxied"] != "true" {
+			t.Errorf("extraction[%d].Metadata[proxied] = %q, want %q", i, e.Metadata["proxied"], "true")
+		}
+	}
+}
+
+func TestParser_HostnamesLabel_CombinedWithSingular(t *testing.T) {
+	parser := NewParser(WithParserLogger(testLogger()))
+
+	labels := map[string]string{
+		"dnsweaver.hostname":  "single.example.com",
+		"dnsweaver.hostnames": "multi1.example.com,multi2.example.com",
+	}
+
+	extractions := parser.ExtractHostnames(labels)
+	if len(extractions) != 3 {
+		t.Fatalf("expected 3 extractions (1 singular + 2 plural), got %d", len(extractions))
+	}
+
+	// Singular is processed first
+	if extractions[0].Hostname != "single.example.com" {
+		t.Errorf("extraction[0].Hostname = %q, want %q", extractions[0].Hostname, "single.example.com")
+	}
+	if extractions[1].Hostname != "multi1.example.com" {
+		t.Errorf("extraction[1].Hostname = %q, want %q", extractions[1].Hostname, "multi1.example.com")
+	}
+	if extractions[2].Hostname != "multi2.example.com" {
+		t.Errorf("extraction[2].Hostname = %q, want %q", extractions[2].Hostname, "multi2.example.com")
+	}
+}
+
+func TestParser_HostnamesLabel_DisabledGlobally(t *testing.T) {
+	parser := NewParser(WithParserLogger(testLogger()))
+
+	labels := map[string]string{
+		"dnsweaver.hostnames": "app1.example.com,app2.example.com",
+		"dnsweaver.enabled":   "false",
+	}
+
+	extractions := parser.ExtractHostnames(labels)
+	if len(extractions) != 0 {
+		t.Errorf("expected 0 extractions when disabled, got %d", len(extractions))
+	}
+}
+
+func TestParser_HostnamesLabel_AllEmpty(t *testing.T) {
+	parser := NewParser(WithParserLogger(testLogger()))
+
+	labels := map[string]string{
+		"dnsweaver.hostnames": ",,, ,",
+	}
+
+	extractions := parser.ExtractHostnames(labels)
+	if len(extractions) != 0 {
+		t.Errorf("expected 0 extractions for all-empty list, got %d", len(extractions))
 	}
 }
