@@ -53,6 +53,7 @@ func main() {
 	// Parse command-line flags
 	configPath := flag.String("config", "", "Path to YAML configuration file")
 	showVersion := flag.Bool("version", false, "Show version and exit")
+	validateOnly := flag.Bool("validate", false, "Validate configuration and exit")
 	flag.Parse()
 
 	if *showVersion {
@@ -69,10 +70,76 @@ func main() {
 		}
 	}
 
+	// Also check DNSWEAVER_VALIDATE_ONLY env var for container-based validation
+	if parseBoolEnv("DNSWEAVER_VALIDATE_ONLY") {
+		validateOnly = boolPtr(true)
+	}
+
+	if *validateOnly {
+		if err := runValidate(); err != nil {
+			fmt.Fprintf(os.Stderr, "Configuration validation failed:\n%s\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Configuration is valid.")
+		os.Exit(0)
+	}
+
 	if err := run(); err != nil {
 		slog.Error("fatal error", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+}
+
+// runValidate loads and validates the configuration, printing a summary.
+// Returns nil if configuration is valid, or an error with details.
+func runValidate() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	// Print configuration summary
+	fmt.Println("Configuration Summary:")
+	fmt.Printf("  Platform:           %s\n", cfg.Platform())
+	fmt.Printf("  Log Level:          %s\n", cfg.LogLevel())
+	fmt.Printf("  Log Format:         %s\n", cfg.LogFormat())
+	if cfg.LogFile() != "" {
+		fmt.Printf("  Log File:           %s\n", cfg.LogFile())
+	}
+	fmt.Printf("  Dry Run:            %v\n", cfg.DryRun())
+	fmt.Printf("  Default TTL:        %d\n", cfg.Global.DefaultTTL)
+	fmt.Printf("  Reconcile Interval: %s\n", cfg.ReconcileInterval())
+	fmt.Printf("  Shutdown Timeout:   %s\n", cfg.ShutdownTimeout())
+	fmt.Printf("  Health Port:        %d\n", cfg.HealthPort())
+	if cfg.InstanceID() != "" {
+		fmt.Printf("  Instance ID:        %s\n", cfg.InstanceID())
+	}
+	fmt.Printf("  Providers:          %d configured\n", len(cfg.ProviderNames))
+	for _, name := range cfg.ProviderNames {
+		inst, ok := cfg.GetProviderInstance(name)
+		if ok {
+			fmt.Printf("    - %s (type: %s, record: %s, domains: %d)\n",
+				name, inst.TypeName, inst.RecordType, len(inst.Domains)+len(inst.DomainsRegex))
+		}
+	}
+
+	return nil
+}
+
+// parseBoolEnv reads an environment variable and returns true if it's a truthy value.
+func parseBoolEnv(key string) bool {
+	v := os.Getenv(key)
+	switch strings.ToLower(v) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
+// boolPtr returns a pointer to a bool value.
+func boolPtr(b bool) *bool {
+	return &b
 }
 
 func run() error {
@@ -99,6 +166,22 @@ func run() error {
 		slog.String("instance_id", cfg.InstanceID()),
 		slog.String("log_file", cfg.LogFile()),
 	)
+
+	// Log validated configuration summary
+	for _, name := range cfg.ProviderNames {
+		inst, ok := cfg.GetProviderInstance(name)
+		if ok {
+			domainCount := len(inst.Domains) + len(inst.DomainsRegex)
+			logger.Info("provider configured",
+				slog.String("name", name),
+				slog.String("type", inst.TypeName),
+				slog.String("record_type", string(inst.RecordType)),
+				slog.String("mode", string(inst.Mode)),
+				slog.Int("domains", domainCount),
+				slog.Int("ttl", inst.TTL),
+			)
+		}
+	}
 
 	// Create context with cancellation for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

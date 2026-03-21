@@ -48,7 +48,7 @@ type Config struct {
 // Per DECISIONS.md: Fail fast with clear error messages. Do not start
 // with partial configuration.
 func Load() (*Config, error) {
-	var allErrors []string
+	var allErrors []*ConfigError
 
 	// Check for config file
 	configPath := GetConfigFilePath()
@@ -59,7 +59,7 @@ func Load() (*Config, error) {
 
 	if configPath != "" {
 		// Load from file first
-		var fileErrs []string
+		var fileErrs []*ConfigError
 		fileGlobal, fileProviders, fileSources, fileErrs = loadFromFile(configPath)
 		allErrors = append(allErrors, fileErrs...)
 
@@ -71,7 +71,7 @@ func Load() (*Config, error) {
 
 	// Merge global config with env var overrides
 	var global *GlobalConfig
-	var globalErrs []string
+	var globalErrs []*ConfigError
 	if fileGlobal != nil {
 		global, globalErrs = mergeGlobalConfig(fileGlobal)
 	} else {
@@ -102,7 +102,12 @@ func Load() (*Config, error) {
 			instances = append(instances, fp)
 		}
 	} else {
-		allErrors = append(allErrors, "no providers configured: set DNSWEAVER_INSTANCES or configure providers in config file")
+		allErrors = append(allErrors, configErrFull(
+			"providers",
+			"no providers configured",
+			"Define providers via DNSWEAVER_INSTANCES env var or in the config file",
+			"DNSWEAVER_INSTANCES=my-dns",
+		))
 	}
 
 	// Determine sources: env vars take precedence

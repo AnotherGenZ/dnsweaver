@@ -318,7 +318,7 @@ func TestLoadInstanceConfig_MissingRequired(t *testing.T) {
 
 			found := false
 			for _, err := range errs {
-				if containsSubstring(err, tc.errMatch) {
+				if containsSubstring(err.Error(), tc.errMatch) {
 					found = true
 					break
 				}
@@ -407,7 +407,7 @@ func TestLoadInstanceConfig_InvalidValues(t *testing.T) {
 
 			found := false
 			for _, err := range errs {
-				if containsSubstring(err, tc.errMatch) {
+				if containsSubstring(err.Error(), tc.errMatch) {
 					found = true
 					break
 				}
@@ -531,7 +531,7 @@ func TestLoadInstanceConfig_OperationalMode(t *testing.T) {
 				}
 				found := false
 				for _, err := range errs {
-					if strings.Contains(err, tt.errContains) {
+					if strings.Contains(err.Error(), tt.errContains) {
 						found = true
 						break
 					}
