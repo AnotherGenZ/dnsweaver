@@ -32,18 +32,28 @@ labels:
   - "dnsweaver.hostname=myapp.example.com"
 ```
 
+### Multiple Hostnames (Comma-Separated)
+
+For multiple hostnames without the verbosity of named records:
+
+```yaml
+labels:
+  - "dnsweaver.hostnames=app1.example.com,app2.example.com,app3.example.com"
+```
+
+Whitespace around commas is trimmed and empty values are skipped. This can be combined with `dnsweaver.ttl` and `dnsweaver.proxied`, which apply to all hostnames in the list.
+
+Both `dnsweaver.hostname` (singular) and `dnsweaver.hostnames` (plural) can be used together — all hostnames are processed.
+
 ### Multiple Hostnames (Named Records)
 
-For multiple hostnames, use the named records format:
+For multiple hostnames with per-record options, use the named records format:
 
 ```yaml
 labels:
   - "dnsweaver.records.primary.hostname=app1.example.com"
   - "dnsweaver.records.secondary.hostname=app2.example.com"
 ```
-
-!!! note "Coming Soon"
-    A simpler `dnsweaver.hostnames` label for comma-separated lists is planned.
 
 ### With Options
 
@@ -68,6 +78,7 @@ labels:
 | Label | Default | Description |
 |-------|---------|-------------|
 | `dnsweaver.hostname` | - | Single hostname to create |
+| `dnsweaver.hostnames` | - | Comma-separated list of hostnames |
 | `dnsweaver.enabled` | `true` | Enable/disable processing |
 | `dnsweaver.ttl` | - | Override TTL for this container |
 
