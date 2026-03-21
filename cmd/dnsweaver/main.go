@@ -151,13 +151,7 @@ func run() error {
 		return fmt.Errorf("initializing providers: %w", err)
 	}
 
-	// Start provider manager background retry loop
-	if err := providerManager.Start(ctx); err != nil {
-		return fmt.Errorf("starting provider manager: %w", err)
-	}
-	defer providerManager.Stop()
-
-	// Log provider status summary
+	// Log provider status summary (manager background retry starts later, after health server)
 	if providerManager.PendingCount() > 0 {
 		logger.Warn("some providers failed to initialize and will be retried",
 			slog.Int("ready", providerManager.ReadyCount()),
@@ -338,6 +332,23 @@ func run() error {
 		}
 		return false, ""
 	})
+
+	// Register recovered-provider callback so health checkers are added
+	// when pending providers come online (#127). Must be set before Start().
+	providerManager.SetOnProviderReady(func(name string, inst *provider.ProviderInstance) {
+		healthServer.RegisterChecker("provider:"+name, func(ctx context.Context) error {
+			return inst.Ping(ctx)
+		})
+		logger.Info("registered health checker for recovered provider",
+			slog.String("provider", name),
+		)
+	})
+
+	// Start provider manager background retry loop (after health callback is wired)
+	if err := providerManager.Start(ctx); err != nil {
+		return fmt.Errorf("starting provider manager: %w", err)
+	}
+	defer providerManager.Stop()
 
 	if err := healthServer.Start(); err != nil {
 		return fmt.Errorf("starting health server: %w", err)

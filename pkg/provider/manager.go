@@ -24,6 +24,12 @@ type ManagerConfig struct {
 	// RetryBackoffMultiplier is the multiplier for exponential backoff.
 	// Default: 2.0.
 	RetryBackoffMultiplier float64
+
+	// OnProviderReady is called when a previously-pending provider recovers.
+	// Use this to register health checkers or perform other post-recovery setup.
+	// Called outside the manager's lock — safe to call into other components.
+	// May be nil.
+	OnProviderReady func(name string, inst *ProviderInstance)
 }
 
 // DefaultManagerConfig returns a ManagerConfig with sensible defaults.
@@ -95,6 +101,12 @@ func NewManager(registry *Registry, opts ...ManagerOption) *Manager {
 	}
 
 	return m
+}
+
+// SetOnProviderReady sets the callback invoked when a pending provider recovers.
+// Must be called before Start().
+func (m *Manager) SetOnProviderReady(fn func(name string, inst *ProviderInstance)) {
+	m.config.OnProviderReady = fn
 }
 
 // InitializeProvider attempts to create a provider instance and verify connectivity.
@@ -276,7 +288,6 @@ func (m *Manager) retryProvider(ctx context.Context, pending *PendingProvider) {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	if err == nil {
 		// Success! Remove from pending list
@@ -292,8 +303,17 @@ func (m *Manager) retryProvider(ctx context.Context, pending *PendingProvider) {
 			slog.String("type", cfg.TypeName),
 			slog.Int("attempts", pending.AttemptCount+1),
 		)
+		m.mu.Unlock()
+
+		// Notify outside the lock to prevent deadlocks (#127)
+		if m.config.OnProviderReady != nil {
+			if inst, ok := m.registry.Get(cfg.Name); ok {
+				m.config.OnProviderReady(cfg.Name, inst)
+			}
+		}
 		return
 	}
+	defer m.mu.Unlock()
 
 	// Still failing - update retry state with exponential backoff
 	pending.LastError = err
