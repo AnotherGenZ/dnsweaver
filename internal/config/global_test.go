@@ -311,7 +311,7 @@ func TestLoadGlobalConfig_InvalidValues(t *testing.T) {
 
 			found := false
 			for _, err := range errs {
-				if contains(err, tc.errMatch) {
+				if contains(err.Error(), tc.errMatch) {
 					found = true
 					break
 				}

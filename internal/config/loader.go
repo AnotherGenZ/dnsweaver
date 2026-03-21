@@ -14,19 +14,19 @@ import (
 
 // loadFromFile loads configuration from a YAML file and converts it to runtime types.
 // Returns nil values if no file is configured or file doesn't exist.
-func loadFromFile(path string) (*GlobalConfig, []*ProviderInstanceConfig, *SourceConfig, []string) {
+func loadFromFile(path string) (*GlobalConfig, []*ProviderInstanceConfig, *SourceConfig, []*ConfigError) {
 	if path == "" {
 		return nil, nil, nil, nil
 	}
 
 	fileCfg, err := LoadFile(path)
 	if err != nil {
-		return nil, nil, nil, []string{"config file: " + err.Error()}
+		return nil, nil, nil, []*ConfigError{configErr("config_file", err.Error())}
 	}
 
 	slog.Info("loaded configuration from file", slog.String("path", path))
 
-	var errs []string
+	var errs []*ConfigError
 
 	// Convert to runtime types
 	global := fileCfg.ToGlobalConfig()
@@ -46,8 +46,8 @@ func loadFromFile(path string) (*GlobalConfig, []*ProviderInstanceConfig, *Sourc
 }
 
 // convertFileProvider converts a FileProviderConfig to ProviderInstanceConfig.
-func convertFileProvider(fp FileProviderConfig, defaultTTL int) (*ProviderInstanceConfig, []string) {
-	var errs []string
+func convertFileProvider(fp FileProviderConfig, defaultTTL int) (*ProviderInstanceConfig, []*ConfigError) {
+	var errs []*ConfigError
 
 	cfg := &ProviderInstanceConfig{
 		Name:                fp.Name,
@@ -61,12 +61,12 @@ func convertFileProvider(fp FileProviderConfig, defaultTTL int) (*ProviderInstan
 
 	// Validate name
 	if cfg.Name == "" {
-		errs = append(errs, "provider: name is required")
+		errs = append(errs, configErr("providers[].name", "name is required for each provider"))
 	}
 
 	// Validate type
 	if cfg.TypeName == "" {
-		errs = append(errs, "provider "+cfg.Name+": type is required")
+		errs = append(errs, configErrFull("providers["+cfg.Name+"].type", "type is required", fmt.Sprintf("Provider %q needs a type", cfg.Name), "type: technitium"))
 	}
 
 	// Record type
@@ -79,13 +79,13 @@ func convertFileProvider(fp FileProviderConfig, defaultTTL int) (*ProviderInstan
 	case "CNAME":
 		cfg.RecordType = provider.RecordTypeCNAME
 	default:
-		errs = append(errs, "provider "+cfg.Name+": invalid record_type "+fp.RecordType)
+		errs = append(errs, configErrFull("providers["+cfg.Name+"].record_type", fmt.Sprintf("invalid value %q", fp.RecordType), "Must be one of: A, AAAA, CNAME", "record_type: A"))
 	}
 
 	// Target
 	cfg.Target = fp.Target
 	if cfg.Target == "" {
-		errs = append(errs, "provider "+cfg.Name+": target is required")
+		errs = append(errs, configErrFull("providers["+cfg.Name+"].target", "target is required", fmt.Sprintf("Provider %q needs a target IP or hostname", cfg.Name), "target: 10.0.0.1"))
 	}
 
 	// TTL
@@ -99,7 +99,7 @@ func convertFileProvider(fp FileProviderConfig, defaultTTL int) (*ProviderInstan
 	if fp.Mode != "" {
 		mode, err := provider.ParseOperationalMode(fp.Mode)
 		if err != nil {
-			errs = append(errs, "provider "+cfg.Name+": "+err.Error())
+			errs = append(errs, configErr("providers["+cfg.Name+"].mode", err.Error()))
 		} else {
 			cfg.Mode = mode
 		}
@@ -109,13 +109,13 @@ func convertFileProvider(fp FileProviderConfig, defaultTTL int) (*ProviderInstan
 
 	// Domains validation
 	if len(fp.Domains) == 0 && len(fp.DomainsRegex) == 0 {
-		errs = append(errs, "provider "+cfg.Name+": domains or domains_regex is required")
+		errs = append(errs, configErrFull("providers["+cfg.Name+"].domains", "domains or domains_regex is required", "Specify which domains this provider should manage", "domains: [\"*.example.com\"]"))
 	}
 	if len(fp.Domains) > 0 && len(fp.DomainsRegex) > 0 {
-		errs = append(errs, "provider "+cfg.Name+": cannot set both domains and domains_regex")
+		errs = append(errs, configErrHelp("providers["+cfg.Name+"]", "cannot set both domains and domains_regex", "Use either glob patterns or regex patterns, not both"))
 	}
 	if len(fp.ExcludeDomains) > 0 && len(fp.ExcludeDomainsRegex) > 0 {
-		errs = append(errs, "provider "+cfg.Name+": cannot set both exclude_domains and exclude_domains_regex")
+		errs = append(errs, configErrHelp("providers["+cfg.Name+"]", "cannot set both exclude_domains and exclude_domains_regex", "Use either glob patterns or regex patterns for exclusions, not both"))
 	}
 
 	// Provider-specific config
@@ -169,13 +169,13 @@ func convertFileSources(fileSources []FileSourceConfig) *SourceConfig {
 
 // mergeGlobalConfig merges environment variable overrides into a GlobalConfig.
 // Environment variables always take precedence over file config.
-func mergeGlobalConfig(base *GlobalConfig) (*GlobalConfig, []string) {
+func mergeGlobalConfig(base *GlobalConfig) (*GlobalConfig, []*ConfigError) {
 	if base == nil {
 		// No file config, load everything from env vars
 		return loadGlobalConfig()
 	}
 
-	var errs []string
+	var errs []*ConfigError
 
 	// Start with file values, override with env vars if set
 	cfg := *base // Copy the struct
@@ -187,7 +187,7 @@ func mergeGlobalConfig(base *GlobalConfig) (*GlobalConfig, []string) {
 		case "debug", "info", "warn", "error":
 			// Valid
 		default:
-			errs = append(errs, "DNSWEAVER_LOG_LEVEL: invalid value (must be debug, info, warn, or error)")
+			errs = append(errs, configErrFull("DNSWEAVER_LOG_LEVEL", fmt.Sprintf("invalid value %q", v), "Must be one of: debug, info, warn, error", "DNSWEAVER_LOG_LEVEL=info"))
 		}
 	}
 
@@ -197,7 +197,7 @@ func mergeGlobalConfig(base *GlobalConfig) (*GlobalConfig, []string) {
 		case "json", "text":
 			// Valid
 		default:
-			errs = append(errs, "DNSWEAVER_LOG_FORMAT: invalid value (must be json or text)")
+			errs = append(errs, configErrFull("DNSWEAVER_LOG_FORMAT", fmt.Sprintf("invalid value %q", v), "Must be one of: json, text", "DNSWEAVER_LOG_FORMAT=json"))
 		}
 	}
 
@@ -211,7 +211,7 @@ func mergeGlobalConfig(base *GlobalConfig) (*GlobalConfig, []string) {
 		case "auto", "swarm", "standalone":
 			// Valid
 		default:
-			errs = append(errs, "DNSWEAVER_DOCKER_MODE: invalid value (must be auto, swarm, or standalone)")
+			errs = append(errs, configErrFull("DNSWEAVER_DOCKER_MODE", fmt.Sprintf("invalid value %q", v), "Must be one of: auto, swarm, standalone", "DNSWEAVER_DOCKER_MODE=auto"))
 		}
 	}
 
@@ -239,7 +239,7 @@ func mergeGlobalConfig(base *GlobalConfig) (*GlobalConfig, []string) {
 		if ttl, err := parseIntEnv(v); err == nil && ttl >= 1 {
 			cfg.DefaultTTL = ttl
 		} else {
-			errs = append(errs, "DNSWEAVER_DEFAULT_TTL: invalid or negative integer")
+			errs = append(errs, configErrFull("DNSWEAVER_DEFAULT_TTL", fmt.Sprintf("invalid value %q", v), "Must be a positive integer (seconds)", "DNSWEAVER_DEFAULT_TTL=300"))
 		}
 	}
 
@@ -247,7 +247,7 @@ func mergeGlobalConfig(base *GlobalConfig) (*GlobalConfig, []string) {
 		if interval, err := time.ParseDuration(v); err == nil && interval >= time.Second {
 			cfg.ReconcileInterval = interval
 		} else {
-			errs = append(errs, "DNSWEAVER_RECONCILE_INTERVAL: invalid duration")
+			errs = append(errs, configErrFull("DNSWEAVER_RECONCILE_INTERVAL", fmt.Sprintf("invalid value %q", v), "Use Go duration format, minimum 1s", "DNSWEAVER_RECONCILE_INTERVAL=60s"))
 		}
 	}
 
@@ -255,7 +255,7 @@ func mergeGlobalConfig(base *GlobalConfig) (*GlobalConfig, []string) {
 		if port, err := parseIntEnv(v); err == nil && port >= 1 && port <= 65535 {
 			cfg.HealthPort = port
 		} else {
-			errs = append(errs, "DNSWEAVER_HEALTH_PORT: invalid port number")
+			errs = append(errs, configErrFull("DNSWEAVER_HEALTH_PORT", fmt.Sprintf("invalid value %q", v), "Must be a valid TCP port (1-65535)", "DNSWEAVER_HEALTH_PORT=8080"))
 		}
 	}
 
@@ -266,7 +266,7 @@ func mergeGlobalConfig(base *GlobalConfig) (*GlobalConfig, []string) {
 	// Override instance ID if set in env
 	if v := getEnv("DNSWEAVER_INSTANCE_ID"); v != "" {
 		if err := validateInstanceID(v); err != nil {
-			errs = append(errs, fmt.Sprintf("DNSWEAVER_INSTANCE_ID: %s", err.Error()))
+			errs = append(errs, configErrFull("DNSWEAVER_INSTANCE_ID", err.Error(), "Must be 1-63 alphanumeric characters with hyphens, underscores, or dots", "DNSWEAVER_INSTANCE_ID=prod-01"))
 		} else {
 			cfg.InstanceID = v
 		}
@@ -279,7 +279,7 @@ func mergeGlobalConfig(base *GlobalConfig) (*GlobalConfig, []string) {
 		case "docker", "kubernetes", "both":
 			// Valid
 		default:
-			errs = append(errs, "DNSWEAVER_PLATFORM: invalid value (must be docker, kubernetes, or both)")
+			errs = append(errs, configErrFull("DNSWEAVER_PLATFORM", fmt.Sprintf("invalid value %q", v), "Must be one of: docker, kubernetes, both", "DNSWEAVER_PLATFORM=docker"))
 		}
 	}
 
@@ -319,9 +319,7 @@ func parseIntEnv(s string) (int, error) {
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(s))
 	if err != nil {
-		return 0, errInvalidInt
+		return 0, fmt.Errorf("invalid integer: %w", err)
 	}
 	return n, nil
 }
-
-var errInvalidInt = &ValidationError{Errors: []string{"invalid integer"}}

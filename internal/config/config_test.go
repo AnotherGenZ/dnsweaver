@@ -219,7 +219,7 @@ func TestLoad_MissingInstances(t *testing.T) {
 
 	found := false
 	for _, e := range validationErr.Errors {
-		if containsSubstring(e, "DNSWEAVER_INSTANCES") {
+		if containsSubstring(e.Error(), "DNSWEAVER_INSTANCES") || containsSubstring(e.Error(), "providers") {
 			found = true
 			break
 		}
