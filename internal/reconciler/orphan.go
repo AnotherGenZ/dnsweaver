@@ -59,9 +59,13 @@ func (r *Reconciler) cleanupOrphans(ctx context.Context, currentHostnames map[st
 				slog.String("hostname", hostname),
 			)
 
-			// Process each matching provider with its own mode
-			matchingProviders := r.providers.MatchingProviders(hostname)
-			for _, inst := range matchingProviders {
+			// Determine which providers to clean up from.
+			// Prefer the stored provider mapping from the previous reconciliation (#51):
+			// this correctly handles hostname changes where the old hostname no longer
+			// matches any current provider pattern. Fall back to domain-based matching
+			// for hostnames recovered from ownership records (no previous mapping exists).
+			providers := r.getOrphanProviders(hostname)
+			for _, inst := range providers {
 				deleteActions := r.deleteOrphanForProvider(ctx, hostname, inst, cache)
 				actions = append(actions, deleteActions...)
 			}
@@ -69,6 +73,38 @@ func (r *Reconciler) cleanupOrphans(ctx context.Context, currentHostnames map[st
 	}
 
 	return actions
+}
+
+// getOrphanProviders returns the provider instances to clean up an orphaned hostname from.
+// Uses the stored provider mapping from the previous reconciliation when available (#51),
+// falling back to domain-based matching for hostnames without historical mapping
+// (e.g., recovered from ownership records on startup).
+func (r *Reconciler) getOrphanProviders(hostname string) []*provider.ProviderInstance {
+	r.mu.RLock()
+	previousProviders := r.hostnameProviders[hostname]
+	r.mu.RUnlock()
+
+	if len(previousProviders) > 0 {
+		// Use the exact providers this hostname was routed to last time.
+		// This handles the case where provider patterns changed since then.
+		var instances []*provider.ProviderInstance
+		for _, name := range previousProviders {
+			if inst, ok := r.providers.Get(name); ok {
+				instances = append(instances, inst)
+			} else {
+				r.logger.Warn("previous provider no longer exists, skipping orphan cleanup",
+					slog.String("hostname", hostname),
+					slog.String("provider", name),
+				)
+			}
+		}
+		return instances
+	}
+
+	// No historical mapping — fall back to domain-based matching.
+	// This path is used for hostnames recovered from ownership records
+	// on startup (before the first reconciliation stores a mapping).
+	return r.providers.MatchingProviders(hostname)
 }
 
 // deleteOrphanForProvider handles orphan deletion for a single provider instance,
