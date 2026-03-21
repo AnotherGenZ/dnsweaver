@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"gitlab.bluewillows.net/root/dnsweaver/internal/metrics"
 )
 
 // DiscoveryCallback is called when file discovery finds hostnames.
@@ -127,6 +129,7 @@ func (w *FileWatcher) pollAll(ctx context.Context) {
 	}
 
 	w.logger.Debug("polling discoverable sources", "count", len(sources))
+	metrics.FileWatcherPolls.Inc()
 
 	for _, src := range sources {
 		name := src.Name()
@@ -146,6 +149,7 @@ func (w *FileWatcher) pollAll(ctx context.Context) {
 				"source", name,
 				"count", len(hostnames),
 			)
+			metrics.FileWatcherChangesDetected.Inc()
 			w.updateLastSeen(name, hostnames)
 			w.callback(name, hostnames)
 		}
