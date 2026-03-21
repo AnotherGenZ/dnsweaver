@@ -63,6 +63,11 @@ type Config struct {
 func (c *Config) Validate() error {
 	var errs []string
 
+	// Default empty mode to API (the most common configuration)
+	if c.Mode == "" {
+		c.Mode = ModeAPI
+	}
+
 	switch c.Mode {
 	case ModeAPI:
 		if c.URL == "" {
@@ -88,8 +93,6 @@ func (c *Config) Validate() error {
 		if c.ReloadCommand == "" {
 			errs = append(errs, "RELOAD_COMMAND is required for file mode")
 		}
-	case "":
-		errs = append(errs, "MODE is required (api or file)")
 	default:
 		errs = append(errs, fmt.Sprintf("invalid MODE %q: must be 'api' or 'file'", c.Mode))
 	}

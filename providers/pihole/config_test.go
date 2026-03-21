@@ -255,3 +255,68 @@ func TestConfig_ConfigFilePath(t *testing.T) {
 		t.Errorf("ConfigFilePath() = %v, want %v", got, want)
 	}
 }
+
+func TestValidate_EmptyModeDefaultsToAPI(t *testing.T) {
+	// When Mode is empty and API fields are provided, Validate should
+	// default to API mode instead of returning an error (#98).
+	cfg := &Config{
+		Mode:     "", // empty — should default to ModeAPI
+		URL:      "http://pihole.local",
+		Password: "secret",
+		TTL:      DefaultTTL,
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() should not error with empty mode and valid API fields: %v", err)
+	}
+
+	if cfg.Mode != ModeAPI {
+		t.Errorf("Validate() should set Mode to ModeAPI, got %q", cfg.Mode)
+	}
+}
+
+func TestValidate_InvalidModeStillErrors(t *testing.T) {
+	cfg := &Config{
+		Mode:     "invalid",
+		URL:      "http://pihole.local",
+		Password: "secret",
+		TTL:      DefaultTTL,
+	}
+
+	if err := cfg.Validate(); err == nil {
+		t.Error("Validate() should error for invalid mode")
+	}
+}
+
+func TestLoadConfig_DefaultModeWhenNotSet(t *testing.T) {
+	// When neither ACCESS_MODE nor MODE is set, should default to api (#98)
+	defer func() {
+		os.Unsetenv("DNSWEAVER_DEFTEST_URL")
+		os.Unsetenv("DNSWEAVER_DEFTEST_PASSWORD")
+	}()
+
+	os.Setenv("DNSWEAVER_DEFTEST_URL", "http://pihole.local")
+	os.Setenv("DNSWEAVER_DEFTEST_PASSWORD", "secret")
+
+	cfg, err := LoadConfig("deftest")
+	if err != nil {
+		t.Fatalf("LoadConfig() unexpected error: %v", err)
+	}
+	if cfg.Mode != ModeAPI {
+		t.Errorf("LoadConfig() Mode = %q, want %q", cfg.Mode, ModeAPI)
+	}
+}
+
+func TestLoadConfigFromMap_DefaultModeWhenNotSet(t *testing.T) {
+	// When no mode key is present, should default to api (#98)
+	cfg, err := LoadConfigFromMap("test", map[string]string{
+		"url":      "http://pihole.local",
+		"password": "secret",
+	})
+	if err != nil {
+		t.Fatalf("LoadConfigFromMap() unexpected error: %v", err)
+	}
+	if cfg.Mode != ModeAPI {
+		t.Errorf("LoadConfigFromMap() Mode = %q, want %q", cfg.Mode, ModeAPI)
+	}
+}

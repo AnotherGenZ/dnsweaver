@@ -63,12 +63,12 @@ func TestConfig_Validate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "missing mode",
+			name: "missing mode defaults to api",
 			config: Config{
 				URL:      "http://pihole.local",
 				Password: "test",
 			},
-			wantErr: true,
+			wantErr: false,
 		},
 		{
 			name: "invalid mode",
