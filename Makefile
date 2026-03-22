@@ -3,7 +3,7 @@
 # ===================================
 # Declarative DNS synchronization from service discovery sources
 
-.PHONY: all build clean test lint docker-build docker-run help dev
+.PHONY: all build clean test test-integration lint docker-build docker-run help dev
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -108,6 +108,10 @@ test-cover:
 ## test-short: Run short tests only
 test-short:
 	$(GOTEST) -v -short ./...
+
+## test-integration: Run integration tests (requires env vars, see pkg/dnsupdate/integration_test.go)
+test-integration:
+	$(GOTEST) -v -tags=integration -run TestIntegration ./...
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Security
