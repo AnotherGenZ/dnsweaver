@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"regexp"
 	"strings"
@@ -23,6 +24,10 @@ type FileConfig struct {
 	// Platform selection: docker, kubernetes, or both (default: docker)
 	Platform string `yaml:"platform,omitempty"`
 
+	// Multi-instance coordination (preferred location since v0.10.0)
+	// Also accepted under reconciler.instance_id for backward compatibility.
+	InstanceID string `yaml:"instance_id,omitempty"`
+
 	// Docker connection settings
 	Docker *FileDockerConfig `yaml:"docker,omitempty"`
 
@@ -41,13 +46,24 @@ type FileConfig struct {
 
 // FileLoggingConfig holds logging settings.
 type FileLoggingConfig struct {
-	Level  string `yaml:"level,omitempty"`  // debug, info, warn, error
-	Format string `yaml:"format,omitempty"` // json, text
+	Level    string              `yaml:"level,omitempty"`    // debug, info, warn, error
+	Format   string              `yaml:"format,omitempty"`   // json, text
+	File     string              `yaml:"file,omitempty"`     // Path to log file; empty = stdout
+	Rotation *FileRotationConfig `yaml:"rotation,omitempty"` // Log rotation settings
+}
+
+// FileRotationConfig holds log file rotation settings.
+type FileRotationConfig struct {
+	MaxSize    *int  `yaml:"max_size,omitempty"`    // Max size in MB before rotation
+	MaxBackups *int  `yaml:"max_backups,omitempty"` // Number of old log files to keep
+	MaxAge     *int  `yaml:"max_age,omitempty"`     // Days to retain old log files
+	Compress   *bool `yaml:"compress,omitempty"`    // Compress rotated log files
 }
 
 // FileReconcilerConfig holds reconciliation settings.
 type FileReconcilerConfig struct {
 	Interval          string `yaml:"interval,omitempty"`           // Go duration format (e.g., "60s", "5m")
+	ShutdownTimeout   string `yaml:"shutdown_timeout,omitempty"`   // Max time to wait for in-flight ops during shutdown
 	DryRun            *bool  `yaml:"dry_run,omitempty"`            // Pointer to distinguish unset from false
 	CleanupOrphans    *bool  `yaml:"cleanup_orphans,omitempty"`    // Delete records for removed workloads
 	CleanupOnStop     *bool  `yaml:"cleanup_on_stop,omitempty"`    // Delete records when containers stop
@@ -138,13 +154,17 @@ func (c *FileConfig) interpolateEnvVars() {
 	if c.Logging != nil {
 		c.Logging.Level = InterpolateEnvVars(c.Logging.Level)
 		c.Logging.Format = InterpolateEnvVars(c.Logging.Format)
+		c.Logging.File = InterpolateEnvVars(c.Logging.File)
 	}
 
 	if c.Reconciler != nil {
 		c.Reconciler.Interval = InterpolateEnvVars(c.Reconciler.Interval)
+		c.Reconciler.ShutdownTimeout = InterpolateEnvVars(c.Reconciler.ShutdownTimeout)
+		c.Reconciler.InstanceID = InterpolateEnvVars(c.Reconciler.InstanceID)
 	}
 
 	c.Platform = InterpolateEnvVars(c.Platform)
+	c.InstanceID = InterpolateEnvVars(c.InstanceID)
 
 	if c.Docker != nil {
 		c.Docker.Host = InterpolateEnvVars(c.Docker.Host)
@@ -223,6 +243,10 @@ func (c *FileConfig) ToGlobalConfig() *GlobalConfig {
 	cfg := &GlobalConfig{
 		LogLevel:             DefaultLogLevel,
 		LogFormat:            DefaultLogFormat,
+		LogMaxSize:           DefaultLogMaxSize,
+		LogMaxBackups:        DefaultLogMaxBackups,
+		LogMaxAge:            DefaultLogMaxAge,
+		LogCompress:          DefaultLogCompress,
 		DryRun:               DefaultDryRun,
 		CleanupOrphans:       DefaultCleanupOrphans,
 		CleanupOnStop:        DefaultCleanupOnStop,
@@ -230,6 +254,7 @@ func (c *FileConfig) ToGlobalConfig() *GlobalConfig {
 		AdoptExisting:        DefaultAdoptExisting,
 		DefaultTTL:           DefaultTTL,
 		ReconcileInterval:    DefaultReconcileInterval,
+		ShutdownTimeout:      DefaultShutdownTimeout,
 		HealthPort:           DefaultHealthPort,
 		Platform:             DefaultPlatform,
 		DockerHost:           DefaultDockerHost,
@@ -247,6 +272,23 @@ func (c *FileConfig) ToGlobalConfig() *GlobalConfig {
 		}
 		if c.Logging.Format != "" {
 			cfg.LogFormat = strings.ToLower(c.Logging.Format)
+		}
+		if c.Logging.File != "" {
+			cfg.LogFile = c.Logging.File
+		}
+		if c.Logging.Rotation != nil {
+			if c.Logging.Rotation.MaxSize != nil {
+				cfg.LogMaxSize = *c.Logging.Rotation.MaxSize
+			}
+			if c.Logging.Rotation.MaxBackups != nil {
+				cfg.LogMaxBackups = *c.Logging.Rotation.MaxBackups
+			}
+			if c.Logging.Rotation.MaxAge != nil {
+				cfg.LogMaxAge = *c.Logging.Rotation.MaxAge
+			}
+			if c.Logging.Rotation.Compress != nil {
+				cfg.LogCompress = *c.Logging.Rotation.Compress
+			}
 		}
 	}
 
@@ -271,9 +313,20 @@ func (c *FileConfig) ToGlobalConfig() *GlobalConfig {
 				cfg.ReconcileInterval = interval
 			}
 		}
+		if c.Reconciler.ShutdownTimeout != "" {
+			if timeout, err := time.ParseDuration(c.Reconciler.ShutdownTimeout); err == nil && timeout >= time.Second {
+				cfg.ShutdownTimeout = timeout
+			}
+		}
 		if c.Reconciler.InstanceID != "" {
 			cfg.InstanceID = c.Reconciler.InstanceID
+			slog.Warn("reconciler.instance_id is deprecated in YAML config, use top-level instance_id instead")
 		}
+	}
+
+	// Top-level instance_id takes precedence over deprecated reconciler.instance_id
+	if c.InstanceID != "" {
+		cfg.InstanceID = c.InstanceID
 	}
 
 	if c.Docker != nil {

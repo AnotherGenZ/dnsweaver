@@ -12,6 +12,10 @@ import (
 const (
 	DefaultLogLevel          = "info"
 	DefaultLogFormat         = "json"
+	DefaultLogMaxSize        = 100  // megabytes
+	DefaultLogMaxBackups     = 5    // number of old log files to keep
+	DefaultLogMaxAge         = 30   // days to retain old logs
+	DefaultLogCompress       = true // compress rotated log files
 	DefaultDryRun            = false
 	DefaultCleanupOrphans    = true
 	DefaultCleanupOnStop     = true
@@ -19,6 +23,7 @@ const (
 	DefaultAdoptExisting     = false
 	DefaultTTL               = 300
 	DefaultReconcileInterval = 60 * time.Second
+	DefaultShutdownTimeout   = 30 * time.Second
 	DefaultHealthPort        = 8080
 	DefaultDockerHost        = "unix:///var/run/docker.sock"
 	DefaultDockerMode        = "auto"
@@ -36,8 +41,13 @@ const (
 // These are parsed from DNSWEAVER_* environment variables.
 type GlobalConfig struct {
 	// Logging configuration
-	LogLevel  string // debug, info, warn, error
-	LogFormat string // json, text
+	LogLevel      string // debug, info, warn, error
+	LogFormat     string // json, text
+	LogFile       string // Path to log file; empty means stdout only
+	LogMaxSize    int    // Max size in MB before rotation
+	LogMaxBackups int    // Number of old log files to keep
+	LogMaxAge     int    // Days to retain old log files
+	LogCompress   bool   // Compress rotated log files with gzip
 
 	// Behavior
 	DryRun            bool          // If true, don't make actual DNS changes
@@ -47,6 +57,7 @@ type GlobalConfig struct {
 	AdoptExisting     bool          // If true, adopt existing DNS records by creating ownership TXT records
 	DefaultTTL        int           // Default TTL for records if not specified per-provider
 	ReconcileInterval time.Duration // How often to reconcile DNS records
+	ShutdownTimeout   time.Duration // Max time to wait for in-flight operations during shutdown
 	HealthPort        int           // Port for health/metrics endpoints
 
 	// Platform selection
@@ -75,15 +86,16 @@ type GlobalConfig struct {
 
 // loadGlobalConfig loads global configuration from environment variables.
 // Returns a list of validation errors (may be empty).
-func loadGlobalConfig() (*GlobalConfig, []string) {
-	var errs []string
+func loadGlobalConfig() (*GlobalConfig, []*ConfigError) {
+	var errs []*ConfigError
 
 	cfg := &GlobalConfig{
 		LogLevel:   getEnv("DNSWEAVER_LOG_LEVEL"),
 		LogFormat:  getEnv("DNSWEAVER_LOG_FORMAT"),
+		LogFile:    getEnv("DNSWEAVER_LOG_FILE"),
 		DockerHost: getEnv("DNSWEAVER_DOCKER_HOST"),
 		DockerMode: getEnv("DNSWEAVER_DOCKER_MODE"),
-		Source:     getEnv("DNSWEAVER_SOURCE"),
+		Source:     DefaultSource, // Deprecated: derived from DNSWEAVER_SOURCES via parseSources()
 		Platform:   getEnv("DNSWEAVER_PLATFORM"),
 	}
 
@@ -101,7 +113,7 @@ func loadGlobalConfig() (*GlobalConfig, []string) {
 		cfg.DockerMode = DefaultDockerMode
 	}
 	if cfg.Source == "" {
-		cfg.Source = DefaultSource
+		cfg.Source = DefaultSource // Deprecated field; prefer DNSWEAVER_SOURCES
 	}
 
 	// Platform defaults and validation
@@ -113,7 +125,7 @@ func loadGlobalConfig() (*GlobalConfig, []string) {
 	case "docker", "kubernetes", "both":
 		// Valid
 	default:
-		errs = append(errs, fmt.Sprintf("DNSWEAVER_PLATFORM: invalid value %q (must be docker, kubernetes, or both)", cfg.Platform))
+		errs = append(errs, configErrFull("DNSWEAVER_PLATFORM", fmt.Sprintf("invalid value %q", cfg.Platform), "Must be one of: docker, kubernetes, both", "DNSWEAVER_PLATFORM=docker"))
 	}
 
 	// Validate log level
@@ -122,7 +134,7 @@ func loadGlobalConfig() (*GlobalConfig, []string) {
 	case "debug", "info", "warn", "error":
 		// Valid
 	default:
-		errs = append(errs, fmt.Sprintf("DNSWEAVER_LOG_LEVEL: invalid value %q (must be debug, info, warn, or error)", cfg.LogLevel))
+		errs = append(errs, configErrFull("DNSWEAVER_LOG_LEVEL", fmt.Sprintf("invalid value %q", cfg.LogLevel), "Must be one of: debug, info, warn, error", "DNSWEAVER_LOG_LEVEL=info"))
 	}
 
 	// Validate log format
@@ -131,7 +143,53 @@ func loadGlobalConfig() (*GlobalConfig, []string) {
 	case "json", "text":
 		// Valid
 	default:
-		errs = append(errs, fmt.Sprintf("DNSWEAVER_LOG_FORMAT: invalid value %q (must be json or text)", cfg.LogFormat))
+		errs = append(errs, configErrFull("DNSWEAVER_LOG_FORMAT", fmt.Sprintf("invalid value %q", cfg.LogFormat), "Must be one of: json, text", "DNSWEAVER_LOG_FORMAT=json"))
+	}
+
+	// Parse log rotation settings (only relevant when LogFile is set)
+	if maxSizeStr := getEnv("DNSWEAVER_LOG_MAX_SIZE"); maxSizeStr != "" {
+		maxSize, err := strconv.Atoi(maxSizeStr)
+		if err != nil {
+			errs = append(errs, configErrFull("DNSWEAVER_LOG_MAX_SIZE", fmt.Sprintf("invalid integer %q", maxSizeStr), "Must be a positive integer representing megabytes", "DNSWEAVER_LOG_MAX_SIZE=100"))
+		} else if maxSize < 1 {
+			errs = append(errs, configErrFull("DNSWEAVER_LOG_MAX_SIZE", "must be at least 1 (MB)", "Minimum log file size is 1 MB", "DNSWEAVER_LOG_MAX_SIZE=100"))
+		} else {
+			cfg.LogMaxSize = maxSize
+		}
+	} else {
+		cfg.LogMaxSize = DefaultLogMaxSize
+	}
+
+	if maxBackupsStr := getEnv("DNSWEAVER_LOG_MAX_BACKUPS"); maxBackupsStr != "" {
+		maxBackups, err := strconv.Atoi(maxBackupsStr)
+		if err != nil {
+			errs = append(errs, configErrFull("DNSWEAVER_LOG_MAX_BACKUPS", fmt.Sprintf("invalid integer %q", maxBackupsStr), "Must be a non-negative integer", "DNSWEAVER_LOG_MAX_BACKUPS=5"))
+		} else if maxBackups < 0 {
+			errs = append(errs, configErrFull("DNSWEAVER_LOG_MAX_BACKUPS", "must be non-negative", "Use 0 to keep all old log files", "DNSWEAVER_LOG_MAX_BACKUPS=5"))
+		} else {
+			cfg.LogMaxBackups = maxBackups
+		}
+	} else {
+		cfg.LogMaxBackups = DefaultLogMaxBackups
+	}
+
+	if maxAgeStr := getEnv("DNSWEAVER_LOG_MAX_AGE"); maxAgeStr != "" {
+		maxAge, err := strconv.Atoi(maxAgeStr)
+		if err != nil {
+			errs = append(errs, configErrFull("DNSWEAVER_LOG_MAX_AGE", fmt.Sprintf("invalid integer %q", maxAgeStr), "Must be a non-negative integer (days)", "DNSWEAVER_LOG_MAX_AGE=30"))
+		} else if maxAge < 0 {
+			errs = append(errs, configErrFull("DNSWEAVER_LOG_MAX_AGE", "must be non-negative", "Use 0 to keep old log files indefinitely", "DNSWEAVER_LOG_MAX_AGE=30"))
+		} else {
+			cfg.LogMaxAge = maxAge
+		}
+	} else {
+		cfg.LogMaxAge = DefaultLogMaxAge
+	}
+
+	if compressStr := getEnv("DNSWEAVER_LOG_COMPRESS"); compressStr != "" {
+		cfg.LogCompress = parseBool(compressStr, DefaultLogCompress)
+	} else {
+		cfg.LogCompress = DefaultLogCompress
 	}
 
 	// Validate Docker mode
@@ -140,7 +198,7 @@ func loadGlobalConfig() (*GlobalConfig, []string) {
 	case "auto", "swarm", "standalone":
 		// Valid
 	default:
-		errs = append(errs, fmt.Sprintf("DNSWEAVER_DOCKER_MODE: invalid value %q (must be auto, swarm, or standalone)", cfg.DockerMode))
+		errs = append(errs, configErrFull("DNSWEAVER_DOCKER_MODE", fmt.Sprintf("invalid value %q", cfg.DockerMode), "Must be one of: auto, swarm, standalone", "DNSWEAVER_DOCKER_MODE=auto"))
 	}
 
 	// Parse DRY_RUN
@@ -182,9 +240,9 @@ func loadGlobalConfig() (*GlobalConfig, []string) {
 	if ttlStr := getEnv("DNSWEAVER_DEFAULT_TTL"); ttlStr != "" {
 		ttl, err := strconv.Atoi(ttlStr)
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("DNSWEAVER_DEFAULT_TTL: invalid integer %q", ttlStr))
+			errs = append(errs, configErrFull("DNSWEAVER_DEFAULT_TTL", fmt.Sprintf("invalid integer %q", ttlStr), "Must be a positive integer (seconds)", "DNSWEAVER_DEFAULT_TTL=300"))
 		} else if ttl < 1 {
-			errs = append(errs, "DNSWEAVER_DEFAULT_TTL: must be at least 1")
+			errs = append(errs, configErrFull("DNSWEAVER_DEFAULT_TTL", "must be at least 1", "TTL is in seconds; typical values are 60-3600", "DNSWEAVER_DEFAULT_TTL=300"))
 		} else {
 			cfg.DefaultTTL = ttl
 		}
@@ -196,9 +254,9 @@ func loadGlobalConfig() (*GlobalConfig, []string) {
 	if intervalStr := getEnv("DNSWEAVER_RECONCILE_INTERVAL"); intervalStr != "" {
 		interval, err := time.ParseDuration(intervalStr)
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("DNSWEAVER_RECONCILE_INTERVAL: invalid duration %q (use format like 60s, 5m)", intervalStr))
+			errs = append(errs, configErrFull("DNSWEAVER_RECONCILE_INTERVAL", fmt.Sprintf("invalid duration %q", intervalStr), "Use Go duration format: 60s, 5m, 1h", "DNSWEAVER_RECONCILE_INTERVAL=60s"))
 		} else if interval < time.Second {
-			errs = append(errs, "DNSWEAVER_RECONCILE_INTERVAL: must be at least 1s")
+			errs = append(errs, configErrFull("DNSWEAVER_RECONCILE_INTERVAL", "must be at least 1s", "Shorter intervals cause excessive API calls", "DNSWEAVER_RECONCILE_INTERVAL=60s"))
 		} else {
 			cfg.ReconcileInterval = interval
 		}
@@ -206,13 +264,27 @@ func loadGlobalConfig() (*GlobalConfig, []string) {
 		cfg.ReconcileInterval = DefaultReconcileInterval
 	}
 
+	// Parse SHUTDOWN_TIMEOUT (supports Go duration format: 30s, 1m, etc.)
+	if timeoutStr := getEnv("DNSWEAVER_SHUTDOWN_TIMEOUT"); timeoutStr != "" {
+		timeout, err := time.ParseDuration(timeoutStr)
+		if err != nil {
+			errs = append(errs, configErrFull("DNSWEAVER_SHUTDOWN_TIMEOUT", fmt.Sprintf("invalid duration %q", timeoutStr), "Use Go duration format: 30s, 1m, 2m", "DNSWEAVER_SHUTDOWN_TIMEOUT=30s"))
+		} else if timeout < time.Second {
+			errs = append(errs, configErrFull("DNSWEAVER_SHUTDOWN_TIMEOUT", "must be at least 1s", "Allow enough time for in-flight DNS updates to complete", "DNSWEAVER_SHUTDOWN_TIMEOUT=30s"))
+		} else {
+			cfg.ShutdownTimeout = timeout
+		}
+	} else {
+		cfg.ShutdownTimeout = DefaultShutdownTimeout
+	}
+
 	// Parse HEALTH_PORT
 	if portStr := getEnv("DNSWEAVER_HEALTH_PORT"); portStr != "" {
 		port, err := strconv.Atoi(portStr)
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("DNSWEAVER_HEALTH_PORT: invalid integer %q", portStr))
+			errs = append(errs, configErrFull("DNSWEAVER_HEALTH_PORT", fmt.Sprintf("invalid integer %q", portStr), "Must be a valid TCP port number", "DNSWEAVER_HEALTH_PORT=8080"))
 		} else if port < 1 || port > 65535 {
-			errs = append(errs, fmt.Sprintf("DNSWEAVER_HEALTH_PORT: must be between 1 and 65535, got %d", port))
+			errs = append(errs, configErrFull("DNSWEAVER_HEALTH_PORT", fmt.Sprintf("must be between 1 and 65535, got %d", port), "Choose an unprivileged port (1024-65535)", "DNSWEAVER_HEALTH_PORT=8080"))
 		} else {
 			cfg.HealthPort = port
 		}
@@ -223,7 +295,7 @@ func loadGlobalConfig() (*GlobalConfig, []string) {
 	// Parse INSTANCE_ID
 	if instanceID := getEnv("DNSWEAVER_INSTANCE_ID"); instanceID != "" {
 		if err := validateInstanceID(instanceID); err != nil {
-			errs = append(errs, fmt.Sprintf("DNSWEAVER_INSTANCE_ID: %s", err.Error()))
+			errs = append(errs, configErrFull("DNSWEAVER_INSTANCE_ID", err.Error(), "Must be 1-63 alphanumeric characters with hyphens, underscores, or dots", "DNSWEAVER_INSTANCE_ID=prod-01"))
 		} else {
 			cfg.InstanceID = instanceID
 		}

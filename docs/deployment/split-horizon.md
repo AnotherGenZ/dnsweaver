@@ -2,6 +2,9 @@
 
 Split-horizon DNS (also called split-brain DNS) allows the same hostname to resolve to different addresses depending on where the query originates. dnsweaver makes this easy with multi-provider support.
 
+!!! tip "Looking for dual-stack (A + AAAA)?"
+    If you want both IPv4 and IPv6 records for the same hostname, see the [dual-stack guide](dual-stack.md).
+
 ## What Is Split-Horizon DNS?
 
 ```mermaid

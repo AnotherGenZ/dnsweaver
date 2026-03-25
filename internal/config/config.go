@@ -48,7 +48,7 @@ type Config struct {
 // Per DECISIONS.md: Fail fast with clear error messages. Do not start
 // with partial configuration.
 func Load() (*Config, error) {
-	var allErrors []string
+	var allErrors []*ConfigError
 
 	// Check for config file
 	configPath := GetConfigFilePath()
@@ -59,7 +59,7 @@ func Load() (*Config, error) {
 
 	if configPath != "" {
 		// Load from file first
-		var fileErrs []string
+		var fileErrs []*ConfigError
 		fileGlobal, fileProviders, fileSources, fileErrs = loadFromFile(configPath)
 		allErrors = append(allErrors, fileErrs...)
 
@@ -71,7 +71,7 @@ func Load() (*Config, error) {
 
 	// Merge global config with env var overrides
 	var global *GlobalConfig
-	var globalErrs []string
+	var globalErrs []*ConfigError
 	if fileGlobal != nil {
 		global, globalErrs = mergeGlobalConfig(fileGlobal)
 	} else {
@@ -102,7 +102,12 @@ func Load() (*Config, error) {
 			instances = append(instances, fp)
 		}
 	} else {
-		allErrors = append(allErrors, "no providers configured: set DNSWEAVER_INSTANCES or configure providers in config file")
+		allErrors = append(allErrors, configErrFull(
+			"providers",
+			"no providers configured",
+			"Define providers via DNSWEAVER_INSTANCES env var or in the config file",
+			"DNSWEAVER_INSTANCES=my-dns",
+		))
 	}
 
 	// Determine sources: env vars take precedence
@@ -146,6 +151,31 @@ func (c *Config) LogFormat() string {
 	return c.Global.LogFormat
 }
 
+// LogFile returns the configured log file path. Empty means stdout only.
+func (c *Config) LogFile() string {
+	return c.Global.LogFile
+}
+
+// LogMaxSize returns the max log file size in MB before rotation.
+func (c *Config) LogMaxSize() int {
+	return c.Global.LogMaxSize
+}
+
+// LogMaxBackups returns the number of old log files to keep.
+func (c *Config) LogMaxBackups() int {
+	return c.Global.LogMaxBackups
+}
+
+// LogMaxAge returns the number of days to retain old log files.
+func (c *Config) LogMaxAge() int {
+	return c.Global.LogMaxAge
+}
+
+// LogCompress returns whether rotated log files should be compressed.
+func (c *Config) LogCompress() bool {
+	return c.Global.LogCompress
+}
+
 // DryRun returns whether dry-run mode is enabled.
 func (c *Config) DryRun() bool {
 	return c.Global.DryRun
@@ -177,6 +207,11 @@ func (c *Config) AdoptExisting() bool {
 // ReconcileInterval returns the reconciliation interval.
 func (c *Config) ReconcileInterval() time.Duration {
 	return c.Global.ReconcileInterval
+}
+
+// ShutdownTimeout returns the maximum time to wait for in-flight operations during shutdown.
+func (c *Config) ShutdownTimeout() time.Duration {
+	return c.Global.ShutdownTimeout
 }
 
 // HealthPort returns the health server port.

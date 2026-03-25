@@ -12,6 +12,10 @@ const (
 	// SimpleHostnameLabel is the label for simple hostname definition.
 	SimpleHostnameLabel = "dnsweaver.hostname"
 
+	// SimpleHostnamesLabel is the label for comma-separated hostname list.
+	// Example: dnsweaver.hostnames=app1.example.com,app2.example.com
+	SimpleHostnamesLabel = "dnsweaver.hostnames"
+
 	// EnabledLabel controls whether dnsweaver should create records for this workload.
 	// Set to "false" to disable record creation.
 	EnabledLabel = "dnsweaver.enabled"
@@ -178,6 +182,50 @@ func (p *Parser) ExtractHostnames(labels map[string]string) []Extraction {
 			extractions = append(extractions, extraction)
 			p.logger.Debug("found simple dnsweaver hostname",
 				slog.String("hostname", hostname),
+				slog.Int("ttl", extraction.TTL),
+			)
+		}
+	}
+
+	// Handle comma-separated hostnames label
+	if hostnames, ok := labels[SimpleHostnamesLabel]; ok {
+		// Parse shared TTL
+		var sharedTTL int
+		if ttlStr, ok := labels[TTLLabel]; ok && ttlStr != "" {
+			if ttl, err := strconv.Atoi(strings.TrimSpace(ttlStr)); err == nil && ttl > 0 {
+				sharedTTL = ttl
+			}
+		}
+
+		// Parse shared proxied
+		var sharedMeta map[string]string
+		if proxied, ok := labels[ProxiedLabel]; ok && proxied != "" {
+			proxied = strings.TrimSpace(strings.ToLower(proxied))
+			if proxied == boolTrue || proxied == boolFalse {
+				sharedMeta = map[string]string{"proxied": proxied}
+			}
+		}
+
+		for _, h := range strings.Split(hostnames, ",") {
+			h = strings.TrimSpace(h)
+			if h == "" {
+				continue
+			}
+
+			extraction := Extraction{
+				Hostname: h,
+				TTL:      sharedTTL,
+			}
+			if sharedMeta != nil {
+				extraction.Metadata = make(map[string]string, len(sharedMeta))
+				for k, v := range sharedMeta {
+					extraction.Metadata[k] = v
+				}
+			}
+
+			extractions = append(extractions, extraction)
+			p.logger.Debug("found dnsweaver hostname from list",
+				slog.String("hostname", h),
 				slog.Int("ttl", extraction.TTL),
 			)
 		}

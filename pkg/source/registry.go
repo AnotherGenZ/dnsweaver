@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"gitlab.bluewillows.net/root/dnsweaver/internal/metrics"
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
 )
 
@@ -133,6 +134,7 @@ func (r *Registry) ExtractAll(ctx context.Context, w workload.Workload) Hostname
 				slog.String("source", src.Name()),
 				slog.Int("count", len(hostnames)),
 			)
+			metrics.HostnamesExtractedTotal.WithLabelValues(src.Name(), "labels").Add(float64(len(hostnames)))
 			allHostnames = append(allHostnames, hostnames...)
 		}
 	}
@@ -214,6 +216,7 @@ func (r *Registry) DiscoverAll(ctx context.Context) Hostnames {
 				slog.String("source", src.Name()),
 				slog.Int("count", len(hostnames)),
 			)
+			metrics.HostnamesExtractedTotal.WithLabelValues(src.Name(), "files").Add(float64(len(hostnames)))
 			allHostnames = append(allHostnames, hostnames...)
 		}
 	}

@@ -63,12 +63,12 @@ func TestConfig_Validate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "missing mode",
+			name: "missing mode defaults to api",
 			config: Config{
 				URL:      "http://pihole.local",
 				Password: "test",
 			},
-			wantErr: true,
+			wantErr: false,
 		},
 		{
 			name: "invalid mode",
@@ -86,6 +86,33 @@ func TestConfig_Validate(t *testing.T) {
 				TTL:      -1,
 			},
 			wantErr: true,
+		},
+		{
+			name: "invalid URL scheme",
+			config: Config{
+				Mode:     ModeAPI,
+				URL:      "ftp://pihole.local",
+				Password: "test",
+			},
+			wantErr: true,
+		},
+		{
+			name: "URL with embedded credentials",
+			config: Config{
+				Mode:     ModeAPI,
+				URL:      "http://admin:pass@pihole.local",
+				Password: "test",
+			},
+			wantErr: true,
+		},
+		{
+			name: "https URL is valid",
+			config: Config{
+				Mode:     ModeAPI,
+				URL:      "https://pihole.local",
+				Password: "test",
+			},
+			wantErr: false,
 		},
 	}
 

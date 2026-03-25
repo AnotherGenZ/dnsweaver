@@ -87,8 +87,8 @@ func parseInstances() []string {
 
 // loadInstanceConfig loads configuration for a single provider instance.
 // It reads all DNSWEAVER_{INSTANCE_NAME}_* environment variables.
-func loadInstanceConfig(instanceName string, defaultTTL int) (*ProviderInstanceConfig, []string) {
-	var errs []string
+func loadInstanceConfig(instanceName string, defaultTTL int) (*ProviderInstanceConfig, []*ConfigError) {
+	var errs []*ConfigError
 	prefix := envPrefix(instanceName)
 
 	cfg := &ProviderInstanceConfig{
@@ -99,7 +99,7 @@ func loadInstanceConfig(instanceName string, defaultTTL int) (*ProviderInstanceC
 	// TYPE is required
 	cfg.TypeName = strings.ToLower(getEnv(prefix + "TYPE"))
 	if cfg.TypeName == "" {
-		errs = append(errs, fmt.Sprintf("%sTYPE: required but not set", prefix))
+		errs = append(errs, configErrFull(prefix+"TYPE", "required but not set", fmt.Sprintf("Provider %q needs a type (e.g., technitium, cloudflare, pihole)", instanceName), prefix+"TYPE=technitium"))
 	}
 
 	// RECORD_TYPE (default: A)
@@ -112,22 +112,22 @@ func loadInstanceConfig(instanceName string, defaultTTL int) (*ProviderInstanceC
 	case "CNAME":
 		cfg.RecordType = provider.RecordTypeCNAME
 	default:
-		errs = append(errs, fmt.Sprintf("%sRECORD_TYPE: invalid value %q (must be A, AAAA, or CNAME)", prefix, recordTypeStr))
+		errs = append(errs, configErrFull(prefix+"RECORD_TYPE", fmt.Sprintf("invalid value %q", recordTypeStr), "Must be one of: A, AAAA, CNAME", prefix+"RECORD_TYPE=A"))
 	}
 
 	// TARGET is required
 	cfg.Target = getEnv(prefix + "TARGET")
 	if cfg.Target == "" {
-		errs = append(errs, fmt.Sprintf("%sTARGET: required but not set", prefix))
+		errs = append(errs, configErrFull(prefix+"TARGET", "required but not set", fmt.Sprintf("Provider %q needs a target IP or hostname for DNS records", instanceName), prefix+"TARGET=10.0.0.1"))
 	}
 
 	// TTL (optional, defaults to global default)
 	if ttlStr := getEnv(prefix + "TTL"); ttlStr != "" {
 		ttl, err := strconv.Atoi(ttlStr)
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("%sTTL: invalid integer %q", prefix, ttlStr))
+			errs = append(errs, configErrFull(prefix+"TTL", fmt.Sprintf("invalid integer %q", ttlStr), "Must be a positive integer (seconds)", prefix+"TTL=300"))
 		} else if ttl < 1 {
-			errs = append(errs, fmt.Sprintf("%sTTL: must be at least 1", prefix))
+			errs = append(errs, configErrFull(prefix+"TTL", "must be at least 1", "TTL is in seconds; typical values are 60-3600", prefix+"TTL=300"))
 		} else {
 			cfg.TTL = ttl
 		}
@@ -139,7 +139,7 @@ func loadInstanceConfig(instanceName string, defaultTTL int) (*ProviderInstanceC
 	if modeStr := getEnv(prefix + "MODE"); modeStr != "" {
 		mode, err := provider.ParseOperationalMode(modeStr)
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("%sMODE: %s", prefix, err.Error()))
+			errs = append(errs, configErrFull(prefix+"MODE", err.Error(), "Must be one of: managed, authoritative, additive", prefix+"MODE=managed"))
 		} else {
 			cfg.Mode = mode
 		}
@@ -152,9 +152,9 @@ func loadInstanceConfig(instanceName string, defaultTTL int) (*ProviderInstanceC
 	domainsRegexStr := getEnv(prefix + "DOMAINS_REGEX")
 
 	if domainsStr != "" && domainsRegexStr != "" {
-		errs = append(errs, fmt.Sprintf("%s: cannot set both DOMAINS and DOMAINS_REGEX", prefix[:len(prefix)-1]))
+		errs = append(errs, configErrHelp(prefix[:len(prefix)-1], "cannot set both DOMAINS and DOMAINS_REGEX", "Use either glob patterns (DOMAINS) or regex patterns (DOMAINS_REGEX), not both"))
 	} else if domainsStr == "" && domainsRegexStr == "" {
-		errs = append(errs, fmt.Sprintf("%sDOMAINS: required but not set", prefix))
+		errs = append(errs, configErrFull(prefix+"DOMAINS", "required but not set", fmt.Sprintf("Provider %q needs at least one domain pattern to match", instanceName), prefix+"DOMAINS=*.example.com"))
 	} else if domainsStr != "" {
 		cfg.Domains = splitPatterns(domainsStr)
 	} else {
@@ -166,7 +166,7 @@ func loadInstanceConfig(instanceName string, defaultTTL int) (*ProviderInstanceC
 	excludeDomainsRegexStr := getEnv(prefix + "EXCLUDE_DOMAINS_REGEX")
 
 	if excludeDomainsStr != "" && excludeDomainsRegexStr != "" {
-		errs = append(errs, fmt.Sprintf("%s: cannot set both EXCLUDE_DOMAINS and EXCLUDE_DOMAINS_REGEX", prefix[:len(prefix)-1]))
+		errs = append(errs, configErrHelp(prefix[:len(prefix)-1], "cannot set both EXCLUDE_DOMAINS and EXCLUDE_DOMAINS_REGEX", "Use either glob patterns or regex patterns for exclusions, not both"))
 	} else if excludeDomainsStr != "" {
 		cfg.ExcludeDomains = splitPatterns(excludeDomainsStr)
 	} else if excludeDomainsRegexStr != "" {
@@ -213,7 +213,7 @@ var providerConfigFields = []struct {
 	{"BACKUP", false},               // dnsmasq-specific
 	{"INCLUDE_MARKER", false},       // dnsmasq-specific
 	{"RELOAD_COMMAND", false},       // dnsmasq-specific
-	{"MODE", false},                 // Pi-hole specific (api/file)
+	{"ACCESS_MODE", false},          // Pi-hole specific (api/file) — renamed from MODE in v0.10.0
 	{"PASSWORD", true},              // Pi-hole specific
 	{"INSECURE_SKIP_VERIFY", false}, // TLS certificate verification skip
 	// RFC 2136 specific fields

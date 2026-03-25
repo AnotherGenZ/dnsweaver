@@ -56,6 +56,24 @@ Create multiple provider instances with different configurations:
 - DNSWEAVER_A_PROVIDER_DOMAINS=*.internal.example.com
 ```
 
+### How do I set up dual-stack DNS (A + AAAA)?
+
+Configure two provider instances with the same domain patterns but different record types and targets:
+
+```yaml
+- DNSWEAVER_INSTANCES=dns-v4,dns-v6
+
+- DNSWEAVER_DNS_V4_RECORD_TYPE=A
+- DNSWEAVER_DNS_V4_TARGET=10.0.0.100
+- DNSWEAVER_DNS_V4_DOMAINS=*.example.com
+
+- DNSWEAVER_DNS_V6_RECORD_TYPE=AAAA
+- DNSWEAVER_DNS_V6_TARGET=fd00::100
+- DNSWEAVER_DNS_V6_DOMAINS=*.example.com
+```
+
+Both instances can point to the same DNS server — dnsweaver treats each independently. See the [dual-stack deployment guide](deployment/dual-stack.md) for full examples.
+
 ### Can I use regex for domain matching?
 
 Yes, use `DOMAINS_REGEX` instead of `DOMAINS`:

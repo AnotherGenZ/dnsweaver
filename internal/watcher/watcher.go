@@ -21,6 +21,7 @@ import (
 	"github.com/docker/docker/api/types/filters"
 
 	"gitlab.bluewillows.net/root/dnsweaver/internal/docker"
+	"gitlab.bluewillows.net/root/dnsweaver/internal/metrics"
 )
 
 // ReconcileFunc is called when changes are detected that require reconciliation.
@@ -164,7 +165,13 @@ func (w *Watcher) watchLoop(ctx context.Context) {
 					slog.String("error", err.Error()),
 					slog.Duration("retry_in", w.config.ReconnectInterval),
 				)
-				time.Sleep(w.config.ReconnectInterval)
+				metrics.DockerWatcherReconnects.Inc()
+				// Use select for context-aware sleep so shutdown isn't blocked
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(w.config.ReconnectInterval):
+				}
 			}
 		}
 	}
@@ -228,6 +235,7 @@ func (w *Watcher) handleEvent(event events.Message) {
 		slog.String("actor_id", event.Actor.ID),
 		slog.Any("attributes", event.Actor.Attributes),
 	)
+	metrics.DockerEventsProcessed.WithLabelValues(string(event.Type) + "_" + string(event.Action)).Inc()
 
 	// Debounce: reset timer on each event
 	w.mu.Lock()

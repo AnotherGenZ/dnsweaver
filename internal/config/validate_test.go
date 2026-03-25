@@ -72,7 +72,7 @@ func TestValidateTargetRecordType(t *testing.T) {
 				}
 				found := false
 				for _, err := range errs {
-					if containsSubstring(err, tc.errMatch) {
+					if containsSubstring(err.Error(), tc.errMatch) {
 						found = true
 						break
 					}
@@ -111,7 +111,7 @@ func TestValidateConfig_DuplicateProviderNames(t *testing.T) {
 
 	found := false
 	for _, err := range errs {
-		if containsSubstring(err, "duplicate") {
+		if containsSubstring(err.Error(), "duplicate") {
 			found = true
 			break
 		}
@@ -122,9 +122,9 @@ func TestValidateConfig_DuplicateProviderNames(t *testing.T) {
 }
 
 func TestValidationError_SingleError(t *testing.T) {
-	err := &ValidationError{Errors: []string{"single error message"}}
+	err := &ValidationError{Errors: []*ConfigError{configErr("test_field", "single error message")}}
 	got := err.Error()
-	want := "configuration error: single error message"
+	want := "configuration error:\n  test_field: single error message"
 
 	if got != want {
 		t.Errorf("Error() = %q, want %q", got, want)
@@ -132,10 +132,17 @@ func TestValidationError_SingleError(t *testing.T) {
 }
 
 func TestValidationError_MultipleErrors(t *testing.T) {
-	err := &ValidationError{Errors: []string{"error 1", "error 2", "error 3"}}
+	err := &ValidationError{Errors: []*ConfigError{
+		configErr("field1", "error 1"),
+		configErr("field2", "error 2"),
+		configErr("field3", "error 3"),
+	}}
 	got := err.Error()
 
-	// Should contain all errors
+	// Should contain count and all errors
+	if !containsSubstring(got, "3 configuration errors") {
+		t.Errorf("Error() should contain '3 configuration errors', got %q", got)
+	}
 	if !containsSubstring(got, "error 1") {
 		t.Errorf("Error() should contain 'error 1', got %q", got)
 	}

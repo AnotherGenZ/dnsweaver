@@ -93,6 +93,11 @@ type Reconciler struct {
 	// Used for orphan detection.
 	knownHostnames map[string]struct{}
 
+	// hostnameProviders tracks which provider(s) each hostname was routed to
+	// in the previous reconciliation. Used by orphan cleanup to delete records
+	// from the correct provider even when domain patterns have changed (#51).
+	hostnameProviders map[string][]string
+
 	// recoveredMetadata stores per-hostname metadata recovered from ownership
 	// TXT records on startup. This is populated by RecoverOwnership and consumed
 	// by the first reconciliation cycle. After the first cycle completes, this
@@ -214,11 +219,16 @@ func (r *Reconciler) Reconcile(ctx context.Context) (*Result, error) {
 		cache = newRecordCache(ctx, r.providers, r.logger)
 	}
 
-	// Step 4: Ensure records exist for all discovered hostnames
+	// Step 4: Ensure records exist for all discovered hostnames.
+	// Track which providers each hostname is routed to for orphan cleanup (#51).
+	currentProviderMapping := make(map[string][]string, len(discoveredHostnames))
 	for _, hostname := range discoveredHostnames {
 		actions := r.ensureRecord(ctx, hostname, cache)
 		for _, action := range actions {
 			result.AddAction(action)
+			if action.Provider != "" && action.Type != ActionSkip {
+				currentProviderMapping[hostname.Name] = appendUnique(currentProviderMapping[hostname.Name], action.Provider)
+			}
 		}
 	}
 
@@ -230,12 +240,13 @@ func (r *Reconciler) Reconcile(ctx context.Context) (*Result, error) {
 		}
 	}
 
-	// Update known hostnames for next orphan check
+	// Update known hostnames and provider mapping for next orphan check
 	r.mu.Lock()
 	r.knownHostnames = make(map[string]struct{}, len(discoveredHostnames))
 	for name := range discoveredHostnames {
 		r.knownHostnames[name] = struct{}{}
 	}
+	r.hostnameProviders = currentProviderMapping
 	r.mu.Unlock()
 
 	result.Complete()
@@ -528,6 +539,13 @@ func (r *Reconciler) RecoverOwnership(ctx context.Context) error {
 				// Normalize hostname for case-insensitive comparison (RFC 1035)
 				normalized := source.NormalizeHostname(rh.Hostname)
 				r.knownHostnames[normalized] = struct{}{}
+				// Track which provider this hostname was recovered from (#51).
+				// This seeds the provider mapping so orphan cleanup can target
+				// the correct provider even on the first reconciliation after restart.
+				if r.hostnameProviders == nil {
+					r.hostnameProviders = make(map[string][]string)
+				}
+				r.hostnameProviders[normalized] = appendUnique(r.hostnameProviders[normalized], inst.Name())
 				// Store recovered metadata if present
 				if len(rh.Metadata) > 0 {
 					recoveredMeta[normalized] = rh.Metadata
@@ -604,4 +622,14 @@ func (r *Reconciler) recordMetrics(result *Result) {
 			metrics.RecordsSkippedTotal.WithLabelValues(reason).Inc()
 		}
 	}
+}
+
+// appendUnique appends value to slice if not already present.
+func appendUnique(slice []string, value string) []string {
+	for _, v := range slice {
+		if v == value {
+			return slice
+		}
+	}
+	return append(slice, value)
 }

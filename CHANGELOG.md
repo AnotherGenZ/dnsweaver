@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-03-25
+
+### Added
+- **Config Validation CLI**: `--validate` flag for pre-flight config checks with
+  structured error reporting (#71)
+- **Graceful Shutdown**: In-flight reconciliation tracking with clean provider
+  teardown (#69)
+- **Structured Logging**: `slog`-based logging with JSON/text format and file
+  rotation support (#67)
+- **`dnsweaver.hostnames` Label**: Comma-separated hostname declarations for
+  Docker containers (#96)
+- **Dual-Stack DNS Guide**: Deployment documentation for IPv4/IPv6 environments
+- **Source/Watcher Metrics**: Prometheus instrumentation for source discovery and
+  watcher activity (#97)
+
+### Changed
+- **Pi-hole Config**: `MODE` renamed to `ACCESS_MODE`; `DNSWEAVER_SOURCE` (singular)
+  deprecated in favor of `DNSWEAVER_SOURCES` (plural) (#93)
+- **`instance_id` Restructured**: Moved to top-level config field (#93)
+
+### Fixed
+- **Orphan Cleanup**: Hostname-provider mapping tracked correctly during provider
+  switches (#51)
+- **Startup Race**: Events during initial reconciliation no longer lost (#55)
+- **Health Recovery**: Health checker registered for recovered providers (#127)
+- **Pi-hole Default**: `ACCESS_MODE` defaults to `api` when not specified (#98)
+
+### Security
+- **Pre-v1.0 Security Audit**: Comprehensive hardening including HTTP response
+  body limits, shell metacharacter validation, SSH credential handling, and input
+  sanitization (#36)
+- **Code Review**: Dead code removal, error handling improvements, naming
+  consistency (#94)
+
+### Testing
+- **Shared Test Harness**: Mock infrastructure and helper utilities for provider
+  testing (#111)
+- **Reconciler Edge Cases**: Failure, behavior, and observability tests (#77)
+- **RFC 2136 Integration Tests**: Full CRUD lifecycle testing (#130)
+- **Standardized Test Templates**: Reusable integration testing frameworks (#136)
+- **Integration Tested**: Verified against Technitium DNS and Cloudflare in
+  multi-provider E2E scenarios
+
+### Documentation
+- **Architecture Overview**: System design and component interaction docs (#35)
+- **Multi-Instance Guide**: Running multiple dnsweaver instances (#35)
+- **SSH Remote Management**: dnsmasq provider SSH docs and secrets guide (#99)
+- **Test Case Matrix**: Release checklist and test coverage mapping (#109)
+- **Provider Documentation**: Accuracy corrections across all providers
+
 ## [0.9.3] - 2026-03-11
 
 ### Fixed
@@ -476,7 +526,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitLab CI/CD pipeline with GitHub release automation
 - Docker Hub and GitHub Container Registry publishing
 
-[Unreleased]: https://github.com/maxfield-allison/dnsweaver/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/maxfield-allison/dnsweaver/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/maxfield-allison/dnsweaver/compare/v0.9.3...v1.0.0
 [0.9.3]: https://github.com/maxfield-allison/dnsweaver/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/maxfield-allison/dnsweaver/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/maxfield-allison/dnsweaver/compare/v0.9.0...v0.9.1

@@ -3,6 +3,7 @@ package pihole
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -63,10 +64,25 @@ type Config struct {
 func (c *Config) Validate() error {
 	var errs []string
 
+	// Default empty mode to API (the most common configuration)
+	if c.Mode == "" {
+		c.Mode = ModeAPI
+	}
+
 	switch c.Mode {
 	case ModeAPI:
 		if c.URL == "" {
 			errs = append(errs, "URL is required for API mode")
+		} else {
+			// Validate URL format and scheme
+			parsed, err := url.Parse(c.URL)
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("invalid URL: %v", err))
+			} else if parsed.Scheme != "http" && parsed.Scheme != "https" {
+				errs = append(errs, "URL must start with http:// or https://")
+			} else if parsed.User != nil {
+				errs = append(errs, "URL must not contain embedded credentials")
+			}
 		}
 		if c.Password == "" {
 			errs = append(errs, "PASSWORD is required for API mode")
@@ -88,8 +104,6 @@ func (c *Config) Validate() error {
 		if c.ReloadCommand == "" {
 			errs = append(errs, "RELOAD_COMMAND is required for file mode")
 		}
-	case "":
-		errs = append(errs, "MODE is required (api or file)")
 	default:
 		errs = append(errs, fmt.Sprintf("invalid MODE %q: must be 'api' or 'file'", c.Mode))
 	}
@@ -134,7 +148,11 @@ func (c *Config) ConfigFilePath() string {
 func LoadConfig(instanceName string) (*Config, error) {
 	prefix := envPrefix(instanceName)
 
-	modeStr := getEnvWithDefault(prefix+"MODE", string(ModeAPI))
+	// ACCESS_MODE is the preferred key (v0.10.0+), fall back to deprecated MODE
+	modeStr := getEnv(prefix + "ACCESS_MODE")
+	if modeStr == "" {
+		modeStr = getEnvWithDefault(prefix+"MODE", string(ModeAPI))
+	}
 	mode := Mode(strings.ToLower(modeStr))
 
 	config := &Config{
@@ -179,7 +197,11 @@ func LoadConfig(instanceName string) (*Config, error) {
 //   - zone: DNS zone
 //   - ttl: Record TTL
 func LoadConfigFromMap(name string, m map[string]string) (*Config, error) {
-	modeStr := getMapValueWithDefault(m, "mode", string(ModeAPI))
+	// ACCESS_MODE is the preferred key (v0.10.0+), fall back to deprecated MODE
+	modeStr := getMapValue(m, "access_mode")
+	if modeStr == "" {
+		modeStr = getMapValueWithDefault(m, "mode", string(ModeAPI))
+	}
 	mode := Mode(strings.ToLower(modeStr))
 
 	config := &Config{

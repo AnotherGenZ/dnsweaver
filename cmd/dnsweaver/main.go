@@ -12,8 +12,8 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -27,15 +27,6 @@ import (
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
-	"gitlab.bluewillows.net/root/dnsweaver/providers/cloudflare"
-	"gitlab.bluewillows.net/root/dnsweaver/providers/dnsmasq"
-	"gitlab.bluewillows.net/root/dnsweaver/providers/pihole"
-	"gitlab.bluewillows.net/root/dnsweaver/providers/rfc2136"
-	"gitlab.bluewillows.net/root/dnsweaver/providers/technitium"
-	"gitlab.bluewillows.net/root/dnsweaver/providers/webhook"
-	dnsweaversource "gitlab.bluewillows.net/root/dnsweaver/sources/dnsweaver"
-	k8ssource "gitlab.bluewillows.net/root/dnsweaver/sources/kubernetes"
-	"gitlab.bluewillows.net/root/dnsweaver/sources/traefik"
 )
 
 // Version and BuildDate are set via ldflags during build.
@@ -49,6 +40,7 @@ func main() {
 	// Parse command-line flags
 	configPath := flag.String("config", "", "Path to YAML configuration file")
 	showVersion := flag.Bool("version", false, "Show version and exit")
+	validateOnly := flag.Bool("validate", false, "Validate configuration and exit")
 	flag.Parse()
 
 	if *showVersion {
@@ -65,10 +57,60 @@ func main() {
 		}
 	}
 
+	// Also check DNSWEAVER_VALIDATE_ONLY env var for container-based validation
+	if parseBoolEnv("DNSWEAVER_VALIDATE_ONLY") {
+		validateOnly = boolPtr(true)
+	}
+
+	if *validateOnly {
+		if err := runValidate(); err != nil {
+			fmt.Fprintf(os.Stderr, "Configuration validation failed:\n%s\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Configuration is valid.")
+		os.Exit(0)
+	}
+
 	if err := run(); err != nil {
 		slog.Error("fatal error", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+}
+
+// runValidate loads and validates the configuration, printing a summary.
+// Returns nil if configuration is valid, or an error with details.
+func runValidate() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	// Print configuration summary
+	fmt.Println("Configuration Summary:")
+	fmt.Printf("  Platform:           %s\n", cfg.Platform())
+	fmt.Printf("  Log Level:          %s\n", cfg.LogLevel())
+	fmt.Printf("  Log Format:         %s\n", cfg.LogFormat())
+	if cfg.LogFile() != "" {
+		fmt.Printf("  Log File:           %s\n", cfg.LogFile())
+	}
+	fmt.Printf("  Dry Run:            %v\n", cfg.DryRun())
+	fmt.Printf("  Default TTL:        %d\n", cfg.Global.DefaultTTL)
+	fmt.Printf("  Reconcile Interval: %s\n", cfg.ReconcileInterval())
+	fmt.Printf("  Shutdown Timeout:   %s\n", cfg.ShutdownTimeout())
+	fmt.Printf("  Health Port:        %d\n", cfg.HealthPort())
+	if cfg.InstanceID() != "" {
+		fmt.Printf("  Instance ID:        %s\n", cfg.InstanceID())
+	}
+	fmt.Printf("  Providers:          %d configured\n", len(cfg.ProviderNames))
+	for _, name := range cfg.ProviderNames {
+		inst, ok := cfg.GetProviderInstance(name)
+		if ok {
+			fmt.Printf("    - %s (type: %s, record: %s, domains: %d)\n",
+				name, inst.TypeName, inst.RecordType, len(inst.Domains)+len(inst.DomainsRegex))
+		}
+	}
+
+	return nil
 }
 
 func run() error {
@@ -79,7 +121,7 @@ func run() error {
 	}
 
 	// Set up structured logging
-	logger := setupLogger(cfg.LogLevel(), cfg.LogFormat())
+	logger := setupLogger(cfg)
 	slog.SetDefault(logger)
 
 	// Set build info metrics
@@ -93,7 +135,24 @@ func run() error {
 		slog.Bool("dry_run", cfg.DryRun()),
 		slog.Bool("adopt_existing", cfg.AdoptExisting()),
 		slog.String("instance_id", cfg.InstanceID()),
+		slog.String("log_file", cfg.LogFile()),
 	)
+
+	// Log validated configuration summary
+	for _, name := range cfg.ProviderNames {
+		inst, ok := cfg.GetProviderInstance(name)
+		if ok {
+			domainCount := len(inst.Domains) + len(inst.DomainsRegex)
+			logger.Info("provider configured",
+				slog.String("name", name),
+				slog.String("type", inst.TypeName),
+				slog.String("record_type", string(inst.RecordType)),
+				slog.String("mode", string(inst.Mode)),
+				slog.Int("domains", domainCount),
+				slog.Int("ttl", inst.TTL),
+			)
+		}
+	}
 
 	// Create context with cancellation for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -150,13 +209,7 @@ func run() error {
 		return fmt.Errorf("initializing providers: %w", err)
 	}
 
-	// Start provider manager background retry loop
-	if err := providerManager.Start(ctx); err != nil {
-		return fmt.Errorf("starting provider manager: %w", err)
-	}
-	defer providerManager.Stop()
-
-	// Log provider status summary
+	// Log provider status summary (manager background retry starts later, after health server)
 	if providerManager.PendingCount() > 0 {
 		logger.Warn("some providers failed to initialize and will be retried",
 			slog.Int("ready", providerManager.ReadyCount()),
@@ -232,29 +285,55 @@ func run() error {
 	}
 
 	// Create reconciliation trigger function with concurrency guard.
-	// Timer ticks, Docker events, and K8s events can all trigger reconciliation
-	// concurrently. TryLock ensures only one runs at a time — concurrent callers
-	// skip rather than queue, since a running reconciliation will pick up changes.
-	var reconcileMu sync.Mutex
-	triggerReconcile := func() {
-		if !reconcileMu.TryLock() {
-			logger.Debug("reconciliation already in progress, skipping")
-			return
-		}
-		defer reconcileMu.Unlock()
+	// TryLock ensures only one reconciliation runs at a time. When a trigger
+	// is skipped (lock held), reconcilePending is set so the running
+	// reconciliation performs a follow-up pass to catch changes that arrived
+	// mid-cycle — including Docker/K8s events during the initial startup scan (#55).
+	var (
+		reconcileMu      sync.Mutex
+		reconcilePending atomic.Bool
+		reconcileWg      sync.WaitGroup // tracks in-flight reconciliations for graceful shutdown
+	)
 
+	doReconcile := func(reason string) {
 		result, err := rec.Reconcile(ctx)
 		if err != nil {
-			logger.Error("reconciliation failed", slog.String("error", err.Error()))
+			logger.Error("reconciliation failed",
+				slog.String("reason", reason),
+				slog.String("error", err.Error()),
+			)
 			return
 		}
 		logger.Info("reconciliation complete",
+			slog.String("reason", reason),
 			slog.Int("created", result.CreatedCount()),
 			slog.Int("deleted", result.DeletedCount()),
 			slog.Int("skipped", len(result.Skipped())),
 			slog.Int("errors", result.FailedCount()),
 			slog.Duration("duration", result.Duration()),
 		)
+	}
+
+	triggerReconcile := func() {
+		if !reconcileMu.TryLock() {
+			reconcilePending.Store(true)
+			logger.Debug("reconciliation already in progress, marking pending")
+			return
+		}
+
+		reconcileWg.Add(1)
+		defer func() {
+			reconcileWg.Done()
+			reconcileMu.Unlock()
+		}()
+
+		doReconcile("triggered")
+
+		// If a trigger was skipped while we were reconciling, run once more
+		// to pick up changes that arrived mid-cycle (e.g., events during startup).
+		if reconcilePending.CompareAndSwap(true, false) {
+			doReconcile("pending catch-up")
+		}
 	}
 
 	// Set reconcile callback on K8s watcher (now that triggerReconcile exists)
@@ -317,6 +396,23 @@ func run() error {
 		}
 		return false, ""
 	})
+
+	// Register recovered-provider callback so health checkers are added
+	// when pending providers come online (#127). Must be set before Start().
+	providerManager.SetOnProviderReady(func(name string, inst *provider.ProviderInstance) {
+		healthServer.RegisterChecker("provider:"+name, func(ctx context.Context) error {
+			return inst.Ping(ctx)
+		})
+		logger.Info("registered health checker for recovered provider",
+			slog.String("provider", name),
+		)
+	})
+
+	// Start provider manager background retry loop (after health callback is wired)
+	if err := providerManager.Start(ctx); err != nil {
+		return fmt.Errorf("starting provider manager: %w", err)
+	}
+	defer providerManager.Stop()
 
 	if err := healthServer.Start(); err != nil {
 		return fmt.Errorf("starting health server: %w", err)
@@ -385,24 +481,56 @@ func run() error {
 	sig := <-sigChan
 	logger.Info("received shutdown signal", slog.String("signal", sig.String()))
 
-	// Graceful shutdown
-	logger.Info("shutting down...")
-	cancel()
+	// Graceful shutdown sequence:
+	// 1. Mark health as shutting down (returns 503 to load balancers)
+	// 2. Stop accepting new events (watchers)
+	// 3. Cancel periodic reconciliation
+	// 4. Wait for in-flight reconciliation to complete (with timeout)
+	// 5. Cancel context and clean up
 
-	// Wait for periodic reconciliation goroutine to exit
-	wg.Wait()
+	logger.Info("shutting down gracefully",
+		slog.Duration("timeout", cfg.ShutdownTimeout()),
+	)
 
+	// Step 1: Health endpoint returns 503, signaling orchestrators to drain
+	healthServer.SetShuttingDown()
+
+	// Step 2: Stop watchers — no new events will trigger reconciliation
 	if dockerWatcher != nil {
 		dockerWatcher.Stop()
+		logger.Debug("docker watcher stopped")
 	}
 	if k8sWatcher != nil {
 		k8sWatcher.Stop()
+		logger.Debug("kubernetes watcher stopped")
 	}
 	if fileWatcher != nil {
 		fileWatcher.Stop()
+		logger.Debug("file watcher stopped")
 	}
 
-	// Shutdown health server with timeout
+	// Step 3: Cancel context to stop periodic reconciliation goroutine
+	cancel()
+	wg.Wait()
+	logger.Debug("periodic reconciliation stopped")
+
+	// Step 4: Wait for in-flight reconciliation to complete (with timeout)
+	reconcileDone := make(chan struct{})
+	go func() {
+		reconcileWg.Wait()
+		close(reconcileDone)
+	}()
+
+	select {
+	case <-reconcileDone:
+		logger.Info("in-flight operations completed")
+	case <-time.After(cfg.ShutdownTimeout()):
+		logger.Warn("shutdown timeout exceeded, in-flight operations may be incomplete",
+			slog.Duration("timeout", cfg.ShutdownTimeout()),
+		)
+	}
+
+	// Step 5: Shutdown health server
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	if err := healthServer.Shutdown(shutdownCtx); err != nil {
@@ -411,166 +539,4 @@ func run() error {
 
 	logger.Info("dnsweaver shutdown complete")
 	return nil
-}
-
-func setupLogger(level, format string) *slog.Logger {
-	logLevel := parseLogLevel(level)
-
-	var handler slog.Handler
-	if format == "text" {
-		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})
-	} else {
-		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel})
-	}
-
-	return slog.New(handler)
-}
-
-// parseLogLevel converts a string log level to slog.Level.
-func parseLogLevel(level string) slog.Level {
-	switch level {
-	case "debug":
-		return slog.LevelDebug
-	case "warn", "warning":
-		return slog.LevelWarn
-	case "error":
-		return slog.LevelError
-	default:
-		return slog.LevelInfo
-	}
-}
-
-func parseDockerMode(mode string) docker.Mode {
-	switch mode {
-	case "swarm":
-		return docker.ModeSwarm
-	case "standalone":
-		return docker.ModeStandalone
-	default:
-		return docker.ModeAuto
-	}
-}
-
-func registerSources(registry *source.Registry, cfg *config.Config, logger *slog.Logger) error {
-	for _, name := range cfg.SourceNames() {
-		switch name {
-		case "traefik":
-			src := createTraefikSource(cfg, logger)
-			if err := registry.Register(src); err != nil {
-				return fmt.Errorf("registering traefik source: %w", err)
-			}
-			logger.Info("registered source",
-				slog.String("name", name),
-				slog.Bool("file_discovery", src.SupportsDiscovery()),
-			)
-		case "dnsweaver":
-			src := dnsweaversource.New(dnsweaversource.WithLogger(logger))
-			if err := registry.Register(src); err != nil {
-				return fmt.Errorf("registering dnsweaver source: %w", err)
-			}
-			logger.Info("registered source",
-				slog.String("name", name),
-				slog.Bool("file_discovery", src.SupportsDiscovery()),
-			)
-		case "kubernetes":
-			src := k8ssource.New(k8ssource.WithLogger(logger))
-			if err := registry.Register(src); err != nil {
-				return fmt.Errorf("registering kubernetes source: %w", err)
-			}
-			logger.Info("registered source",
-				slog.String("name", name),
-			)
-		default:
-			logger.Warn("unknown source, skipping", slog.String("source", name))
-		}
-	}
-
-	// Auto-register kubernetes source when K8s platform is enabled.
-	// This source is always needed for K8s workloads (reads pre-extracted
-	// hostnames from resource converters). It doesn't need to be explicitly
-	// listed in DNSWEAVER_SOURCES — it's platform-implied.
-	if cfg.UseKubernetes() {
-		if registry.Get("kubernetes") == nil {
-			src := k8ssource.New(k8ssource.WithLogger(logger))
-			if err := registry.Register(src); err != nil {
-				return fmt.Errorf("registering kubernetes source: %w", err)
-			}
-			logger.Info("auto-registered kubernetes source for K8s platform")
-		}
-	}
-
-	return nil
-}
-
-func createTraefikSource(cfg *config.Config, logger *slog.Logger) *traefik.Traefik {
-	opts := []traefik.Option{
-		traefik.WithLogger(logger),
-	}
-
-	// Configure file discovery if paths are set
-	srcCfg := cfg.GetSourceInstance("traefik")
-	if srcCfg != nil && srcCfg.FileDiscovery.IsEnabled() {
-		opts = append(opts, traefik.WithFileDiscovery(srcCfg.FileDiscovery))
-		logger.Debug("traefik file discovery configured",
-			slog.Any("paths", srcCfg.FileDiscovery.FilePaths),
-			slog.String("pattern", srcCfg.FileDiscovery.FilePattern),
-		)
-	}
-
-	return traefik.New(opts...)
-}
-
-func registerProviderFactories(registry *provider.Registry) {
-	// Register Technitium provider factory (private DNS)
-	registry.RegisterFactory("technitium", technitium.Factory())
-
-	// Register Cloudflare provider factory (public DNS)
-	registry.RegisterFactory("cloudflare", cloudflare.Factory())
-
-	// Register Webhook provider factory (custom integrations)
-	registry.RegisterFactory("webhook", webhook.Factory())
-
-	// Register dnsmasq provider factory (local DNS, Pi-hole backend)
-	registry.RegisterFactory("dnsmasq", dnsmasq.Factory())
-
-	// Register Pi-hole provider factory (local DNS via Pi-hole API or file mode)
-	registry.RegisterFactory("pihole", pihole.Factory())
-
-	// Register RFC 2136 provider factory (BIND, Windows DNS, PowerDNS, etc.)
-	registry.RegisterFactory("rfc2136", rfc2136.Factory())
-}
-
-// initializeProviders initializes all configured providers using the manager.
-// Unlike createProviderInstances, this method does not fail fatally if a provider
-// is temporarily unavailable - it queues it for retry instead.
-func initializeProviders(manager *provider.Manager, cfg *config.Config) error {
-	for _, inst := range cfg.ProviderInstances {
-		providerCfg := inst.ToProviderConfig()
-		if err := manager.InitializeProvider(providerCfg); err != nil {
-			// Only returns error for invalid configuration (not connection failures)
-			return fmt.Errorf("invalid provider config %s: %w", inst.Name, err)
-		}
-	}
-	return nil
-}
-
-// buildK8sConfig converts application config into Kubernetes watcher config.
-func buildK8sConfig(cfg *config.Config) k8s.Config {
-	k8sCfg := k8s.DefaultConfig()
-	k8sCfg.Kubeconfig = cfg.K8sKubeconfig()
-	k8sCfg.WatchIngress = cfg.K8sWatchIngress()
-	k8sCfg.WatchIngressRoute = cfg.K8sWatchIngressRoute()
-	k8sCfg.WatchHTTPRoute = cfg.K8sWatchHTTPRoute()
-	k8sCfg.WatchServices = cfg.K8sWatchServices()
-	k8sCfg.LabelSelector = cfg.K8sLabelSelector()
-	k8sCfg.AnnotationFilter = cfg.K8sAnnotationFilter()
-
-	if ns := cfg.K8sNamespaces(); ns != "" {
-		k8sCfg.Namespaces = strings.Split(ns, ",")
-		for i := range k8sCfg.Namespaces {
-			k8sCfg.Namespaces[i] = strings.TrimSpace(k8sCfg.Namespaces[i])
-		}
-	}
-
-	return k8sCfg
 }
