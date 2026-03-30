@@ -16,6 +16,14 @@ external-dns is primarily designed for Kubernetes and cloud DNS providers. dnswe
 
 No. dnsweaver connects to the Docker socket (or socket proxy) and watches events cluster-wide in Swarm mode. Run a single instance on a manager node.
 
+### How does dnsweaver work in Kubernetes?
+
+dnsweaver watches Kubernetes resources (Ingress, IngressRoute, HTTPRoute, Service) for hostname information and creates DNS records automatically. It uses a ServiceAccount with RBAC permissions — no Docker socket needed. Deploy as a single-replica Deployment via Helm or Kustomize.
+
+### Can I run dnsweaver on both Docker and Kubernetes at the same time?
+
+Yes! Set `DNSWEAVER_PLATFORM=both` to watch Docker events and Kubernetes resources simultaneously. This is useful for mixed environments or gradual migrations between platforms.
+
 ### Can dnsweaver manage existing DNS records?
 
 By default, dnsweaver only manages records it creates (tracked via ownership TXT records). To adopt existing records:
@@ -42,6 +50,20 @@ Enable debug logging to see what's happening:
 - DNSWEAVER_LOG_LEVEL=debug
 ```
 
+### Why aren't my Kubernetes resources being detected?
+
+Common causes:
+
+1. **RBAC**: The ServiceAccount needs `get`, `list`, `watch` on the resource types you're using (Ingress, IngressRoute, HTTPRoute, Service)
+2. **Namespace filtering**: If `DNSWEAVER_KUBE_NAMESPACES` is set, only those namespaces are watched
+3. **Resource type**: dnsweaver watches Ingress, IngressRoute (Traefik CRD), HTTPRoute (Gateway API), and Service resources — verify yours is a supported type
+4. **Hostname extraction**: The hostname must be in a recognized field (e.g., `.spec.rules[].host` for Ingress)
+
+Enable debug logging:
+```yaml
+- DNSWEAVER_LOG_LEVEL=debug
+```
+
 ### How do I use different record types for different subdomains?
 
 Create multiple provider instances with different configurations:
@@ -64,7 +86,7 @@ Configure two provider instances with the same domain patterns but different rec
 - DNSWEAVER_INSTANCES=dns-v4,dns-v6
 
 - DNSWEAVER_DNS_V4_RECORD_TYPE=A
-- DNSWEAVER_DNS_V4_TARGET=10.0.0.100
+- DNSWEAVER_DNS_V4_TARGET=192.0.2.100
 - DNSWEAVER_DNS_V4_DOMAINS=*.example.com
 
 - DNSWEAVER_DNS_V6_RECORD_TYPE=AAAA
@@ -91,6 +113,18 @@ Use `EXCLUDE_DOMAINS`:
 - DNSWEAVER_INTERNAL_EXCLUDE_DOMAINS=admin.example.com,secret.example.com
 ```
 
+### What configuration options are available for Kubernetes?
+
+In addition to the standard provider configuration, Kubernetes-specific options include:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DNSWEAVER_PLATFORM` | Platform to watch: `docker`, `kubernetes`, or `both` | `docker` |
+| `DNSWEAVER_KUBE_NAMESPACES` | Comma-separated list of namespaces to watch | All namespaces |
+| `DNSWEAVER_KUBE_LABEL_SELECTOR` | Label selector to filter watched resources | None |
+
+See the [Kubernetes source docs](sources/kubernetes.md) for the full list.
+
 ## Operations
 
 ### Why do I see duplicate records?
@@ -104,6 +138,7 @@ Possible causes:
 ### How often does dnsweaver check for changes?
 
 - **Docker events**: Real-time via event stream
+- **Kubernetes events**: Real-time via watch API
 - **Reconciliation**: Periodic (default 60s) to catch any missed events
 - **File sources**: Configurable poll interval
 
@@ -158,6 +193,20 @@ ls -la /var/run/docker.sock
 docker exec dnsweaver ls -la /var/run/docker.sock
 ```
 
+!!! tip
+    If running on Kubernetes only, set `DNSWEAVER_PLATFORM=kubernetes` to skip the Docker connection entirely.
+
+### "Failed to create Kubernetes watcher"
+
+Check RBAC permissions:
+
+```bash
+# Verify the ServiceAccount has the correct ClusterRole
+kubectl auth can-i list ingresses --as=system:serviceaccount:dnsweaver:dnsweaver
+```
+
+See the [Kubernetes deployment guide](deployment/kubernetes.md) for the required RBAC configuration.
+
 ### "Provider authentication failed"
 
 Verify credentials:
@@ -183,10 +232,6 @@ Or add the CA certificate to dnsweaver's trust store.
 4. Check for zone/domain mismatch
 
 ## Feature Requests
-
-### Does dnsweaver support both Docker and Kubernetes?
-
-Yes! Set `platform: both` to watch Docker events and Kubernetes resources simultaneously. This is useful for mixed environments or gradual migrations. See the [Kubernetes deployment guide](deployment/kubernetes.md) for details.
 
 ### Will you add support for [DNS Provider X]?
 

@@ -10,7 +10,7 @@ Split-horizon DNS (also called split-brain DNS) allows the same hostname to reso
 ```mermaid
 flowchart TB
     subgraph Internal["Internal Query (LAN)"]
-        A1[app.example.com] --> B1[10.0.0.100]
+        A1[app.example.com] --> B1[192.0.2.100]
         B1 --> C1[Direct to reverse proxy]
     end
     subgraph External["External Query (Internet)"]
@@ -38,7 +38,7 @@ environment:
   - DNSWEAVER_INTERNAL_TOKEN_FILE=/run/secrets/technitium_token
   - DNSWEAVER_INTERNAL_ZONE=example.com
   - DNSWEAVER_INTERNAL_RECORD_TYPE=A
-  - DNSWEAVER_INTERNAL_TARGET=10.0.0.100
+  - DNSWEAVER_INTERNAL_TARGET=192.0.2.100
   - DNSWEAVER_INTERNAL_DOMAINS=*.example.com
 
   # External DNS (Cloudflare)
@@ -51,7 +51,7 @@ environment:
 ```
 
 When container `app.example.com` starts:
-- Internal DNS → `A` record → `10.0.0.100`
+- Internal DNS → `A` record → `192.0.2.100`
 - External DNS → `CNAME` record → `tunnel.example.com`
 
 ## Internal-Only Services
@@ -98,7 +98,7 @@ flowchart LR
 # Internal: A record to reverse proxy
 - DNSWEAVER_INTERNAL_TYPE=technitium
 - DNSWEAVER_INTERNAL_RECORD_TYPE=A
-- DNSWEAVER_INTERNAL_TARGET=10.0.0.100
+- DNSWEAVER_INTERNAL_TARGET=192.0.2.100
 ```
 
 ### Pattern 2: Public IP + Internal IP
@@ -122,7 +122,7 @@ flowchart LR
 # Internal: A record to private IP
 - DNSWEAVER_INTERNAL_TYPE=technitium
 - DNSWEAVER_INTERNAL_RECORD_TYPE=A
-- DNSWEAVER_INTERNAL_TARGET=10.0.0.100
+- DNSWEAVER_INTERNAL_TARGET=192.0.2.100
 ```
 
 ### Pattern 3: Different Subdomains
@@ -130,7 +130,7 @@ flowchart LR
 Different subdomain schemes for internal vs external:
 
 ```yaml
-# Internal: *.home.example.com → 10.0.0.100
+# Internal: *.home.example.com → 192.0.2.100
 - DNSWEAVER_INTERNAL_DOMAINS=*.home.example.com
 
 # External: *.example.com (excluding .home) → tunnel
@@ -156,7 +156,7 @@ services:
       - DNSWEAVER_INTERNAL_TOKEN_FILE=/run/secrets/technitium_token
       - DNSWEAVER_INTERNAL_ZONE=example.com
       - DNSWEAVER_INTERNAL_RECORD_TYPE=A
-      - DNSWEAVER_INTERNAL_TARGET=10.0.0.100
+      - DNSWEAVER_INTERNAL_TARGET=192.0.2.100
       - DNSWEAVER_INTERNAL_DOMAINS=*.example.com
 
       # External: Cloudflare with proxy
@@ -199,7 +199,7 @@ Test that both DNS providers have correct records:
 
 ```bash
 # Query internal DNS
-dig @10.0.0.53 webapp.example.com
+dig @192.0.2.53 webapp.example.com
 
 # Query external DNS (Cloudflare)
 dig @1.1.1.1 webapp.example.com

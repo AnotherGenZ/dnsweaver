@@ -9,8 +9,11 @@ dnsweaver exposes HTTP endpoints on port 8080 (configurable via `DNSWEAVER_HEALT
 | Endpoint | Description |
 |----------|-------------|
 | `/health` | Overall health status |
-| `/ready` | Readiness probe (for Kubernetes) |
+| `/ready` | Readiness probe (for load balancers and Kubernetes) |
 | `/metrics` | Prometheus metrics |
+
+!!! tip "Kubernetes probes"
+    The `/health` and `/ready` endpoints map directly to Kubernetes `livenessProbe` and `readinessProbe`. The Helm chart configures these automatically.
 
 ### Health Check
 
@@ -196,7 +199,7 @@ Configure via `DNSWEAVER_LOG_FORMAT`:
   "provider": "internal",
   "hostname": "app.example.com",
   "record_type": "A",
-  "target": "10.0.0.100"
+  "target": "192.0.2.100"
 }
 ```
 
@@ -256,7 +259,7 @@ groups:
 
 ## Docker Health Check
 
-Add to your deployment:
+Add to your Docker Compose or Swarm deployment:
 
 ```yaml
 healthcheck:
@@ -265,6 +268,51 @@ healthcheck:
   timeout: 10s
   retries: 3
   start_period: 10s
+```
+
+## Kubernetes Monitoring
+
+### ServiceMonitor (Prometheus Operator)
+
+If you use the Prometheus Operator, create a ServiceMonitor to scrape dnsweaver metrics:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dnsweaver
+  namespace: dnsweaver
+  labels:
+    release: prometheus  # Match your Prometheus Operator selector
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dnsweaver
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+```
+
+The Helm chart can create this automatically with `serviceMonitor.enabled=true`.
+
+### Pod Probes
+
+The Helm chart configures these by default:
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 30
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
 ```
 
 ## Debug Mode

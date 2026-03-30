@@ -76,20 +76,39 @@ go test -v ./...
 
 ## Running Locally
 
-### Option 1: Environment Variables
+### Option 1: Environment Variables (Docker source)
 
 ```bash
 export DNSWEAVER_INSTANCES=test
 export DNSWEAVER_TEST_TYPE=webhook
 export DNSWEAVER_TEST_URL=http://localhost:8888
 export DNSWEAVER_TEST_RECORD_TYPE=A
-export DNSWEAVER_TEST_TARGET=10.0.0.1
+export DNSWEAVER_TEST_TARGET=192.0.2.1
 export DNSWEAVER_TEST_DOMAINS=*.test.local
 
 go run ./cmd/dnsweaver
 ```
 
-### Option 2: Docker Compose
+### Option 2: Kubernetes Source (local cluster)
+
+Use a local Kubernetes cluster (kind, k3d, minikube) to test the Kubernetes source:
+
+```bash
+export DNSWEAVER_PLATFORM=kubernetes
+export DNSWEAVER_INSTANCES=test
+export DNSWEAVER_TEST_TYPE=webhook
+export DNSWEAVER_TEST_URL=http://localhost:8888
+export DNSWEAVER_TEST_RECORD_TYPE=A
+export DNSWEAVER_TEST_TARGET=192.0.2.1
+export DNSWEAVER_TEST_DOMAINS=*.test.local
+export KUBECONFIG=~/.kube/config
+
+go run ./cmd/dnsweaver
+```
+
+Then create Ingress or other resources to trigger DNS record creation.
+
+### Option 3: Docker Compose
 
 Create a `docker-compose.dev.yml`:
 
@@ -104,7 +123,7 @@ services:
       - DNSWEAVER_TEST_TYPE=webhook
       - DNSWEAVER_TEST_URL=http://webhook-receiver:8080
       - DNSWEAVER_TEST_RECORD_TYPE=A
-      - DNSWEAVER_TEST_TARGET=10.0.0.1
+      - DNSWEAVER_TEST_TARGET=192.0.2.1
       - DNSWEAVER_TEST_DOMAINS=*.test.local
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -122,6 +141,43 @@ services:
 
 ```bash
 docker compose -f docker-compose.dev.yml up --build
+```
+
+### Kubernetes Development
+
+For testing the Kubernetes source, use a local cluster:
+
+```bash
+# Create a local cluster with kind
+kind create cluster --name dnsweaver-dev
+
+# Deploy dnsweaver from local build
+make docker-build
+kind load docker-image dnsweaver:dev --name dnsweaver-dev
+kubectl apply -k deploy/kustomize/base
+
+# Watch logs
+kubectl logs -n dnsweaver deploy/dnsweaver -f
+
+# Create a test Ingress to trigger DNS record creation
+kubectl apply -f - <<EOF
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: test-dns
+spec:
+  rules:
+    - host: test.test.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nginx
+                port:
+                  number: 80
+EOF
 ```
 
 ## Code Style

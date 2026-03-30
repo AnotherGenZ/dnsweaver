@@ -100,7 +100,7 @@ environment:
   - DNSWEAVER_INTERNAL_TOKEN_FILE=/run/secrets/technitium_token
   - DNSWEAVER_INTERNAL_ZONE=example.com
   - DNSWEAVER_INTERNAL_RECORD_TYPE=A
-  - DNSWEAVER_INTERNAL_TARGET=10.0.0.100
+  - DNSWEAVER_INTERNAL_TARGET=192.0.2.100
   - DNSWEAVER_INTERNAL_DOMAINS=*.example.com
 
   # External: Through Cloudflare Tunnel

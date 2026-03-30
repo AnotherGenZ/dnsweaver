@@ -35,7 +35,7 @@ services:
       DNSWEAVER_INTERNAL_TOKEN_FILE: "/run/secrets/technitium_token"
 
       # You can also override non-secret values if needed
-      # DNSWEAVER_INTERNAL_TARGET: "10.0.0.100"
+      # DNSWEAVER_INTERNAL_TARGET: "192.0.2.100"
       # DNSWEAVER_INTERNAL_TTL: "120"
 
     configs:

@@ -37,7 +37,7 @@ Each provider instance can operate in one of three modes, controlling how aggres
 When `ownership_tracking: true` (default), dnsweaver creates a TXT record alongside each DNS record to track ownership:
 
 ```
-app.home.example.com       A      10.0.0.100
+app.home.example.com       A      192.0.2.100
 _dnsweaver.app.home.example.com  TXT    "dnsweaver-id=abc123"
 ```
 

@@ -17,7 +17,7 @@ services:
       - DNSWEAVER_INTERNAL_TOKEN_FILE=/run/secrets/dns_token
       - DNSWEAVER_INTERNAL_ZONE=home.example.com
       - DNSWEAVER_INTERNAL_RECORD_TYPE=A
-      - DNSWEAVER_INTERNAL_TARGET=10.0.0.100
+      - DNSWEAVER_INTERNAL_TARGET=192.0.2.100
       - DNSWEAVER_INTERNAL_DOMAINS=*.home.example.com
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -61,7 +61,7 @@ services:
       - DNSWEAVER_INTERNAL_TOKEN_FILE=/run/secrets/dns_token
       - DNSWEAVER_INTERNAL_ZONE=home.example.com
       - DNSWEAVER_INTERNAL_RECORD_TYPE=A
-      - DNSWEAVER_INTERNAL_TARGET=10.0.0.100
+      - DNSWEAVER_INTERNAL_TARGET=192.0.2.100
       - DNSWEAVER_INTERNAL_DOMAINS=*.home.example.com
     depends_on:
       - socket-proxy
@@ -103,7 +103,7 @@ services:
       - DNSWEAVER_INTERNAL_TOKEN_FILE=/run/secrets/technitium_token
       - DNSWEAVER_INTERNAL_ZONE=home.example.com
       - DNSWEAVER_INTERNAL_RECORD_TYPE=A
-      - DNSWEAVER_INTERNAL_TARGET=10.0.0.100
+      - DNSWEAVER_INTERNAL_TARGET=192.0.2.100
       - DNSWEAVER_INTERNAL_DOMAINS=*.home.example.com,*.example.com
 
       # External DNS (Cloudflare)
@@ -157,7 +157,7 @@ services:
       - DNSWEAVER_INTERNAL_TOKEN_FILE=/run/secrets/dns_token
       - DNSWEAVER_INTERNAL_ZONE=home.example.com
       - DNSWEAVER_INTERNAL_RECORD_TYPE=A
-      - DNSWEAVER_INTERNAL_TARGET=10.0.0.100  # Traefik's IP
+      - DNSWEAVER_INTERNAL_TARGET=192.0.2.100  # Traefik's IP
       - DNSWEAVER_INTERNAL_DOMAINS=*.home.example.com
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -168,7 +168,7 @@ services:
     image: traefik/whoami
     labels:
       - "traefik.http.routers.whoami.rule=Host(`whoami.home.example.com`)"
-    # dnsweaver will create: whoami.home.example.com → 10.0.0.100
+    # dnsweaver will create: whoami.home.example.com → 192.0.2.100
 
 secrets:
   dns_token:

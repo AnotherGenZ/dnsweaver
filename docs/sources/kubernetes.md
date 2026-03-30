@@ -113,7 +113,7 @@ kind: IngressRoute
 metadata:
   name: internal-app
   annotations:
-    dnsweaver.dev/target: "10.0.0.100"
+    dnsweaver.dev/target: "192.0.2.100"
     dnsweaver.dev/provider: "internal-dns"
     dnsweaver.dev/record-type: "A"
 spec:

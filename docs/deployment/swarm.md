@@ -17,7 +17,7 @@ services:
       - DNSWEAVER_INTERNAL_TOKEN_FILE=/run/secrets/dns_token
       - DNSWEAVER_INTERNAL_ZONE=home.example.com
       - DNSWEAVER_INTERNAL_RECORD_TYPE=A
-      - DNSWEAVER_INTERNAL_TARGET=10.0.0.100
+      - DNSWEAVER_INTERNAL_TARGET=192.0.2.100
       - DNSWEAVER_INTERNAL_DOMAINS=*.home.example.com
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -105,7 +105,7 @@ services:
       - DNSWEAVER_INTERNAL_TOKEN_FILE=/run/secrets/dns_token
       - DNSWEAVER_INTERNAL_ZONE=home.example.com
       - DNSWEAVER_INTERNAL_RECORD_TYPE=A
-      - DNSWEAVER_INTERNAL_TARGET=10.0.0.100
+      - DNSWEAVER_INTERNAL_TARGET=192.0.2.100
       - DNSWEAVER_INTERNAL_DOMAINS=*.home.example.com
     networks:
       - socket-proxy
@@ -188,7 +188,7 @@ services:
       - DNSWEAVER_INTERNAL_TOKEN_FILE=/run/secrets/technitium_token
       - DNSWEAVER_INTERNAL_ZONE=example.com
       - DNSWEAVER_INTERNAL_RECORD_TYPE=A
-      - DNSWEAVER_INTERNAL_TARGET=10.0.0.100
+      - DNSWEAVER_INTERNAL_TARGET=192.0.2.100
       - DNSWEAVER_INTERNAL_DOMAINS=*.example.com
 
       # External DNS

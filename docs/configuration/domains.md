@@ -49,9 +49,9 @@ When a hostname matches multiple providers, dnsweaver creates records in **all**
 ```bash
 DNSWEAVER_INSTANCES=internal-dns,public-dns
 
-# Internal DNS: *.example.com → 10.0.0.100 (private IP)
+# Internal DNS: *.example.com → 192.0.2.100 (private IP)
 DNSWEAVER_INTERNAL_DNS_DOMAINS=*.example.com
-DNSWEAVER_INTERNAL_DNS_TARGET=10.0.0.100
+DNSWEAVER_INTERNAL_DNS_TARGET=192.0.2.100
 
 # Public DNS: *.example.com → public.example.com (public CNAME)
 DNSWEAVER_PUBLIC_DNS_DOMAINS=*.example.com
@@ -60,7 +60,7 @@ DNSWEAVER_PUBLIC_DNS_TARGET=public.example.com
 
 With this configuration, `app.example.com` creates records in **both** providers:
 
-- Internal DNS: `app.example.com → A → 10.0.0.100`
+- Internal DNS: `app.example.com → A → 192.0.2.100`
 - Public DNS: `app.example.com → CNAME → public.example.com`
 
 ### Non-Overlapping Patterns

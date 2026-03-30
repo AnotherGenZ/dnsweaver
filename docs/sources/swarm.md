@@ -44,7 +44,7 @@ For Swarm, `TARGET` typically points to your reverse proxy or Swarm ingress:
 Point to the Swarm VIP for your reverse proxy:
 
 ```yaml
-- DNSWEAVER_INTERNAL_TARGET=10.0.0.100  # Traefik service VIP
+- DNSWEAVER_INTERNAL_TARGET=192.0.2.100  # Traefik service VIP
 ```
 
 ### Ingress Mode
@@ -52,7 +52,7 @@ Point to the Swarm VIP for your reverse proxy:
 Point to the Swarm ingress network gateway:
 
 ```yaml
-- DNSWEAVER_INTERNAL_TARGET=10.0.0.1  # Swarm ingress gateway
+- DNSWEAVER_INTERNAL_TARGET=192.0.2.1  # Swarm ingress gateway
 ```
 
 ### CNAME to Proxy
@@ -81,7 +81,7 @@ services:
       - DNSWEAVER_INTERNAL_TOKEN_FILE=/run/secrets/dns_token
       - DNSWEAVER_INTERNAL_ZONE=home.example.com
       - DNSWEAVER_INTERNAL_RECORD_TYPE=A
-      - DNSWEAVER_INTERNAL_TARGET=10.0.0.100
+      - DNSWEAVER_INTERNAL_TARGET=192.0.2.100
       - DNSWEAVER_INTERNAL_DOMAINS=*.home.example.com
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro

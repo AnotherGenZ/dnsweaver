@@ -24,7 +24,7 @@ Standardized test checklist for workload discovery sources. Every source must pa
 | L2 | Multiple hosts | Parse `Host(\`a.com\`) \|\| Host(\`b.com\`)` → two hostnames | Required |
 | L3 | Native labels | Parse `dnsweaver.hostname=app.example.com` | Required |
 | L4 | Record type hints | Parse `dnsweaver.type=CNAME` or `dnsweaver.type=A` | Required |
-| L5 | Target override | Parse `dnsweaver.target=10.0.0.1` override | Recommended |
+| L5 | Target override | Parse `dnsweaver.target=192.0.2.1` override | Recommended |
 | L6 | SRV hints | Parse SRV-specific labels (port, weight, priority) | Recommended |
 | L7 | Missing labels | Container without DNS labels → excluded from results | Required |
 | L8 | Malformed labels | Invalid label syntax → skip with warning, don't error | Required |

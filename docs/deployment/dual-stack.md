@@ -9,12 +9,12 @@ dnsweaver treats each provider instance independently. To create both A and AAAA
 ```mermaid
 flowchart LR
     subgraph dnsweaver
-        V4[dns-v4 instance<br/>Record: A<br/>Target: 10.0.0.100]
+        V4[dns-v4 instance<br/>Record: A<br/>Target: 192.0.2.100]
         V6[dns-v6 instance<br/>Record: AAAA<br/>Target: fd00::100]
     end
     V4 --> DNS[(DNS Server)]
     V6 --> DNS
-    DNS --> R1["app.example.com → A 10.0.0.100"]
+    DNS --> R1["app.example.com → A 192.0.2.100"]
     DNS --> R2["app.example.com → AAAA fd00::100"]
 ```
 
@@ -32,7 +32,7 @@ environment:
   - DNSWEAVER_DNS_V4_TOKEN_FILE=/run/secrets/dns_token
   - DNSWEAVER_DNS_V4_ZONE=example.com
   - DNSWEAVER_DNS_V4_RECORD_TYPE=A
-  - DNSWEAVER_DNS_V4_TARGET=10.0.0.100
+  - DNSWEAVER_DNS_V4_TARGET=192.0.2.100
   - DNSWEAVER_DNS_V4_DOMAINS=*.example.com
 
   # IPv6 records
@@ -59,7 +59,7 @@ providers:
     token_file: /run/secrets/dns_token
     zone: example.com
     record_type: A
-    target: 10.0.0.100
+    target: 192.0.2.100
     domains:
       - "*.example.com"
 
@@ -103,7 +103,7 @@ environment:
   # Internal IPv4
   - DNSWEAVER_INTERNAL_V4_TYPE=technitium
   - DNSWEAVER_INTERNAL_V4_RECORD_TYPE=A
-  - DNSWEAVER_INTERNAL_V4_TARGET=10.0.0.100
+  - DNSWEAVER_INTERNAL_V4_TARGET=192.0.2.100
   - DNSWEAVER_INTERNAL_V4_DOMAINS=*.example.com
   # ... (URL, zone, token)
 

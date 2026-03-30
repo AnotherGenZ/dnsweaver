@@ -275,8 +275,8 @@ End-to-end scenarios testing system behavior across sources and providers.
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | Service running with target `10.0.0.1` | A record points to 10.0.0.1 |
-| 2 | Service target changes to `10.0.0.2` | Record updated to 10.0.0.2 |
+| 1 | Service running with target `192.0.2.1` | A record points to 192.0.2.1 |
+| 2 | Service target changes to `192.0.2.2` | Record updated to 192.0.2.2 |
 | 3 | Verify DNS resolution | Resolves to new target |
 
 #### TC-E2E-004: Multi-Service Conflict Resolution
