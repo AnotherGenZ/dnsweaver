@@ -46,7 +46,7 @@ environment:
   - DNSWEAVER_INTERNAL_TOKEN_FILE=/run/secrets/technitium_token
   - DNSWEAVER_INTERNAL_ZONE=home.example.com
   - DNSWEAVER_INTERNAL_RECORD_TYPE=A
-  - DNSWEAVER_INTERNAL_TARGET=10.0.0.100
+  - DNSWEAVER_INTERNAL_TARGET=192.0.2.100
   - DNSWEAVER_INTERNAL_DOMAINS=*.home.example.com
 
   # External: Cloudflare for *.example.com → CNAME to proxy
@@ -60,7 +60,7 @@ environment:
 ```
 
 A service with hostname `app.home.example.com` creates:
-- A record in Technitium → `10.0.0.100`
+- A record in Technitium → `192.0.2.100`
 - No record in Cloudflare (excluded by `EXCLUDE_DOMAINS`)
 
 A service with hostname `app.example.com` creates:
@@ -80,7 +80,7 @@ environment:
   - DNSWEAVER_ZONE_A_TOKEN_FILE=/run/secrets/tech_token
   - DNSWEAVER_ZONE_A_ZONE=alpha.example.com
   - DNSWEAVER_ZONE_A_RECORD_TYPE=A
-  - DNSWEAVER_ZONE_A_TARGET=10.0.1.100
+  - DNSWEAVER_ZONE_A_TARGET=198.51.100.100
   - DNSWEAVER_ZONE_A_DOMAINS=*.alpha.example.com
 
   - DNSWEAVER_ZONE_B_TYPE=technitium

@@ -123,7 +123,7 @@ services:
       - DNSWEAVER_TEST_TYPE=webhook
       - DNSWEAVER_TEST_URL=http://webhook-receiver:8080
       - DNSWEAVER_TEST_RECORD_TYPE=A
-      - DNSWEAVER_TEST_TARGET=10.0.0.1
+      - DNSWEAVER_TEST_TARGET=192.0.2.1
       - DNSWEAVER_TEST_DOMAINS=*.test.local
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro

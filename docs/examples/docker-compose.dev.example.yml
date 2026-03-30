@@ -30,7 +30,7 @@ services:
       - DNSWEAVER_TEST_DNS_TOKEN=${TECHNITIUM_TOKEN}
       - DNSWEAVER_TEST_DNS_ZONE=test.example.com
       - DNSWEAVER_TEST_DNS_DOMAIN_FILTER=test.example.com
-      - DNSWEAVER_TEST_DNS_TARGET=10.0.0.100
+      - DNSWEAVER_TEST_DNS_TARGET=192.0.2.100
       - DNSWEAVER_TEST_DNS_DOMAINS=*.test.example.com
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro

@@ -16,7 +16,7 @@ environment:
   - DNSWEAVER_DNSMASQ_TYPE=dnsmasq
   - DNSWEAVER_DNSMASQ_CONFIG_DIR=/etc/dnsmasq.d
   - DNSWEAVER_DNSMASQ_RECORD_TYPE=A
-  - DNSWEAVER_DNSMASQ_TARGET=10.0.0.100
+  - DNSWEAVER_DNSMASQ_TARGET=192.0.2.100
   - DNSWEAVER_DNSMASQ_DOMAINS=*.home.example.com
 volumes:
   - /path/to/dnsmasq.d:/etc/dnsmasq.d
@@ -61,8 +61,8 @@ dnsweaver creates a configuration file in the dnsmasq directory:
 
 ```
 # /etc/dnsmasq.d/dnsweaver.conf (managed by dnsweaver)
-address=/app.home.example.com/10.0.0.100
-address=/web.home.example.com/10.0.0.100
+address=/app.home.example.com/192.0.2.100
+address=/web.home.example.com/192.0.2.100
 cname=alias.home.example.com,target.home.example.com
 ```
 
@@ -72,12 +72,12 @@ cname=alias.home.example.com,target.home.example.com
 
 ```yaml
 - DNSWEAVER_DNSMASQ_RECORD_TYPE=A
-- DNSWEAVER_DNSMASQ_TARGET=10.0.0.100
+- DNSWEAVER_DNSMASQ_TARGET=192.0.2.100
 ```
 
 Produces:
 ```
-address=/hostname.example.com/10.0.0.100
+address=/hostname.example.com/192.0.2.100
 ```
 
 ### AAAA Records
@@ -153,7 +153,7 @@ environment:
   - DNSWEAVER_ROUTER_TYPE=dnsmasq
   - DNSWEAVER_ROUTER_CONFIG_DIR=/tmp/dnsmasq.d
   - DNSWEAVER_ROUTER_RECORD_TYPE=A
-  - DNSWEAVER_ROUTER_TARGET=10.0.0.100
+  - DNSWEAVER_ROUTER_TARGET=192.0.2.100
   - DNSWEAVER_ROUTER_DOMAINS=*.home.example.com
   - DNSWEAVER_ROUTER_RELOAD_COMMAND=killall -HUP dnsmasq
 
@@ -219,7 +219,7 @@ services:
       - DNSWEAVER_ROUTER_CONFIG_DIR=/tmp/dnsmasq.d
       - DNSWEAVER_ROUTER_CONFIG_FILE=dnsweaver.conf
       - DNSWEAVER_ROUTER_RECORD_TYPE=A
-      - DNSWEAVER_ROUTER_TARGET=10.0.0.100
+      - DNSWEAVER_ROUTER_TARGET=192.0.2.100
       - DNSWEAVER_ROUTER_DOMAINS=*.home.example.com
       - DNSWEAVER_ROUTER_RELOAD_COMMAND=killall -HUP dnsmasq
       - DNSWEAVER_ROUTER_SSH_HOST=192.168.1.1

@@ -37,7 +37,7 @@ The `internal/testutil` package provides reusable test infrastructure:
 ```go
 import "gitlab.bluewillows.net/root/dnsweaver/internal/testutil"
 
-rec := testutil.ARecord("app.example.com", "10.0.0.1")
+rec := testutil.ARecord("app.example.com", "192.0.2.1")
 txt := testutil.TXTRecord("app.example.com", "heritage=dnsweaver")
 own := testutil.OwnershipRecord("app.example.com")
 srv := testutil.SRVRecord("_http._tcp.app.example.com", "app.example.com", 80)
@@ -48,7 +48,7 @@ srv := testutil.SRVRecord("_http._tcp.app.example.com", "app.example.com", 80)
 ```go
 mock := testutil.NewMockProvider("test-provider", "example.com.")
 mock.AddRecords(
-    testutil.ARecord("app.example.com", "10.0.0.1"),
+    testutil.ARecord("app.example.com", "192.0.2.1"),
 )
 mock.SetCreateFunc(func(ctx context.Context, rec provider.Record) error {
     return nil // custom behavior

@@ -141,7 +141,7 @@ metadata:
   annotations:
     dnsweaver.dev/enabled: "true"
     dnsweaver.dev/record-type: "A"
-    dnsweaver.dev/target: "10.0.0.100"
+    dnsweaver.dev/target: "192.0.2.100"
     dnsweaver.dev/ttl: "300"
 spec:
   rules:
@@ -166,7 +166,7 @@ metadata:
   name: my-app
   annotations:
     dnsweaver.dev/provider: "internal"
-    dnsweaver.dev/target: "10.0.0.100"
+    dnsweaver.dev/target: "192.0.2.100"
 spec:
   entryPoints:
     - websecure

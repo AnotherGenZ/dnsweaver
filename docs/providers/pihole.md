@@ -20,7 +20,7 @@ environment:
   - DNSWEAVER_PIHOLE_URL=http://pihole:80
   - DNSWEAVER_PIHOLE_PASSWORD_FILE=/run/secrets/pihole_password
   - DNSWEAVER_PIHOLE_RECORD_TYPE=A
-  - DNSWEAVER_PIHOLE_TARGET=10.0.0.100
+  - DNSWEAVER_PIHOLE_TARGET=192.0.2.100
   - DNSWEAVER_PIHOLE_DOMAINS=*.home.example.com
 ```
 
@@ -36,7 +36,7 @@ environment:
   - DNSWEAVER_PIHOLE_ACCESS_MODE=file
   - DNSWEAVER_PIHOLE_CONFIG_DIR=/etc/pihole
   - DNSWEAVER_PIHOLE_RECORD_TYPE=A
-  - DNSWEAVER_PIHOLE_TARGET=10.0.0.100
+  - DNSWEAVER_PIHOLE_TARGET=192.0.2.100
   - DNSWEAVER_PIHOLE_DOMAINS=*.home.example.com
 volumes:
   - /path/to/pihole/etc:/etc/pihole
@@ -75,7 +75,7 @@ Pi-hole stores local DNS entries in `/etc/pihole/custom.list`:
 
 ```yaml
 - DNSWEAVER_PIHOLE_RECORD_TYPE=A
-- DNSWEAVER_PIHOLE_TARGET=10.0.0.100
+- DNSWEAVER_PIHOLE_TARGET=192.0.2.100
 ```
 
 ### CNAME Records

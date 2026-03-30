@@ -312,7 +312,7 @@ func TestClient_CreateRecord(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL, "test-token")
-	err := client.CreateRecord(context.Background(), "test.example.com", "A", "10.0.0.1")
+	err := client.CreateRecord(context.Background(), "test.example.com", "A", "192.0.2.1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -389,7 +389,7 @@ Your provider should support these record types as applicable:
 
 | Record Type | Purpose | Target Validation |
 |------------|---------|-------------------|
-| `A` | IPv4 address record | Valid IPv4 address (e.g., `10.0.0.100`) |
+| `A` | IPv4 address record | Valid IPv4 address (e.g., `192.0.2.100`) |
 | `AAAA` | IPv6 address record | Valid IPv6 address (e.g., `2001:db8::1` or `fd00::1`) |
 | `CNAME` | Canonical name (alias) | Valid hostname (e.g., `target.example.com`) |
 | `TXT` | Text record (used for ownership) | String value |

@@ -60,7 +60,7 @@ services:
       - DNSWEAVER_INTERNAL_DNS_TOKEN_FILE=/run/secrets/technitium_token
       - DNSWEAVER_INTERNAL_DNS_ZONE=home.example.com
       - DNSWEAVER_INTERNAL_DNS_RECORD_TYPE=A
-      - DNSWEAVER_INTERNAL_DNS_TARGET=10.0.0.100
+      - DNSWEAVER_INTERNAL_DNS_TARGET=192.0.2.100
       - DNSWEAVER_INTERNAL_DNS_DOMAINS=*.home.example.com
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -90,7 +90,7 @@ flowchart LR
 2. dnsweaver extracts the hostname and matches it against configured provider domain patterns
 
 3. The matching provider creates the DNS record:
-   - **A record**: `myapp.home.example.com → 10.0.0.100`
+   - **A record**: `myapp.home.example.com → 192.0.2.100`
    - **CNAME**: `myapp.example.com → proxy.example.com`
 
 4. When the container stops (or the Kubernetes resource is deleted), the DNS record is automatically cleaned up
@@ -130,7 +130,7 @@ metadata:
   name: my-app
   annotations:
     dnsweaver.dev/record-type: "A"
-    dnsweaver.dev/target: "10.0.0.100"
+    dnsweaver.dev/target: "192.0.2.100"
 spec:
   rules:
     - host: app.example.com
@@ -149,7 +149,7 @@ environment:
   # Internal: Technitium → private IP
   - DNSWEAVER_INTERNAL_TYPE=technitium
   - DNSWEAVER_INTERNAL_RECORD_TYPE=A
-  - DNSWEAVER_INTERNAL_TARGET=10.0.0.100
+  - DNSWEAVER_INTERNAL_TARGET=192.0.2.100
   - DNSWEAVER_INTERNAL_DOMAINS=*.example.com
 
   # External: Cloudflare → tunnel CNAME
@@ -160,7 +160,7 @@ environment:
 ```
 
 With this configuration, when `app.example.com` starts:
-- Internal DNS → `A` record → `10.0.0.100`
+- Internal DNS → `A` record → `192.0.2.100`
 - External DNS → `CNAME` record → `tunnel.example.com`
 
 ## Contributing

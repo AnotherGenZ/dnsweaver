@@ -19,7 +19,7 @@ environment:
   - DNSWEAVER_CUSTOM_URL=http://dns-api.internal/records
   - DNSWEAVER_CUSTOM_AUTH_TOKEN_FILE=/run/secrets/dns_api_token
   - DNSWEAVER_CUSTOM_RECORD_TYPE=A
-  - DNSWEAVER_CUSTOM_TARGET=10.0.0.100
+  - DNSWEAVER_CUSTOM_TARGET=192.0.2.100
   - DNSWEAVER_CUSTOM_DOMAINS=*.example.com
 ```
 
@@ -59,7 +59,7 @@ Content-Type: application/json
   "action": "create",
   "hostname": "app.example.com",
   "record_type": "A",
-  "value": "10.0.0.100",
+  "value": "192.0.2.100",
   "ttl": 300,
   "source": "docker",
   "container_id": "abc123...",
@@ -83,7 +83,7 @@ Content-Type: application/json
   "action": "delete",
   "hostname": "app.example.com",
   "record_type": "A",
-  "value": "10.0.0.100"
+  "value": "192.0.2.100"
 }
 ```
 
@@ -130,7 +130,7 @@ environment:
   - DNSWEAVER_HASS_URL=http://homeassistant:8123/api/webhook/dns_update
   - DNSWEAVER_HASS_AUTH_TOKEN_FILE=/run/secrets/hass_token
   - DNSWEAVER_HASS_RECORD_TYPE=A
-  - DNSWEAVER_HASS_TARGET=10.0.0.100
+  - DNSWEAVER_HASS_TARGET=192.0.2.100
   - DNSWEAVER_HASS_DOMAINS=*.home.example.com
 ```
 

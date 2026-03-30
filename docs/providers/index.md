@@ -89,7 +89,7 @@ DNSWEAVER_INSTANCES=internal,external
 # Internal: Technitium for LAN resolution
 DNSWEAVER_INTERNAL_TYPE=technitium
 DNSWEAVER_INTERNAL_RECORD_TYPE=A
-DNSWEAVER_INTERNAL_TARGET=10.0.0.100
+DNSWEAVER_INTERNAL_TARGET=192.0.2.100
 DNSWEAVER_INTERNAL_DOMAINS=*.example.com
 
 # External: Cloudflare for public resolution
@@ -101,7 +101,7 @@ DNSWEAVER_EXTERNAL_DOMAINS=*.example.com
 
 With this configuration, when a container with label `Host(`app.example.com`)` starts, or a Kubernetes Ingress with host `app.example.com` is created:
 
-1. Technitium gets: `app.example.com → A → 10.0.0.100`
+1. Technitium gets: `app.example.com → A → 192.0.2.100`
 2. Cloudflare gets: `app.example.com → CNAME → proxy.example.com`
 
 ## Provider Selection
@@ -136,7 +136,7 @@ All providers share these configuration options:
 By default, dnsweaver creates TXT records alongside DNS records to track ownership:
 
 ```
-app.example.com         A      10.0.0.100
+app.example.com         A      192.0.2.100
 _dnsweaver.app.example.com  TXT    "owner=dnsweaver,source=docker,id=abc123"
 ```
 

@@ -77,7 +77,7 @@ func TestReconcile_BasicCreateFlow(t *testing.T) {
     prov := testutil.NewMockProvider("test", "example.com.")
     src := testutil.NewMockSource()
     src.SetWorkloads(
-        testutil.SimpleWorkload("web", "web.example.com", "10.0.0.1"),
+        testutil.SimpleWorkload("web", "web.example.com", "192.0.2.1"),
     )
 
     r := newTestReconciler(t, prov, src)

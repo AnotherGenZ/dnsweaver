@@ -1,6 +1,6 @@
 # Environment Variables Reference
 
-All configuration is via environment variables with the `DNSWEAVER_` prefix. Variables support the `_FILE` suffix for Docker secrets.
+All configuration is via environment variables with the `DNSWEAVER_` prefix. Variables support the `_FILE` suffix for [secrets management](secrets.md) (Docker secrets, Kubernetes Secrets, or any file-based injection).
 
 ## Configuration File
 
