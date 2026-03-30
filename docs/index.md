@@ -1,13 +1,13 @@
 ---
-title: Automatic DNS for Docker
-description: dnsweaver automatically manages DNS records for your Docker containers with multi-provider support
+title: Automatic DNS for Docker & Kubernetes
+description: dnsweaver automatically manages DNS records for Docker containers and Kubernetes workloads with multi-provider support
 ---
 
 # dnsweaver
 
-**Automatic DNS record management for Docker containers with multi-provider support.**
+**Automatic DNS management for Docker and Kubernetes workloads with multi-provider support.**
 
-dnsweaver watches Docker events and automatically creates and deletes DNS records for services with reverse proxy labels (Traefik, etc.). Unlike single-provider tools, dnsweaver supports **split-horizon DNS** and **multiple DNS providers** simultaneously.
+dnsweaver watches Docker events and Kubernetes resources to automatically create and delete DNS records. Unlike single-provider or single-platform tools, dnsweaver supports **split-horizon DNS**, **multiple DNS providers** simultaneously, and works across **Docker**, **Docker Swarm**, and **Kubernetes** — or all of them at once.
 
 ---
 
@@ -31,13 +31,13 @@ dnsweaver watches Docker events and automatically creates and deletes DNS record
 
     [:octicons-arrow-right-24: Split-Horizon Guide](deployment/split-horizon.md)
 
--   :material-docker:{ .lg .middle } **Docker & Swarm Native**
+-   :material-docker:{ .lg .middle } **Docker, Swarm & Kubernetes**
 
     ---
 
-    Works with standalone Docker and Docker Swarm clusters. Socket proxy compatible for enhanced security.
+    First-class support for Docker, Docker Swarm, and Kubernetes. Run on one platform or all three simultaneously.
 
-    [:octicons-arrow-right-24: Docker Sources](sources/docker.md)
+    [:octicons-arrow-right-24: Sources Overview](sources/index.md)
 
 -   :material-chart-line:{ .lg .middle } **Observable**
 
@@ -53,30 +53,57 @@ dnsweaver watches Docker events and automatically creates and deletes DNS record
 
 ```mermaid
 flowchart LR
-    A["Docker Events<br/>(start/stop)"] --> B["dnsweaver<br/>(matching)"]
+    A["Docker Events"] --> B["dnsweaver<br/>(matching)"]
+    D["Kubernetes Resources"] --> B
     B --> C["DNS Providers<br/>(A/CNAME/SRV)"]
 ```
 
-1. A container starts with a Traefik label:
+=== "Docker / Swarm"
 
-    ```yaml
-    labels:
-      - "traefik.http.routers.myapp.rule=Host(`myapp.home.example.com`)" # (1)!
-    ```
+    1. A container starts with a Traefik label:
 
-    1. dnsweaver extracts hostnames from Traefik, Caddy, and native labels
+        ```yaml
+        labels:
+          - "traefik.http.routers.myapp.rule=Host(`myapp.home.example.com`)" # (1)!
+        ```
 
-2. dnsweaver extracts the hostname and matches it against configured provider domain patterns
+        1. dnsweaver extracts hostnames from Traefik, Caddy, and native labels
 
-3. The matching provider creates the DNS record:
-    - **A record**: `myapp.home.example.com → 10.0.0.100`
-    - **CNAME**: `myapp.example.com → proxy.example.com`
+    2. dnsweaver extracts the hostname and matches it against configured provider domain patterns
 
-4. When the container stops, the DNS record is automatically cleaned up
+    3. The matching provider creates the DNS record:
+        - **A record**: `myapp.home.example.com → 192.0.2.100`
+        - **CNAME**: `myapp.example.com → proxy.example.com`
+
+    4. When the container stops, the DNS record is automatically cleaned up
+
+=== "Kubernetes"
+
+    1. An Ingress, IngressRoute, HTTPRoute, or annotated Service is created:
+
+        ```yaml
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: myapp
+        spec:
+          rules:
+            - host: myapp.home.example.com # (1)!
+        ```
+
+        1. dnsweaver watches Ingress, IngressRoute (Traefik CRD), HTTPRoute (Gateway API), and Service resources
+
+    2. dnsweaver extracts the hostname and matches it against configured provider domain patterns
+
+    3. The matching provider creates the DNS record:
+        - **A record**: `myapp.home.example.com → 192.0.2.100`
+        - **CNAME**: `myapp.example.com → proxy.example.com`
+
+    4. When the resource is deleted, the DNS record is automatically cleaned up
 
 ## Quick Start
 
-!!! example "Minimal Docker Compose"
+=== "Docker Compose"
 
     ```yaml
     services:
@@ -89,7 +116,7 @@ flowchart LR
           - DNSWEAVER_INTERNAL_DNS_TOKEN_FILE=/run/secrets/technitium_token
           - DNSWEAVER_INTERNAL_DNS_ZONE=home.example.com
           - DNSWEAVER_INTERNAL_DNS_RECORD_TYPE=A
-          - DNSWEAVER_INTERNAL_DNS_TARGET=10.0.0.100 # (3)!
+          - DNSWEAVER_INTERNAL_DNS_TARGET=192.0.2.100 # (3)!
           - DNSWEAVER_INTERNAL_DNS_DOMAINS=*.home.example.com # (4)!
         volumes:
           - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -98,9 +125,31 @@ flowchart LR
     ```
 
     1. Comma-separated list of provider instance names
-    2. Provider type: `technitium`, `cloudflare`, `pihole`, `dnsmasq`, or `webhook`
+    2. Provider type: `technitium`, `cloudflare`, `pihole`, `dnsmasq`, `rfc2136`, or `webhook`
     3. Target IP for A records (or CNAME target hostname)
     4. Domain patterns to match—wildcards supported
+
+=== "Kubernetes (Helm)"
+
+    ```bash
+    helm install dnsweaver oci://ghcr.io/maxfield-allison/charts/dnsweaver \
+      --namespace dnsweaver --create-namespace \
+      --set config.instances="internal-dns" \
+      --set config.providers.internal-dns.type=technitium \
+      --set config.providers.internal-dns.url=http://dns.internal:5380 \
+      --set config.providers.internal-dns.zone=home.example.com \
+      --set config.providers.internal-dns.recordType=A \
+      --set config.providers.internal-dns.target=192.0.2.100 \
+      --set config.providers.internal-dns.domains="*.home.example.com"
+    ```
+
+=== "Kubernetes (Kustomize)"
+
+    ```bash
+    kubectl apply -k https://github.com/maxfield-allison/dnsweaver/deploy/kustomize/base
+    ```
+
+    Then configure via ConfigMap and Secret. See the [Kubernetes deployment guide](deployment/kubernetes.md).
 
 [:octicons-arrow-right-24: Getting Started](getting-started.md){ .md-button .md-button--primary }
 [:octicons-arrow-right-24: Configuration](configuration/environment.md){ .md-button }
@@ -113,6 +162,7 @@ flowchart LR
 | :------- | :----------- | :---- |
 | [Technitium](providers/technitium.md) | A, AAAA, CNAME, SRV, TXT | Full-featured self-hosted DNS |
 | [Cloudflare](providers/cloudflare.md) | A, AAAA, CNAME, TXT | With optional proxy support |
+| [RFC 2136](providers/rfc2136.md) | A, AAAA, CNAME, SRV, TXT | BIND, Windows DNS, PowerDNS, Knot |
 | [Pi-hole](providers/pihole.md) | A, AAAA, CNAME | API or file mode |
 | [dnsmasq](providers/dnsmasq.md) | A, AAAA, CNAME | File-based configuration |
 | [Webhook](providers/webhook.md) | A, AAAA, CNAME, TXT | Custom integrations |
@@ -120,6 +170,17 @@ flowchart LR
 </div>
 
 ---
+
+## Why dnsweaver?
+
+| | dnsweaver | external-dns | docker-dns-gen |
+| :--- | :---: | :---: | :---: |
+| Docker support | :material-check: | :material-close: | :material-check: |
+| Kubernetes support | :material-check: | :material-check: | :material-close: |
+| Multiple providers | :material-check: | :material-close: | :material-close: |
+| Split-horizon DNS | :material-check: | :material-close: | :material-close: |
+| Self-hosted DNS focus | :material-check: | :material-close: | :material-close: |
+| No CRDs required | :material-check: | :material-close: | N/A |
 
 ## Next Steps
 
@@ -129,7 +190,7 @@ flowchart LR
 
     ---
 
-    Install and configure dnsweaver in minutes.
+    Install and configure dnsweaver in minutes — Docker or Kubernetes.
 
     [:octicons-arrow-right-24: Quick Start Guide](getting-started.md)
 
@@ -137,17 +198,17 @@ flowchart LR
 
     ---
 
-    Full environment variable and secrets reference.
+    Environment variables, YAML config, and secrets reference.
 
     [:octicons-arrow-right-24: Configuration Docs](configuration/environment.md)
 
--   :material-server:{ .lg .middle } **Deployment Examples**
+-   :material-server:{ .lg .middle } **Deployment Guides**
 
     ---
 
-    Production-ready Docker Compose and Swarm configs.
+    Production-ready configs for Docker Compose, Swarm, and Kubernetes.
 
-    [:octicons-arrow-right-24: Deployment](deployment/docker-compose.md)
+    [:octicons-arrow-right-24: Deployment](deployment/index.md)
 
 -   :material-transit-connection-variant:{ .lg .middle } **Split-Horizon DNS**
 

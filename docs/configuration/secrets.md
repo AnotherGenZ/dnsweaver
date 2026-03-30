@@ -1,8 +1,10 @@
-# Docker Secrets
+# Secrets Management
 
-dnsweaver supports Docker secrets for secure credential management. Any environment variable can use the `_FILE` suffix to read its value from a file.
+dnsweaver supports multiple methods for secure credential management across Docker and Kubernetes. Any environment variable can use the `_FILE` suffix to read its value from a file — this works with Docker secrets, Kubernetes secret volume mounts, or any file-based secret injection.
 
 ## How It Works
+
+The `_FILE` suffix pattern works identically on Docker and Kubernetes — dnsweaver reads the file contents at startup and uses them as the variable value.
 
 Instead of passing a secret directly:
 
@@ -35,7 +37,7 @@ services:
       - DNSWEAVER_INTERNAL_DNS_TOKEN_FILE=/run/secrets/technitium_token
       - DNSWEAVER_INTERNAL_DNS_ZONE=home.example.com
       - DNSWEAVER_INTERNAL_DNS_RECORD_TYPE=A
-      - DNSWEAVER_INTERNAL_DNS_TARGET=10.0.0.100
+      - DNSWEAVER_INTERNAL_DNS_TARGET=192.0.2.100
       - DNSWEAVER_INTERNAL_DNS_DOMAINS=*.home.example.com
 
       # Cloudflare with secret
@@ -119,3 +121,83 @@ my-secret-token-value
 
 !!! warning
     Do not include variable names, quotes, or other formatting in secret files. Just the raw value.
+
+## Kubernetes Secrets
+
+On Kubernetes, you have two approaches for injecting secrets:
+
+### Option 1: Environment Variable from Secret (Recommended)
+
+Reference Kubernetes Secrets directly as environment variables:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dnsweaver
+spec:
+  template:
+    spec:
+      containers:
+        - name: dnsweaver
+          env:
+            - name: DNSWEAVER_INTERNAL_DNS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: dnsweaver-credentials
+                  key: technitium-token
+            - name: DNSWEAVER_CLOUDFLARE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: dnsweaver-credentials
+                  key: cloudflare-token
+```
+
+Create the Secret:
+
+```bash
+kubectl create secret generic dnsweaver-credentials \
+  --namespace dnsweaver \
+  --from-literal=technitium-token=your-technitium-token \
+  --from-literal=cloudflare-token=your-cloudflare-token
+```
+
+### Option 2: Volume Mount with `_FILE` Suffix
+
+Mount Secrets as files and use the `_FILE` suffix:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dnsweaver
+spec:
+  template:
+    spec:
+      containers:
+        - name: dnsweaver
+          env:
+            - name: DNSWEAVER_INTERNAL_DNS_TOKEN_FILE
+              value: /etc/dnsweaver/secrets/technitium-token
+          volumeMounts:
+            - name: credentials
+              mountPath: /etc/dnsweaver/secrets
+              readOnly: true
+      volumes:
+        - name: credentials
+          secret:
+            secretName: dnsweaver-credentials
+```
+
+### External Secret Operators
+
+dnsweaver works with any Kubernetes secrets operator that produces standard Secrets, including:
+
+- [External Secrets Operator](https://external-secrets.io/) (Vault, AWS SSM, etc.)
+- [Sealed Secrets](https://sealed-secrets.netlify.app/)
+- [Infisical Secrets Operator](https://infisical.com/)
+
+Simply reference the generated Secret name in your dnsweaver configuration.
+
+!!! tip "Helm chart secrets"
+    The dnsweaver Helm chart has built-in support for creating Secrets from values and referencing existing Secrets. See the [Kubernetes deployment guide](../deployment/kubernetes.md) for details.

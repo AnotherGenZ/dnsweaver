@@ -15,8 +15,8 @@ dnsweaver watches Docker events and Kubernetes resources to automatically create
 
 - 🔀 **Multi-Provider Support** — Route different domains to different DNS providers
 - 🌐 **Split-Horizon DNS** — Internal and external records from the same container labels
-- 🐳 **Docker & Swarm Native** — Works with standalone Docker and Docker Swarm clusters
-- ☸️ **Kubernetes Support** — Watches Ingress, IngressRoute, HTTPRoute, and Service resources
+- 🐳 **Docker & Swarm** — Works with standalone Docker and Docker Swarm clusters
+- ☸️ **Kubernetes Native** — Watches Ingress, IngressRoute, HTTPRoute, and Service resources via Helm or Kustomize
 - 🏗️ **Multi-Instance Safe** — Run multiple dnsweaver instances on the same DNS zone without conflicts
 - 🔒 **Socket Proxy Compatible** — Connect via TCP to a Docker socket proxy for improved security
 - 🏷️ **Traefik Integration** — Parses `traefik.http.routers.*.rule` labels to extract hostnames
@@ -76,11 +76,12 @@ secrets:
 
 ```mermaid
 flowchart LR
-    A["Docker Events<br/>(start/stop)"] --> B["dnsweaver<br/>(matching)"]
+    A["Docker Events"] --> B["dnsweaver<br/>(matching)"]
+    D["Kubernetes Resources"] --> B
     B --> C["DNS Providers<br/>(A/CNAME/SRV)"]
 ```
 
-1. A container starts with a Traefik label:
+1. A container starts with a Traefik label (or a Kubernetes Ingress/HTTPRoute is created):
    ```yaml
    labels:
      - "traefik.http.routers.myapp.rule=Host(`myapp.home.example.com`)"
@@ -92,7 +93,7 @@ flowchart LR
    - **A record**: `myapp.home.example.com → 10.0.0.100`
    - **CNAME**: `myapp.example.com → proxy.example.com`
 
-4. When the container stops, the DNS record is automatically cleaned up
+4. When the container stops (or the Kubernetes resource is deleted), the DNS record is automatically cleaned up
 
 ## Documentation
 

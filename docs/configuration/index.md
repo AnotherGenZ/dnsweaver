@@ -1,12 +1,12 @@
 ---
 title: Configuration
-description: Complete guide to configuring dnsweaver
+description: Complete guide to configuring dnsweaver for Docker and Kubernetes
 icon: material/cog
 ---
 
 # Configuration
 
-dnsweaver is configured entirely through environment variables, making it ideal for containerized deployments. This section covers all configuration options.
+dnsweaver is configured through environment variables, making it ideal for both Docker and Kubernetes deployments. On Kubernetes, environment variables can be set via ConfigMaps, Helm values, or directly in Deployment manifests. This section covers all configuration options.
 
 ## Configuration Methods
 
@@ -28,11 +28,11 @@ dnsweaver is configured entirely through environment variables, making it ideal 
 
     [:octicons-arrow-right-24: Domain Patterns](domains.md)
 
--   :material-key:{ .lg .middle } **Docker Secrets**
+-   :material-key:{ .lg .middle } **Secrets Management**
 
     ---
 
-    Secure API tokens and credentials using Docker secrets or file-based configuration.
+    Secure API tokens and credentials using Docker secrets, Kubernetes Secrets, or file-based configuration.
 
     [:octicons-arrow-right-24: Secrets Management](secrets.md)
 

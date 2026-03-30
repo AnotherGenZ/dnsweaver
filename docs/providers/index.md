@@ -99,7 +99,7 @@ DNSWEAVER_EXTERNAL_TARGET=proxy.example.com
 DNSWEAVER_EXTERNAL_DOMAINS=*.example.com
 ```
 
-With this configuration, when a container with label `Host(`app.example.com`)` starts:
+With this configuration, when a container with label `Host(`app.example.com`)` starts, or a Kubernetes Ingress with host `app.example.com` is created:
 
 1. Technitium gets: `app.example.com → A → 10.0.0.100`
 2. Cloudflare gets: `app.example.com → CNAME → proxy.example.com`

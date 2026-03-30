@@ -1,6 +1,6 @@
 site_name: dnsweaver
 site_url: https://maxfield-allison.github.io/dnsweaver/
-site_description: Automatic DNS record management for Docker containers with multi-provider support
+site_description: Automatic DNS management for Docker and Kubernetes workloads — multi-provider, split-horizon, and platform-agnostic
 site_author: Maxfield Allison
 
 repo_name: maxfield-allison/dnsweaver
@@ -124,7 +124,7 @@ nav:
       - Environment Variables: configuration/environment.md
       - Domain Matching: configuration/domains.md
       - Operational Modes: configuration/modes.md
-      - Docker Secrets: configuration/secrets.md
+      - Secrets Management: configuration/secrets.md
       - Multi-Instance: configuration/multi-instance.md
   - Providers:
       - providers/index.md
