@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-03-30
+
+### Documentation
+- **Platform Parity**: Comprehensive docs refresh positioning Docker and
+  Kubernetes as co-equal first-class platforms across all pages
+- **Landing Page Rewrite**: Tabbed quick start (Docker Compose, Helm, Kustomize),
+  updated flowchart with Kubernetes sources, comparison table vs external-dns
+- **Getting Started Overhaul**: Dual Docker/K8s paths with tabbed prerequisites,
+  installation, configuration, secrets, and verification steps
+- **Secrets Management**: Renamed from "Docker Secrets"; added Kubernetes Secrets
+  section (secretKeyRef, volume mounts, external secret operators)
+- **Observability**: Added Kubernetes monitoring section (ServiceMonitor, pod
+  probes, Helm chart integration)
+- **FAQ Expansion**: Added Kubernetes-specific entries (RBAC, namespace filtering,
+  dual-platform configuration, troubleshooting)
+- **Development Guide**: Added Kubernetes dev workflow (kind cluster, local testing)
+- **RFC 5737 IPs**: Standardized all example IPs from private ranges to
+  documentation-reserved ranges (192.0.2.x, 198.51.100.x) across 30+ files
+- **SEO Improvements**: Updated site metadata, page titles, and descriptions for
+  better discoverability of Kubernetes-related searches
+
 ## [1.0.0] - 2026-03-25
 
 ### Added
