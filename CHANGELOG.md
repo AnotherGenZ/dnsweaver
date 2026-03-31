@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-03-31
+
+### Added
+- **Companion HTTPS Records (Technitium)**: Auto-creates HTTPS (SVCB Type 65)
+  companion records alongside A/AAAA/CNAME records to prevent ECH fallback
+  errors in split-horizon DNS environments (#158)
+  - Enabled by default (`AUTO_HTTPS_RECORDS=true`); set `false` to disable
+  - Configurable ALPN protocol via `AUTO_HTTPS_ALPN` (default: `h2`)
+  - Skips creation if HTTPS record already exists (safe for manual records)
+  - Lifecycle-managed: companion record deleted when parent record is removed
+- **HTTPS Record Type**: Added `RecordTypeHTTPS` with `HTTPSData` struct to
+  provider type system
+- **ECH Troubleshooting**: FAQ entry for Firefox/Chrome ECH connection failures
+
+### Documentation
+- **Companion HTTPS Guide**: Full section in Technitium provider docs with
+  Why/What/Behavior/Configuration subsections
+- **Split-Horizon Tip**: Added companion HTTPS recommendation to split-horizon
+  deployment guide
+- **Config Example**: Added `auto_https_records` and `auto_https_alpn` to
+  example configuration file
+
 ## [1.0.1] - 2026-03-30
 
 ### Documentation
