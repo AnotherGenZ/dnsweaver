@@ -5,17 +5,20 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
 )
 
 // Provider implements provider.Provider for Technitium DNS Server.
 type Provider struct {
-	name   string
-	zone   string
-	ttl    int
-	client *Client
-	logger *slog.Logger
+	name             string
+	zone             string
+	ttl              int
+	autoHTTPSRecords bool   // Create companion HTTPS records for A/CNAME records
+	autoHTTPSALPN    string // ALPN value for companion HTTPS records (e.g., "h2")
+	client           *Client
+	logger           *slog.Logger
 }
 
 // ProviderOption is a functional option for configuring the Provider.
@@ -41,14 +44,27 @@ func New(name string, config *Config, opts ...ProviderOption) (*Provider, error)
 	}
 
 	p := &Provider{
-		name:   name,
-		zone:   config.Zone,
-		ttl:    config.TTL,
-		logger: slog.Default(),
+		name:             name,
+		zone:             config.Zone,
+		ttl:              config.TTL,
+		autoHTTPSRecords: config.AutoHTTPSRecords,
+		autoHTTPSALPN:    config.AutoHTTPSALPN,
+		logger:           slog.Default(),
 	}
 
 	for _, opt := range opts {
 		opt(p)
+	}
+
+	if p.autoHTTPSRecords {
+		p.logger.Info("companion HTTPS records enabled (disable with AUTO_HTTPS_RECORDS=false)",
+			slog.String("provider", name),
+			slog.String("alpn", p.autoHTTPSALPN),
+		)
+	} else {
+		p.logger.Debug("companion HTTPS records disabled",
+			slog.String("provider", name),
+		)
 	}
 
 	// Build client options
@@ -102,6 +118,7 @@ func (p *Provider) Capabilities() provider.Capabilities {
 			provider.RecordTypeCNAME,
 			provider.RecordTypeSRV,
 			provider.RecordTypeTXT,
+			provider.RecordTypeHTTPS,
 		},
 	}
 }
@@ -173,6 +190,19 @@ func (p *Provider) List(ctx context.Context) ([]provider.Record, error) {
 					Port:     uint16(r.RData.Port),
 				},
 			})
+		case "HTTPS":
+			records = append(records, provider.Record{
+				Hostname:   r.Name,
+				Type:       provider.RecordTypeHTTPS,
+				Target:     r.RData.SvcTargetName,
+				TTL:        r.TTL,
+				ProviderID: fmt.Sprintf("%s:%s:%d:%s:%s", r.Name, r.Type, r.RData.SvcPriority, r.RData.SvcTargetName, r.RData.SvcParams),
+				HTTPS: &provider.HTTPSData{
+					Priority:   uint16(r.RData.SvcPriority),
+					TargetName: r.RData.SvcTargetName,
+					ALPN:       extractALPN(r.RData.SvcParams),
+				},
+			})
 		}
 		// Skip other record types (NS, SOA, etc.)
 	}
@@ -217,6 +247,14 @@ func (p *Provider) Create(ctx context.Context, record provider.Record) error {
 		if err := p.client.AddSRVRecord(ctx, p.zone, record.Hostname, int(record.SRV.Priority), int(record.SRV.Weight), int(record.SRV.Port), record.Target, ttl); err != nil {
 			return fmt.Errorf("creating SRV record: %w", err)
 		}
+	case provider.RecordTypeHTTPS:
+		if record.HTTPS == nil {
+			return fmt.Errorf("creating HTTPS record: HTTPS data is required")
+		}
+		svcParams := buildSvcParams(record.HTTPS.ALPN)
+		if err := p.client.AddHTTPSRecord(ctx, p.zone, record.Hostname, int(record.HTTPS.Priority), record.HTTPS.TargetName, svcParams, ttl); err != nil {
+			return fmt.Errorf("creating HTTPS record: %w", err)
+		}
 	default:
 		return fmt.Errorf("unsupported record type: %s", record.Type)
 	}
@@ -228,6 +266,15 @@ func (p *Provider) Create(ctx context.Context, record provider.Record) error {
 		slog.String("target", record.Target),
 		slog.Int("ttl", ttl),
 	)
+
+	// Auto-create companion HTTPS record for A/AAAA/CNAME records when enabled.
+	// This prevents ECH fallback errors in split-horizon DNS environments.
+	if err := p.createCompanionHTTPS(ctx, record.Hostname, record.Type, ttl); err != nil {
+		p.logger.Warn("companion HTTPS record creation failed (non-fatal)",
+			slog.String("hostname", record.Hostname),
+			slog.String("error", err.Error()),
+		)
+	}
 
 	return nil
 }
@@ -258,6 +305,14 @@ func (p *Provider) Delete(ctx context.Context, record provider.Record) error {
 		if err := p.client.DeleteSRVRecord(ctx, p.zone, record.Hostname, int(record.SRV.Priority), int(record.SRV.Weight), int(record.SRV.Port), record.Target); err != nil {
 			return fmt.Errorf("deleting SRV record: %w", err)
 		}
+	case provider.RecordTypeHTTPS:
+		if record.HTTPS == nil {
+			return fmt.Errorf("deleting HTTPS record: HTTPS data is required")
+		}
+		svcParams := buildSvcParams(record.HTTPS.ALPN)
+		if err := p.client.DeleteHTTPSRecord(ctx, p.zone, record.Hostname, int(record.HTTPS.Priority), record.HTTPS.TargetName, svcParams); err != nil {
+			return fmt.Errorf("deleting HTTPS record: %w", err)
+		}
 	default:
 		return fmt.Errorf("unsupported record type: %s", record.Type)
 	}
@@ -268,6 +323,15 @@ func (p *Provider) Delete(ctx context.Context, record provider.Record) error {
 		slog.String("type", string(record.Type)),
 		slog.String("target", record.Target),
 	)
+
+	// Auto-delete companion HTTPS record when an A/AAAA/CNAME record is removed.
+	// Uses best-effort: companion may already be gone or manually deleted.
+	if err := p.deleteCompanionHTTPS(ctx, record.Hostname, record.Type); err != nil {
+		p.logger.Warn("companion HTTPS record deletion failed (non-fatal)",
+			slog.String("hostname", record.Hostname),
+			slog.String("error", err.Error()),
+		)
+	}
 
 	return nil
 }
@@ -308,6 +372,19 @@ func (p *Provider) Update(ctx context.Context, existing, desired provider.Record
 		if err := p.client.AddSRVRecord(ctx, p.zone, desired.Hostname, int(desired.SRV.Priority), int(desired.SRV.Weight), int(desired.SRV.Port), desired.Target, ttl); err != nil {
 			return fmt.Errorf("creating new SRV record for update: %w", err)
 		}
+	case provider.RecordTypeHTTPS:
+		// HTTPS records: delete+create (Technitium has no native HTTPS update API)
+		if existing.HTTPS == nil || desired.HTTPS == nil {
+			return fmt.Errorf("updating HTTPS record: HTTPS data is required")
+		}
+		oldParams := buildSvcParams(existing.HTTPS.ALPN)
+		if err := p.client.DeleteHTTPSRecord(ctx, p.zone, existing.Hostname, int(existing.HTTPS.Priority), existing.HTTPS.TargetName, oldParams); err != nil {
+			return fmt.Errorf("deleting old HTTPS record for update: %w", err)
+		}
+		newParams := buildSvcParams(desired.HTTPS.ALPN)
+		if err := p.client.AddHTTPSRecord(ctx, p.zone, desired.Hostname, int(desired.HTTPS.Priority), desired.HTTPS.TargetName, newParams, ttl); err != nil {
+			return fmt.Errorf("creating new HTTPS record for update: %w", err)
+		}
 	case provider.RecordTypeTXT:
 		// TXT records (ownership markers) don't typically need updates
 		// If value changes, delete and recreate
@@ -331,6 +408,29 @@ func (p *Provider) Update(ctx context.Context, existing, desired provider.Record
 	)
 
 	return nil
+}
+
+// extractALPN extracts the ALPN value from Technitium's svcParams format.
+// Input: "alpn|h2" or "alpn|h2,h3" → Output: "h2" or "h2,h3"
+// Returns empty string if no ALPN parameter found.
+func extractALPN(svcParams string) string {
+	for _, param := range strings.Split(svcParams, " ") {
+		parts := strings.SplitN(param, "|", 2)
+		if len(parts) == 2 && parts[0] == "alpn" {
+			return parts[1]
+		}
+	}
+	return ""
+}
+
+// buildSvcParams constructs Technitium's svcParams format from an ALPN value.
+// Input: "h2" → Output: "alpn|h2"
+// Returns empty string if alpn is empty.
+func buildSvcParams(alpn string) string {
+	if alpn == "" {
+		return ""
+	}
+	return "alpn|" + alpn
 }
 
 // Ensure Provider implements provider.Provider at compile time.
