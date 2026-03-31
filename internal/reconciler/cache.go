@@ -77,7 +77,7 @@ func (c *recordCache) getExistingRecords(providerName, hostname string) ([]provi
 	var filtered []provider.Record
 	for _, r := range records {
 		switch r.Type {
-		case provider.RecordTypeA, provider.RecordTypeAAAA, provider.RecordTypeCNAME, provider.RecordTypeSRV:
+		case provider.RecordTypeA, provider.RecordTypeAAAA, provider.RecordTypeCNAME, provider.RecordTypeSRV, provider.RecordTypeHTTPS:
 			filtered = append(filtered, r)
 		case provider.RecordTypeTXT:
 			// Skip TXT records (ownership markers)
@@ -106,7 +106,7 @@ func (c *recordCache) getAllRecordsForHostname(providerName, hostname string) ([
 	var filtered []provider.Record
 	for _, r := range records {
 		switch r.Type {
-		case provider.RecordTypeA, provider.RecordTypeAAAA, provider.RecordTypeCNAME, provider.RecordTypeSRV:
+		case provider.RecordTypeA, provider.RecordTypeAAAA, provider.RecordTypeCNAME, provider.RecordTypeSRV, provider.RecordTypeHTTPS:
 			filtered = append(filtered, r)
 		case provider.RecordTypeTXT:
 			// Skip TXT records (ownership markers)

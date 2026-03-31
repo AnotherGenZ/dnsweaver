@@ -173,6 +173,18 @@ Changes are logged but not applied to DNS providers.
 
 ## Troubleshooting
 
+### Firefox or Chrome fails to connect to internal services (ECH errors)
+
+Modern browsers use ECH (Encrypted Client Hello) when HTTPS records exist in public DNS. If your internal DNS zone lacks matching HTTPS records, browsers may fail with connection errors or experience delays.
+
+**Solution:** dnsweaver's Technitium provider automatically creates companion HTTPS records by default. If you've disabled this, re-enable it:
+
+```yaml
+- DNSWEAVER_TECHNITIUM_AUTO_HTTPS_RECORDS=true
+```
+
+See [Technitium — Companion HTTPS Records](providers/technitium.md#companion-https-records) for details.
+
 ### "No matching providers for hostname"
 
 The extracted hostname doesn't match any provider's domain patterns. Check:

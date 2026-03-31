@@ -72,7 +72,7 @@ func (r *Reconciler) deleteFromCache(ctx context.Context, hostname string, cache
 			for _, rec := range allRecords {
 				if rec.Hostname == hostname {
 					switch rec.Type {
-					case provider.RecordTypeA, provider.RecordTypeAAAA, provider.RecordTypeCNAME, provider.RecordTypeSRV:
+					case provider.RecordTypeA, provider.RecordTypeAAAA, provider.RecordTypeCNAME, provider.RecordTypeSRV, provider.RecordTypeHTTPS:
 						recordsToDelete = append(recordsToDelete, rec)
 					case provider.RecordTypeTXT:
 						// Skip TXT records (ownership markers)
@@ -228,7 +228,7 @@ func (r *Reconciler) deleteWithOwnership(ctx context.Context, hostname string, c
 			for _, rec := range allRecords {
 				if rec.Hostname == hostname {
 					switch rec.Type {
-					case provider.RecordTypeA, provider.RecordTypeAAAA, provider.RecordTypeCNAME, provider.RecordTypeSRV:
+					case provider.RecordTypeA, provider.RecordTypeAAAA, provider.RecordTypeCNAME, provider.RecordTypeSRV, provider.RecordTypeHTTPS:
 						recordsToDelete = append(recordsToDelete, rec)
 					case provider.RecordTypeTXT:
 						// Skip TXT records (ownership markers)

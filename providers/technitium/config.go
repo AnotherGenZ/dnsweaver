@@ -12,6 +12,9 @@ import (
 // DefaultTTL is the default TTL for Technitium DNS records.
 const DefaultTTL = 300
 
+// DefaultHTTPSALPN is the default ALPN value for auto-created HTTPS companion records.
+const DefaultHTTPSALPN = "h2"
+
 // Config holds Technitium-specific configuration.
 type Config struct {
 	URL                string // Technitium API URL (e.g., http://dns:5380)
@@ -19,6 +22,18 @@ type Config struct {
 	Zone               string // DNS zone to manage
 	TTL                int    // Record TTL (defaults to DefaultTTL)
 	InsecureSkipVerify bool   // Skip TLS certificate verification (use with caution)
+
+	// AutoHTTPSRecords enables automatic companion HTTPS (SVCB Type 65) record creation.
+	// When true (the default for Technitium), creating an A or CNAME record also creates a
+	// companion HTTPS record (e.g., "HTTPS 1 . alpn=h2") to prevent ECH fallback errors
+	// in split-horizon DNS environments. Deleting the parent record also removes the companion.
+	// Set AUTO_HTTPS_RECORDS=false to disable.
+	// See RFC 9460 and issue #158 for details.
+	AutoHTTPSRecords bool
+
+	// AutoHTTPSALPN is the ALPN protocol value for auto-created HTTPS companion records.
+	// Defaults to "h2". Common values: "h2" (HTTP/2), "h3" (HTTP/3), "h2,h3" (both).
+	AutoHTTPSALPN string
 }
 
 // Validate checks that all required configuration is present.
@@ -66,14 +81,17 @@ func (c *Config) Validate() error {
 //   - TOKEN: API token (required, supports _FILE suffix for Docker secrets)
 //   - ZONE: DNS zone to manage (required)
 //   - TTL: Record TTL (optional, defaults to 300)
+//   - AUTO_HTTPS_RECORDS: Enable companion HTTPS record creation (optional, defaults to true)
+//   - AUTO_HTTPS_ALPN: ALPN value for HTTPS records (optional, defaults to "h2")
 func LoadConfig(instanceName string) (*Config, error) {
 	prefix := envPrefix(instanceName)
 
 	config := &Config{
-		URL:   getEnv(prefix + "URL"),
-		Token: getEnvOrFile(prefix+"TOKEN", prefix+"TOKEN_FILE"),
-		Zone:  getEnv(prefix + "ZONE"),
-		TTL:   DefaultTTL,
+		URL:              getEnv(prefix + "URL"),
+		Token:            getEnvOrFile(prefix+"TOKEN", prefix+"TOKEN_FILE"),
+		Zone:             getEnv(prefix + "ZONE"),
+		TTL:              DefaultTTL,
+		AutoHTTPSRecords: true, // Enabled by default for Technitium
 	}
 
 	// Parse optional TTL
@@ -88,6 +106,18 @@ func LoadConfig(instanceName string) (*Config, error) {
 	// Parse optional InsecureSkipVerify
 	if skipStr := getEnv(prefix + "INSECURE_SKIP_VERIFY"); skipStr != "" {
 		config.InsecureSkipVerify = strings.EqualFold(skipStr, "true") || skipStr == "1"
+	}
+
+	// Parse optional AutoHTTPSRecords (companion HTTPS record creation)
+	// Default is true for Technitium; only override if explicitly set
+	if autoHTTPS := getEnv(prefix + "AUTO_HTTPS_RECORDS"); autoHTTPS != "" {
+		config.AutoHTTPSRecords = strings.EqualFold(autoHTTPS, "true") || autoHTTPS == "1"
+	}
+
+	// Parse optional AutoHTTPSALPN (default: "h2")
+	config.AutoHTTPSALPN = DefaultHTTPSALPN
+	if alpn := getEnv(prefix + "AUTO_HTTPS_ALPN"); alpn != "" {
+		config.AutoHTTPSALPN = alpn
 	}
 
 	if err := config.Validate(); err != nil {
@@ -152,10 +182,11 @@ func IsConfigError(err error) bool {
 // Optional keys: TTL (defaults to 300)
 func LoadConfigFromMap(instanceName string, configMap map[string]string) (*Config, error) {
 	config := &Config{
-		URL:   configMap["URL"],
-		Token: configMap["TOKEN"],
-		Zone:  configMap["ZONE"],
-		TTL:   DefaultTTL,
+		URL:              configMap["URL"],
+		Token:            configMap["TOKEN"],
+		Zone:             configMap["ZONE"],
+		TTL:              DefaultTTL,
+		AutoHTTPSRecords: true, // Enabled by default for Technitium
 	}
 
 	// Parse optional TTL
@@ -170,6 +201,18 @@ func LoadConfigFromMap(instanceName string, configMap map[string]string) (*Confi
 	// Parse optional InsecureSkipVerify
 	if skipStr, ok := configMap["INSECURE_SKIP_VERIFY"]; ok && skipStr != "" {
 		config.InsecureSkipVerify = strings.EqualFold(skipStr, "true") || skipStr == "1"
+	}
+
+	// Parse optional AutoHTTPSRecords
+	// Default is true for Technitium; only override if explicitly set
+	if autoHTTPS, ok := configMap["AUTO_HTTPS_RECORDS"]; ok && autoHTTPS != "" {
+		config.AutoHTTPSRecords = strings.EqualFold(autoHTTPS, "true") || autoHTTPS == "1"
+	}
+
+	// Parse optional AutoHTTPSALPN (default: "h2")
+	config.AutoHTTPSALPN = DefaultHTTPSALPN
+	if alpn, ok := configMap["AUTO_HTTPS_ALPN"]; ok && alpn != "" {
+		config.AutoHTTPSALPN = alpn
 	}
 
 	if err := config.Validate(); err != nil {

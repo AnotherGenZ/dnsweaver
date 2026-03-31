@@ -34,7 +34,13 @@ type apiRData struct {
 	Weight    int    `json:"weight,omitempty"`   // For SRV records
 	Port      int    `json:"port,omitempty"`     // For SRV records
 	SrvTarget string `json:"target,omitempty"`   // For SRV records
+	// HTTPS/SVCB record fields
+	SvcPriority   int    `json:"svcPriority,omitempty"`   // For HTTPS/SVCB records
+	SvcTargetName string `json:"svcTargetName,omitempty"` // For HTTPS/SVCB records ("." = self)
+	SvcParams     string `json:"svcParams,omitempty"`     // For HTTPS/SVCB records (e.g., "alpn|h2")
 }
+
+// Note: older Technitium versions might represent svcParams differently; keep parsing flexible.
 
 // apiResponse is the standard Technitium API response wrapper.
 type apiResponse struct {
@@ -420,6 +426,82 @@ func (c *Client) DeleteSRVRecord(ctx context.Context, zone, hostname string, pri
 		slog.Int("weight", weight),
 		slog.Int("port", port),
 		slog.String("target", target),
+		slog.String("zone", zone),
+	)
+
+	return nil
+}
+
+// AddHTTPSRecord creates an HTTPS (SVCB Type 65) record in the specified zone.
+// The svcPriority controls record mode: 0 = AliasMode, 1+ = ServiceMode.
+// The svcTargetName uses "." to indicate the record's owner name (self-referential).
+// The svcParams is in Technitium's pipe-separated format (e.g., "alpn|h2").
+func (c *Client) AddHTTPSRecord(ctx context.Context, zone, hostname string, svcPriority int, svcTargetName, svcParams string, ttl int) error {
+	params := url.Values{}
+	params.Set("zone", zone)
+	params.Set("domain", hostname)
+	params.Set("type", "HTTPS")
+	params.Set("svcPriority", strconv.Itoa(svcPriority))
+	params.Set("svcTargetName", svcTargetName)
+	params.Set("svcParams", svcParams)
+	params.Set("ttl", strconv.Itoa(ttl))
+
+	_, err := c.doRequest(ctx, "/api/zones/records/add", params)
+	if err != nil {
+		return fmt.Errorf("adding HTTPS record for %s: %w", hostname, err)
+	}
+
+	c.logger.Info("added HTTPS record",
+		slog.String("hostname", hostname),
+		slog.Int("svc_priority", svcPriority),
+		slog.String("svc_target", svcTargetName),
+		slog.String("svc_params", svcParams),
+		slog.String("zone", zone),
+		slog.Int("ttl", ttl),
+	)
+
+	return nil
+}
+
+// DeleteHTTPSRecord removes an HTTPS (SVCB Type 65) record from the specified zone.
+// Note: implemented earlier; duplicate guard to ensure compile stability when patching.
+
+// parseSvcParams splits svcParams into key/value pairs for future use.
+// Input: "alpn|h2" → map{"alpn":"h2"}
+func parseSvcParams(s string) map[string]string {
+	out := make(map[string]string)
+	for _, part := range strings.Split(s, " ") {
+		if part == "" {
+			continue
+		}
+		kv := strings.SplitN(part, "|", 2)
+		if len(kv) == 2 {
+			out[kv[0]] = kv[1]
+		}
+	}
+	return out
+}
+
+// DeleteHTTPSRecord removes an HTTPS (SVCB Type 65) record from the specified zone.
+func (c *Client) DeleteHTTPSRecord(ctx context.Context, zone, hostname string, svcPriority int, svcTargetName, svcParams string) error {
+	params := url.Values{}
+	params.Set("zone", zone)
+	params.Set("domain", hostname)
+	params.Set("type", "HTTPS")
+	params.Set("svcPriority", strconv.Itoa(svcPriority))
+	params.Set("svcTargetName", svcTargetName)
+	params.Set("svcParams", svcParams)
+
+	_, err := c.doRequest(ctx, "/api/zones/records/delete", params)
+	if err != nil {
+		return fmt.Errorf("deleting HTTPS record for %s: %w", hostname, err)
+	}
+
+	c.logger.Info("deleted HTTPS record",
+		slog.String("hostname", hostname),
+		slog.Int("svc_priority", svcPriority),
+		slog.String("svc_target", svcTargetName),
+		slog.String("svc_params", svcParams),
 		slog.String("zone", zone),
 	)
 

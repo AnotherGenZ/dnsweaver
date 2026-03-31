@@ -16,6 +16,7 @@ const (
 	RecordTypeCNAME RecordType = "CNAME"
 	RecordTypeTXT   RecordType = "TXT"
 	RecordTypeSRV   RecordType = "SRV"
+	RecordTypeHTTPS RecordType = "HTTPS"
 )
 
 // OwnershipPrefix is the default prefix for ownership TXT records.
@@ -138,6 +139,23 @@ type SRVData struct {
 	Port     uint16 // TCP/UDP port number (1-65535)
 }
 
+// HTTPSData contains HTTPS (SVCB Type 65) record-specific fields.
+// Used when Type is RecordTypeHTTPS.
+// See RFC 9460 for the HTTPS/SVCB record specification.
+type HTTPSData struct {
+	// Priority is the SvcPriority value. 0 = AliasMode, 1+ = ServiceMode.
+	// For ECH override records, typically 1.
+	Priority uint16
+
+	// TargetName is the SvcTargetName. "." means the record's owner name (self-referential).
+	// For ECH override records, typically ".".
+	TargetName string
+
+	// ALPN is the application-layer protocol negotiation value (e.g., "h2", "h3").
+	// Sent as svcParams "alpn|h2" in Technitium's API format.
+	ALPN string
+}
+
 // Record represents a DNS record to be managed.
 type Record struct {
 	Hostname   string
@@ -146,6 +164,9 @@ type Record struct {
 	TTL        int
 	ProviderID string   // Provider-specific record identifier
 	SRV        *SRVData // SRV-specific data (only set when Type is SRV)
+
+	// HTTPS holds HTTPS/SVCB record-specific data (only set when Type is HTTPS).
+	HTTPS *HTTPSData
 
 	// Metadata carries provider-specific key-value pairs through the reconciliation pipeline.
 	// Providers read actionable keys (e.g., "proxied" for Cloudflare) during Create/Update.
@@ -244,6 +265,19 @@ func RecordEquals(a, b Record) bool {
 		return a.SRV.Priority == b.SRV.Priority &&
 			a.SRV.Weight == b.SRV.Weight &&
 			a.SRV.Port == b.SRV.Port
+	}
+
+	// For HTTPS records, also compare HTTPS-specific data
+	if a.Type == RecordTypeHTTPS {
+		if a.HTTPS == nil && b.HTTPS == nil {
+			return true
+		}
+		if a.HTTPS == nil || b.HTTPS == nil {
+			return false
+		}
+		return a.HTTPS.Priority == b.HTTPS.Priority &&
+			a.HTTPS.TargetName == b.HTTPS.TargetName &&
+			a.HTTPS.ALPN == b.HTTPS.ALPN
 	}
 
 	return true
