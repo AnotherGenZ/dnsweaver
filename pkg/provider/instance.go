@@ -228,7 +228,7 @@ func (pi *ProviderInstance) GetExistingRecords(ctx context.Context, hostname str
 		// Case-insensitive hostname comparison per RFC 1035 Section 2.3.3
 		if strings.EqualFold(r.Hostname, hostname) {
 			switch r.Type {
-			case RecordTypeA, RecordTypeAAAA, RecordTypeCNAME, RecordTypeSRV:
+			case RecordTypeA, RecordTypeAAAA, RecordTypeCNAME, RecordTypeSRV, RecordTypeHTTPS:
 				matching = append(matching, r)
 			case RecordTypeTXT:
 				// Skip TXT records (ownership markers)

@@ -136,7 +136,7 @@ Replace `{NAME}` with your instance name. For example, instance `internal-dns` u
 
 See the individual provider documentation for complete settings:
 
-- [Technitium](../providers/technitium.md)
+- [Technitium](../providers/technitium.md) — includes companion HTTPS record options
 - [Cloudflare](../providers/cloudflare.md)
 - [RFC 2136](../providers/rfc2136.md)
 - [Pi-hole](../providers/pihole.md)

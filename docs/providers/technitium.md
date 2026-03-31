@@ -37,6 +37,8 @@ environment:
 | `EXCLUDE_DOMAINS` | No | - | Patterns to exclude |
 | `TTL` | No | `300` | Record TTL in seconds |
 | `INSECURE_SKIP_VERIFY` | No | `false` | Skip TLS certificate verification |
+| `AUTO_HTTPS_RECORDS` | No | `true` | Auto-create companion HTTPS records (see below) |
+| `AUTO_HTTPS_ALPN` | No | `h2` | ALPN protocol for companion HTTPS records |
 
 ## Getting an API Token
 
@@ -144,3 +146,48 @@ For self-signed certificates, either:
 ```yaml
 - DNSWEAVER_TECHNITIUM_INSECURE_SKIP_VERIFY=true
 ```
+
+## Companion HTTPS Records
+
+By default, dnsweaver automatically creates companion HTTPS (SVCB Type 65) records whenever it creates an A, AAAA, or CNAME record in Technitium. This prevents **ECH (Encrypted Client Hello) fallback errors** that commonly affect split-horizon DNS environments.
+
+### Why This Exists
+
+Modern browsers (Firefox 128+, Chrome 131+) use ECH to encrypt the SNI during TLS handshakes. When a public domain has HTTPS records (provided by CDNs like Cloudflare), but your internal DNS zone doesn't, browsers may fail to connect or experience delays trying to use ECH parameters that don't apply internally.
+
+The companion HTTPS record tells browsers "this host speaks HTTP/2 over TLS" without ECH, preventing the fallback error.
+
+### What Gets Created
+
+For each A/AAAA/CNAME record, dnsweaver creates:
+
+```
+app.example.com  300  IN  HTTPS  1 . alpn="h2"
+```
+
+- **Priority 1** (ServiceMode) — overrides any inherited ECH parameters
+- **Target `.`** (self) — the record's own hostname, per RFC 9460
+- **ALPN `h2`** — HTTP/2 over TLS (configurable)
+
+### Behavior
+
+- **Enabled by default** — no configuration needed
+- **Safe** — skips creation if an HTTPS record already exists (won't overwrite manual records)
+- **Lifecycle-managed** — companion records are deleted when the parent record is removed
+- **Idempotent** — duplicate creation attempts are handled gracefully
+
+### Configuration
+
+```yaml
+# Disable companion HTTPS records (not recommended for split-horizon setups)
+- DNSWEAVER_TECHNITIUM_AUTO_HTTPS_RECORDS=false
+
+# Change the ALPN protocol (default: h2)
+- DNSWEAVER_TECHNITIUM_AUTO_HTTPS_ALPN=h2,h3
+```
+
+!!! tip
+    If you use Cloudflare for external DNS and Technitium for internal DNS (a common split-horizon setup), companion HTTPS records are essential. Cloudflare provides HTTPS records automatically on their side — Technitium needs them too.
+
+!!! note
+    This feature only applies to the Technitium provider. Other providers either handle HTTPS records automatically (Cloudflare) or don't support them (Pi-hole, dnsmasq).

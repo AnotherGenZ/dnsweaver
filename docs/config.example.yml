@@ -117,6 +117,8 @@ providers:
       url: http://dns.example.com:5380
       token: ${TECHNITIUM_TOKEN}        # env var interpolation
       zone: internal.example.com
+      # auto_https_records: true          # Companion HTTPS records (enabled by default)
+      # auto_https_alpn: h2               # ALPN protocol for companion records
 
   # Public DNS using Cloudflare
   - name: public

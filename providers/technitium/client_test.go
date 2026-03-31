@@ -99,6 +99,53 @@ func TestClient_Ping_Error(t *testing.T) {
 	}
 }
 
+func TestClient_AddDeleteHTTPSRecord(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Very small smoke test: ensure we hit the add/delete endpoints with expected params
+		switch r.URL.Path {
+		case "/api/zones/records/add":
+			query := r.URL.Query()
+			if query.Get("type") != "HTTPS" {
+				t.Fatalf("expected type=HTTPS, got %s", query.Get("type"))
+			}
+			if query.Get("svcParams") != "alpn|h2" {
+				t.Fatalf("expected svcParams=alpn|h2, got %s", query.Get("svcParams"))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+		case "/api/zones/records/delete":
+			query := r.URL.Query()
+			if query.Get("type") != "HTTPS" {
+				t.Fatalf("expected type=HTTPS on delete, got %s", query.Get("type"))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "token")
+	ctx := context.Background()
+
+	if err := client.AddHTTPSRecord(ctx, "zone", "app.example.com", 1, ".", "alpn|h2", 300); err != nil {
+		t.Fatalf("unexpected error adding HTTPS record: %v", err)
+	}
+
+	if err := client.DeleteHTTPSRecord(ctx, "zone", "app.example.com", 1, ".", "alpn|h2"); err != nil {
+		t.Fatalf("unexpected error deleting HTTPS record: %v", err)
+	}
+}
+
+func TestParseSvcParams(t *testing.T) {
+	in := "alpn|h2 h3|ignore"
+	m := parseSvcParams(in)
+	if m["alpn"] != "h2" {
+		t.Fatalf("expected alpn=h2, got %v", m["alpn"])
+	}
+}
+
 func TestClient_AddARecord_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/zones/records/add" {
