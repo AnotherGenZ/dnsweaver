@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-03-31
+
+### Security
+- **Alpine 3.20 → 3.21**: Resolves 14 CVEs in base image packages (10 openssl
+  including CVE-2025-15467 RCE, 3 busybox, 1 zlib)
+- **Remove wget from runtime image**: Eliminates 2 HIGH CVEs
+  (CVE-2025-69194 path traversal, CVE-2024-10524 SSRF) and reduces attack
+  surface. Healthcheck now uses busybox `nc` instead of wget.
+- **Container image scanning**: Added Trivy container image scan to CI/CD
+  pipeline — CRITICAL/HIGH CVEs now block releases automatically
+
+### Changed
+- CI validation job images updated from Alpine 3.20 to 3.21
+
 ## [1.0.2] - 2026-03-31
 
 ### Added
