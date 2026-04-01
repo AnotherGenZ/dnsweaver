@@ -134,14 +134,20 @@ security:gitleaks:
 
 # Container image vulnerability scan (runs after Docker build)
 # Must be in docker stage — needs: can't reference jobs from later stages
+# $TAG/$EXTRA are injected automatically from docker:build:amd64's dotenv artifact
 security:container-scan:
   stage: docker
   image:
     name: aquasec/trivy:latest
     entrypoint: [""]
-  needs: ["docker:build:amd64"]
+  needs:
+    - job: docker:build:amd64
+      artifacts: true
+  variables:
+    TRIVY_USERNAME: "$CI_REGISTRY_USER"
+    TRIVY_PASSWORD: "$CI_REGISTRY_PASSWORD"
   script:
-    - source build.env
+    - echo "Scanning $IMAGE:$TAG-amd64"
     # Block on CRITICAL/HIGH (must fix before release)
     - trivy image --exit-code 1 --severity CRITICAL,HIGH
         --ignore-unfixed
