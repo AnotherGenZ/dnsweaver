@@ -133,8 +133,9 @@ security:gitleaks:
   allow_failure: false  # Block on secrets detection
 
 # Container image vulnerability scan (runs after Docker build)
+# Must be in docker stage — needs: can't reference jobs from later stages
 security:container-scan:
-  stage: security
+  stage: docker
   image:
     name: aquasec/trivy:latest
     entrypoint: [""]
@@ -145,14 +146,12 @@ security:container-scan:
     - trivy image --exit-code 1 --severity CRITICAL,HIGH
         --ignore-unfixed
         --format table
-        $IMAGE:$TAG-amd64
+        "$IMAGE:$TAG-amd64"
     # Warn on MEDIUM/LOW (track, don't block)
     - trivy image --exit-code 0 --severity MEDIUM,LOW
         --format table
-        $IMAGE:$TAG-amd64
-  rules:
-    - if: $CI_COMMIT_TAG
-    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop"
+        "$IMAGE:$TAG-amd64"
+  rules: *rules-docker
   allow_failure: false
 
 # ─────────────────────────────────────────────────────────────────────────────
