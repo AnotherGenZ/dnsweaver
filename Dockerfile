@@ -67,6 +67,9 @@ LABEL org.opencontainers.image.title="dnsweaver" \
     org.opencontainers.image.vendor="bluewillows.net" \
     org.opencontainers.image.base.name="dhi.io/alpine-base:3.23"
 
+# DHI CIS images default to nonroot (uid 65532) — switch to root for setup
+USER root
+
 # Install runtime dependencies (no wget/curl — reduces attack surface)
 # DHI base includes ca-certificates and busybox utilities but no apk package manager
 # Copy tzdata from builder for timezone support
