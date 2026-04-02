@@ -65,7 +65,9 @@ LABEL org.opencontainers.image.title="dnsweaver" \
     org.opencontainers.image.base.name="alpine:3.23"
 
 # Install runtime dependencies (no wget/curl — reduces attack surface)
-RUN apk add --no-cache ca-certificates tzdata
+# Upgrade base packages first to pick up security fixes
+RUN apk upgrade --no-cache && \
+    apk add --no-cache ca-certificates tzdata
 
 # Create non-root user
 RUN addgroup -g 1000 dnsweaver && \
