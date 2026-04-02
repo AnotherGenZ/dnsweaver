@@ -55,6 +55,7 @@ RUN ls -la dnsweaver && file dnsweaver || true
 # -----------------------------------------------------------------------------
 # Stage 2: Runtime (Docker Hardened Image — Alpine)
 # DHI: Zero published CVEs, CIS-compliant, signed provenance + SBOM
+# Requires Docker Hub auth (dhi.io registry)
 # https://hub.docker.com/hardened-images/catalog/dhi/alpine-base
 # -----------------------------------------------------------------------------
 FROM dhi.io/alpine-base:${DHI_ALPINE_VERSION}
