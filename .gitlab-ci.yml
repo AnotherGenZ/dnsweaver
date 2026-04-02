@@ -122,7 +122,9 @@ security:govulncheck:
     #   GO-2026-4883 - Moby off-by-one plugin privilege validation
     - |
       KNOWN_VULNS="GO-2026-4887|GO-2026-4883"
-      govulncheck ./... 2>&1 | tee govulncheck.txt; RC=${PIPESTATUS[0]}
+      RC=0
+      govulncheck ./... > govulncheck.txt 2>&1 || RC=$?
+      cat govulncheck.txt
       if [ "$RC" -eq 0 ]; then
         echo "✅ No vulnerabilities found"
         exit 0
