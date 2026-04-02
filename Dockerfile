@@ -17,7 +17,7 @@
 # =============================================================================
 
 ARG GO_VERSION=1.25
-ARG ALPINE_VERSION=3.21
+ARG DHI_ALPINE_VERSION=3.23
 
 # -----------------------------------------------------------------------------
 # Stage 1: Go Builder (Multi-Arch Cross-Compilation)
@@ -53,17 +53,21 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build \
 RUN ls -la dnsweaver && file dnsweaver || true
 
 # -----------------------------------------------------------------------------
-# Stage 2: Runtime (Alpine)
+# Stage 2: Runtime (Docker Hardened Image — Alpine)
+# DHI: Zero published CVEs, CIS-compliant, signed provenance + SBOM
+# https://hub.docker.com/hardened-images/catalog/dhi/alpine-base
 # -----------------------------------------------------------------------------
-FROM alpine:${ALPINE_VERSION}
+FROM dhi.io/alpine-base:${DHI_ALPINE_VERSION}
 
 # Labels
 LABEL org.opencontainers.image.title="dnsweaver" \
     org.opencontainers.image.description="Automatic DNS record management for Docker and Kubernetes workloads" \
     org.opencontainers.image.source="https://gitlab.bluewillows.net/root/dnsweaver" \
-    org.opencontainers.image.vendor="bluewillows.net"
+    org.opencontainers.image.vendor="bluewillows.net" \
+    org.opencontainers.image.base.name="dhi.io/alpine-base:3.23"
 
 # Install runtime dependencies (no wget/curl — reduces attack surface)
+# DHI base includes ca-certificates; add tzdata for timezone support
 RUN apk add --no-cache ca-certificates tzdata
 
 # Create non-root user
