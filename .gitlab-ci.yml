@@ -39,7 +39,7 @@ workflow:
     changes: *docker-files
 
 .go-base:
-  image: golang:1.25-alpine
+  image: golang:1.25.9-alpine
   before_script:
     - apk add --no-cache git
     - go mod download
@@ -117,9 +117,12 @@ security:govulncheck:
     - go install golang.org/x/vuln/cmd/govulncheck@latest
     # govulncheck has no ignore/suppression mechanism (unlike trivy's .trivyignore).
     # Wrapper: pass if ONLY known-unfixed vulns are found; fail on any new ones.
-    # Known unfixed (docker/docker — no fix available, review 2026-07-01):
+    # Known unfixed (docker/docker v28.5.2 — no fix for github.com/docker/docker module):
     #   GO-2026-4887 - Moby AuthZ plugin bypass (oversized request bodies)
     #   GO-2026-4883 - Moby off-by-one plugin privilege validation
+    # Risk: Low — DNSweaver uses client SDK only (container/swarm listing, events).
+    # These are Docker daemon vulns; not exploitable via client library imports.
+    # Fix exists only in moby/moby/v2 (beta). Review when v2 reaches stable.
     - |
       KNOWN_VULNS="GO-2026-4887|GO-2026-4883"
       RC=0

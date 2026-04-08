@@ -60,10 +60,19 @@ func NewWithHTTPClient(name string, config *Config, httpClient *http.Client, log
 	}
 
 	p := &Provider{
-		name:   name,
-		zone:   config.Zone,
-		ttl:    config.TTL,
-		logger: logger,
+		name:             name,
+		zone:             config.Zone,
+		ttl:              config.TTL,
+		autoHTTPSRecords: config.AutoHTTPSRecords,
+		autoHTTPSALPN:    config.AutoHTTPSALPN,
+		logger:           logger,
+	}
+
+	if p.autoHTTPSRecords {
+		p.logger.Info("companion HTTPS records enabled (disable with AUTO_HTTPS_RECORDS=false)",
+			slog.String("provider", name),
+			slog.String("alpn", p.autoHTTPSALPN),
+		)
 	}
 
 	// Create the API client with the provided HTTP client
