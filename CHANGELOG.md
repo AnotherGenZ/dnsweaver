@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-04-08
+
+### Fixed
+- **Companion HTTPS records via `NewWithHTTPClient()`**: `autoHTTPSRecords` and
+  `autoHTTPSALPN` config fields were not propagated when constructing Technitium
+  providers with a custom HTTP client, causing companion HTTPS record creation to
+  silently fail in that code path
+
+### Security
+- **Go 1.25.0 → 1.25.9**: Fixes three crypto stdlib CVEs:
+  - GO-2026-4947 — crypto/x509 chain building DoS
+  - GO-2026-4946 — crypto/x509 policy validation DoS
+  - GO-2026-4870 — crypto/tls KeyUpdate DoS
+- **CI govulncheck allowlist**: Improved documentation for docker/docker SDK
+  vulns (GO-2026-4887, GO-2026-4883) — daemon-side AuthZ issues, not
+  exploitable via client SDK imports; no upstream fix available
+
 ## [1.0.4] - 2026-04-02
 
 ### Security
