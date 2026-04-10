@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-04-10
+
+### Security
+- **Docker build: pull fresh base images**: Added `--pull` to all `docker build`
+  commands in CI/CD pipeline to prevent Docker layer caching from reusing Alpine
+  images with stale OpenSSL packages (CVE-2026-28390)
+
 ## [1.1.1] - 2026-04-10
 
 ### Fixed
