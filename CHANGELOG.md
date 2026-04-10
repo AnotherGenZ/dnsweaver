@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-04-10
+
+### Fixed
+- **MkDocs build warning**: Fixed broken relative link to CHANGELOG in
+  `testing/RELEASE-CHECKLIST.md` that caused GitHub Actions doc build to fail
+
+### Changed
+- **Multi-instance docs**: Added section explaining how `DNSWEAVER_INSTANCE_ID`
+  interacts with providers that use target-based ownership inference (AdGuard Home,
+  Pi-hole file mode, dnsmasq)
+
 ## [1.1.0] - 2026-04-10
 
 ### Added

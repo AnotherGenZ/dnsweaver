@@ -113,7 +113,7 @@ For each source enabled in the test environment:
 | New feature (backward-compatible) | MINOR | New provider, new source |
 | Bug fix | PATCH | Fixed crash, corrected behavior |
 
-See the [CHANGELOG](../../CHANGELOG.md) for version history.
+See the [CHANGELOG](https://github.com/maxfield-allison/dnsweaver/blob/main/CHANGELOG.md) for version history.
 
 ## Release Workflow
 
