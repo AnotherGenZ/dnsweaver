@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/dnsupdate"
@@ -343,10 +344,10 @@ func (p *Provider) toRFC2136Record(record provider.Record) (dnsupdate.Record, er
 		}
 	}
 
-	// Determine TTL
-	ttl := uint32(p.ttl)
+	// Determine TTL (clamp to valid uint32 range for DNS wire format)
+	ttl := uint32(min(max(0, p.ttl), math.MaxUint32))
 	if record.TTL > 0 {
-		ttl = uint32(record.TTL)
+		ttl = uint32(min(record.TTL, math.MaxUint32))
 	}
 
 	r := dnsupdate.Record{

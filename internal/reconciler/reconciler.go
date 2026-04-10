@@ -98,6 +98,11 @@ type Reconciler struct {
 	// from the correct provider even when domain patterns have changed (#51).
 	hostnameProviders map[string][]string
 
+	// reconcileMu serializes full Reconcile() calls to prevent concurrent
+	// reconciliation cycles from interleaving (e.g., periodic timer firing
+	// while a Docker/K8s event-triggered reconciliation is still running).
+	reconcileMu sync.Mutex
+
 	// recoveredMetadata stores per-hostname metadata recovered from ownership
 	// TXT records on startup. This is populated by RecoverOwnership and consumed
 	// by the first reconciliation cycle. After the first cycle completes, this
@@ -135,12 +140,13 @@ func New(
 	opts ...Option,
 ) *Reconciler {
 	r := &Reconciler{
-		listers:        listers,
-		sources:        sources,
-		providers:      providers,
-		config:         DefaultConfig(),
-		logger:         slog.Default(),
-		knownHostnames: make(map[string]struct{}),
+		listers:           listers,
+		sources:           sources,
+		providers:         providers,
+		config:            DefaultConfig(),
+		logger:            slog.Default(),
+		knownHostnames:    make(map[string]struct{}),
+		hostnameProviders: make(map[string][]string),
 	}
 
 	for _, opt := range opts {
@@ -179,6 +185,11 @@ func (r *Reconciler) Reconcile(ctx context.Context) (*Result, error) {
 		return result, nil
 	}
 
+	// Serialize full reconciliation cycles to prevent concurrent runs from
+	// interleaving (e.g., periodic timer + Docker/K8s event handler).
+	r.reconcileMu.Lock()
+	defer r.reconcileMu.Unlock()
+
 	dryRun := r.dryRun.Load()
 
 	r.logger.Info("starting reconciliation",
@@ -213,11 +224,9 @@ func (r *Reconciler) Reconcile(ctx context.Context) (*Result, error) {
 		slog.Int("hostnames", len(discoveredHostnames)),
 	)
 
-	// Step 3: Build record cache for all providers (single List() call per provider)
-	var cache *recordCache
-	if !dryRun {
-		cache = newRecordCache(ctx, r.providers, r.logger)
-	}
+	// Step 3: Build record cache for all providers (single List() call per provider).
+	// Built even in dry-run mode so orphan cleanup can report accurate record counts.
+	cache := newRecordCache(ctx, r.providers, r.logger)
 
 	// Step 4: Ensure records exist for all discovered hostnames.
 	// Track which providers each hostname is routed to for orphan cleanup (#51).
@@ -522,6 +531,7 @@ func (r *Reconciler) RecoverOwnership(ctx context.Context) error {
 
 	totalRecovered := 0
 	recoveredMeta := make(map[string]map[string]string)
+	var failedProviders []string
 
 	for _, inst := range r.providers.All() {
 		recovered, err := inst.RecoverOwnedHostnames(ctx)
@@ -530,6 +540,7 @@ func (r *Reconciler) RecoverOwnership(ctx context.Context) error {
 				slog.String("provider", inst.Name()),
 				slog.String("error", err.Error()),
 			)
+			failedProviders = append(failedProviders, inst.Name())
 			continue
 		}
 
@@ -542,9 +553,6 @@ func (r *Reconciler) RecoverOwnership(ctx context.Context) error {
 				// Track which provider this hostname was recovered from (#51).
 				// This seeds the provider mapping so orphan cleanup can target
 				// the correct provider even on the first reconciliation after restart.
-				if r.hostnameProviders == nil {
-					r.hostnameProviders = make(map[string][]string)
-				}
 				r.hostnameProviders[normalized] = appendUnique(r.hostnameProviders[normalized], inst.Name())
 				// Store recovered metadata if present
 				if len(rh.Metadata) > 0 {
@@ -569,7 +577,12 @@ func (r *Reconciler) RecoverOwnership(ctx context.Context) error {
 	r.logger.Info("ownership recovery complete",
 		slog.Int("total_hostnames", totalRecovered),
 		slog.Int("hostnames_with_metadata", len(recoveredMeta)),
+		slog.Int("failed_providers", len(failedProviders)),
 	)
+
+	if len(failedProviders) > 0 {
+		return fmt.Errorf("ownership recovery failed for %d provider(s): %v", len(failedProviders), failedProviders)
+	}
 
 	return nil
 }

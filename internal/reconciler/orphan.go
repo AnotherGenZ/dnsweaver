@@ -163,22 +163,6 @@ func (r *Reconciler) deleteOrphanForProvider(ctx context.Context, hostname strin
 // This mode deletes any in-scope record without requiring ownership, but only
 // touches record types that the provider supports (via Capabilities).
 func (r *Reconciler) deleteAuthoritativeForProvider(ctx context.Context, hostname string, inst *provider.ProviderInstance, cache *recordCache) []Action {
-	if r.isDryRun() {
-		action := Action{
-			Type:       ActionDelete,
-			Provider:   inst.Name(),
-			Hostname:   hostname,
-			RecordType: string(inst.RecordType),
-			Target:     inst.Target,
-			Status:     StatusSuccess,
-		}
-		r.logger.Info("would delete record in authoritative mode (dry-run)",
-			slog.String("hostname", hostname),
-			slog.String("provider", inst.Name()),
-		)
-		return []Action{action}
-	}
-
 	// Get capabilities to know which record types are safe to delete
 	caps := inst.Provider.Capabilities()
 
@@ -211,7 +195,7 @@ func (r *Reconciler) deleteAuthoritativeForProvider(ctx context.Context, hostnam
 			}}
 		}
 		for _, rec := range allRecords {
-			if rec.Hostname == hostname {
+			if source.NormalizeHostname(rec.Hostname) == hostname {
 				recordsToDelete = append(recordsToDelete, rec)
 			}
 		}
@@ -240,6 +224,18 @@ func (r *Reconciler) deleteAuthoritativeForProvider(ctx context.Context, hostnam
 			Hostname:   hostname,
 			RecordType: string(record.Type),
 			Target:     record.Target,
+		}
+
+		if r.isDryRun() {
+			action.Status = StatusSuccess
+			r.logger.Info("would delete record in authoritative mode (dry-run)",
+				slog.String("hostname", hostname),
+				slog.String("provider", inst.Name()),
+				slog.String("type", string(record.Type)),
+				slog.String("target", record.Target),
+			)
+			actions = append(actions, action)
+			continue
 		}
 
 		var err error
@@ -272,7 +268,12 @@ func (r *Reconciler) deleteAuthoritativeForProvider(ctx context.Context, hostnam
 
 	// Also delete ownership TXT record if we have one
 	if r.config.OwnershipTracking {
-		if ownerErr := inst.DeleteOwnershipRecord(ctx, hostname); ownerErr != nil {
+		if r.isDryRun() {
+			r.logger.Debug("would delete ownership record (dry-run)",
+				slog.String("hostname", hostname),
+				slog.String("provider", inst.Name()),
+			)
+		} else if ownerErr := inst.DeleteOwnershipRecord(ctx, hostname); ownerErr != nil {
 			r.logger.Debug("failed to delete ownership record (may not exist)",
 				slog.String("hostname", hostname),
 				slog.String("provider", inst.Name()),
@@ -286,22 +287,6 @@ func (r *Reconciler) deleteAuthoritativeForProvider(ctx context.Context, hostnam
 // deleteManagedForProvider deletes orphan records in managed mode with ownership tracking.
 // Only deletes records that have an ownership TXT marker.
 func (r *Reconciler) deleteManagedForProvider(ctx context.Context, hostname string, inst *provider.ProviderInstance, cache *recordCache) []Action {
-	if r.isDryRun() {
-		action := Action{
-			Type:       ActionDelete,
-			Provider:   inst.Name(),
-			Hostname:   hostname,
-			RecordType: string(inst.RecordType),
-			Target:     inst.Target,
-			Status:     StatusSuccess,
-		}
-		r.logger.Info("would delete record if owned (dry-run)",
-			slog.String("hostname", hostname),
-			slog.String("provider", inst.Name()),
-		)
-		return []Action{action}
-	}
-
 	// Check if we own this record (using cache if available)
 	var hasOwnership bool
 	if cache != nil {
@@ -372,7 +357,7 @@ func (r *Reconciler) deleteManagedForProvider(ctx context.Context, hostname stri
 			}}
 		}
 		for _, rec := range allRecords {
-			if rec.Hostname == hostname {
+			if source.NormalizeHostname(rec.Hostname) == hostname {
 				switch rec.Type {
 				case provider.RecordTypeA, provider.RecordTypeAAAA, provider.RecordTypeCNAME, provider.RecordTypeSRV, provider.RecordTypeHTTPS:
 					recordsToDelete = append(recordsToDelete, rec)
@@ -383,6 +368,7 @@ func (r *Reconciler) deleteManagedForProvider(ctx context.Context, hostname stri
 		}
 	}
 
+	dryRun := r.isDryRun()
 	var actions []Action
 	for _, record := range recordsToDelete {
 		action := Action{
@@ -391,6 +377,18 @@ func (r *Reconciler) deleteManagedForProvider(ctx context.Context, hostname stri
 			Hostname:   hostname,
 			RecordType: string(record.Type),
 			Target:     record.Target,
+		}
+
+		if dryRun {
+			action.Status = StatusSuccess
+			r.logger.Info("would delete record if owned (dry-run)",
+				slog.String("hostname", hostname),
+				slog.String("provider", inst.Name()),
+				slog.String("type", string(record.Type)),
+				slog.String("target", record.Target),
+			)
+			actions = append(actions, action)
+			continue
 		}
 
 		var err error
@@ -422,7 +420,12 @@ func (r *Reconciler) deleteManagedForProvider(ctx context.Context, hostname stri
 	}
 
 	// Also delete ownership TXT record
-	if ownerErr := inst.DeleteOwnershipRecord(ctx, hostname); ownerErr != nil {
+	if dryRun {
+		r.logger.Debug("would delete ownership record (dry-run)",
+			slog.String("hostname", hostname),
+			slog.String("provider", inst.Name()),
+		)
+	} else if ownerErr := inst.DeleteOwnershipRecord(ctx, hostname); ownerErr != nil {
 		r.logger.Warn("failed to delete ownership record",
 			slog.String("hostname", hostname),
 			slog.String("provider", inst.Name()),
@@ -452,23 +455,6 @@ func (r *Reconciler) deleteManagedForProvider(ctx context.Context, hostname stri
 // instance would be incorrectly identified as owned and deleted. This is a narrow risk
 // that requires exact target match within dnsweaver's managed domain patterns.
 func (r *Reconciler) deleteTargetMatchForProvider(ctx context.Context, hostname string, inst *provider.ProviderInstance, cache *recordCache) []Action {
-	if r.isDryRun() {
-		action := Action{
-			Type:       ActionDelete,
-			Provider:   inst.Name(),
-			Hostname:   hostname,
-			RecordType: string(inst.RecordType),
-			Target:     inst.Target,
-			Status:     StatusSuccess,
-		}
-		r.logger.Info("would delete target-matched record (dry-run)",
-			slog.String("hostname", hostname),
-			slog.String("provider", inst.Name()),
-			slog.String("target", inst.Target),
-		)
-		return []Action{action}
-	}
-
 	// Get actual records from cache or provider
 	var allRecords []provider.Record
 	if cache != nil {
@@ -497,7 +483,7 @@ func (r *Reconciler) deleteTargetMatchForProvider(ctx context.Context, hostname 
 			}}
 		}
 		for _, rec := range records {
-			if rec.Hostname == hostname {
+			if source.NormalizeHostname(rec.Hostname) == hostname {
 				allRecords = append(allRecords, rec)
 			}
 		}
@@ -540,6 +526,18 @@ func (r *Reconciler) deleteTargetMatchForProvider(ctx context.Context, hostname 
 			Target:     record.Target,
 		}
 
+		if r.isDryRun() {
+			action.Status = StatusSuccess
+			r.logger.Info("would delete target-matched record (dry-run)",
+				slog.String("hostname", hostname),
+				slog.String("provider", inst.Name()),
+				slog.String("type", string(record.Type)),
+				slog.String("target", record.Target),
+			)
+			actions = append(actions, action)
+			continue
+		}
+
 		if err := inst.DeleteRecordByTarget(ctx, hostname, record.Type, record.Target); err != nil {
 			action.Status = StatusFailed
 			action.Error = err.Error()
@@ -568,22 +566,6 @@ func (r *Reconciler) deleteTargetMatchForProvider(ctx context.Context, hostname 
 // deleteCacheOnlyForProvider deletes orphan records in managed mode without ownership tracking.
 // Uses the cache to determine what record types exist.
 func (r *Reconciler) deleteCacheOnlyForProvider(ctx context.Context, hostname string, inst *provider.ProviderInstance, cache *recordCache) []Action {
-	if r.isDryRun() {
-		action := Action{
-			Type:       ActionDelete,
-			Provider:   inst.Name(),
-			Hostname:   hostname,
-			RecordType: string(inst.RecordType),
-			Target:     inst.Target,
-			Status:     StatusSuccess,
-		}
-		r.logger.Info("would delete record (dry-run)",
-			slog.String("hostname", hostname),
-			slog.String("provider", inst.Name()),
-		)
-		return []Action{action}
-	}
-
 	// Get actual records from cache
 	var recordsToDelete []provider.Record
 	if cache != nil {
@@ -613,7 +595,7 @@ func (r *Reconciler) deleteCacheOnlyForProvider(ctx context.Context, hostname st
 			}}
 		}
 		for _, rec := range allRecords {
-			if rec.Hostname == hostname {
+			if source.NormalizeHostname(rec.Hostname) == hostname {
 				switch rec.Type {
 				case provider.RecordTypeA, provider.RecordTypeAAAA, provider.RecordTypeCNAME, provider.RecordTypeSRV, provider.RecordTypeHTTPS:
 					recordsToDelete = append(recordsToDelete, rec)
@@ -650,6 +632,17 @@ func (r *Reconciler) deleteCacheOnlyForProvider(ctx context.Context, hostname st
 				slog.String("type", string(record.Type)),
 				slog.String("error", err.Error()),
 			)
+			if r.isDryRun() {
+				action.Status = StatusSuccess
+				r.logger.Info("would delete record (dry-run)",
+					slog.String("hostname", hostname),
+					slog.String("provider", inst.Name()),
+					slog.String("type", string(record.Type)),
+					slog.String("target", record.Target),
+				)
+				actions = append(actions, action)
+				continue
+			}
 		} else {
 			action.Status = StatusSuccess
 			r.logger.Info("deleted record",

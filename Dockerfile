@@ -64,6 +64,11 @@ LABEL org.opencontainers.image.title="dnsweaver" \
     org.opencontainers.image.vendor="bluewillows.net" \
     org.opencontainers.image.base.name="alpine:3.23"
 
+# Changing CACHE_BUST invalidates Docker layer cache for apk upgrade.
+# CI passes --build-arg CACHE_BUST=$CI_PIPELINE_ID so every pipeline
+# runs a fresh apk upgrade, even if the base image hash is unchanged.
+ARG CACHE_BUST=dev
+
 # Install runtime dependencies (no wget/curl — reduces attack surface)
 # Upgrade base packages first to pick up security fixes
 RUN apk upgrade --no-cache && \

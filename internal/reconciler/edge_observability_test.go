@@ -373,6 +373,21 @@ func TestReconcile_DryRunOrphanCleanupReportsActions(t *testing.T) {
 	cfg.CleanupOrphans = true
 	cfg.OwnershipTracking = true
 
+	// Seed the provider with a record for the orphaned hostname so
+	// the cache-based orphan cleanup can find it during dry-run.
+	mockProvider.AddRecord(provider.Record{
+		Hostname: "orphan.example.com",
+		Type:     provider.RecordTypeA,
+		Target:   "10.0.0.1",
+		TTL:      300,
+	})
+	// Also seed the ownership TXT record (managed mode requires it)
+	mockProvider.AddRecord(provider.Record{
+		Hostname: "_dnsweaver.orphan.example.com",
+		Type:     provider.RecordTypeTXT,
+		Target:   "heritage=dnsweaver",
+	})
+
 	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(cfg),
 		WithLogger(logger),

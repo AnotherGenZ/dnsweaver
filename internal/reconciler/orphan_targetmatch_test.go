@@ -321,6 +321,14 @@ func TestDeleteTargetMatch_DryRun(t *testing.T) {
 	})
 
 	inst, _ := reg.Get("adguard")
+
+	// Seed a record so the provider's List() returns a matching record for dry-run
+	mock.AddRecord(provider.Record{
+		Hostname: "app.home.example.com",
+		Type:     provider.RecordTypeA,
+		Target:   "10.0.0.1",
+	})
+
 	rec := &Reconciler{
 		providers: reg,
 		logger:    logger,

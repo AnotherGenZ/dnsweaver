@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -117,7 +116,7 @@ func (c *APIClient) Ping(ctx context.Context) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := httputil.ReadBody(resp, 0)
 		return fmt.Errorf("Pi-hole returned status %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -177,7 +176,7 @@ func (c *APIClient) listCustomDNS(ctx context.Context) ([]piholeRecord, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httputil.ReadBody(resp, 0)
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
@@ -240,7 +239,7 @@ func (c *APIClient) listCNAME(ctx context.Context) ([]piholeRecord, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httputil.ReadBody(resp, 0)
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
@@ -303,7 +302,7 @@ func (c *APIClient) createCustomDNS(ctx context.Context, record piholeRecord) er
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httputil.ReadBody(resp, 0)
 	if err != nil {
 		return fmt.Errorf("reading response: %w", err)
 	}
@@ -360,7 +359,7 @@ func (c *APIClient) createCNAME(ctx context.Context, record piholeRecord) error 
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httputil.ReadBody(resp, 0)
 	if err != nil {
 		return fmt.Errorf("reading response: %w", err)
 	}
@@ -426,7 +425,7 @@ func (c *APIClient) deleteCustomDNS(ctx context.Context, record piholeRecord) er
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httputil.ReadBody(resp, 0)
 	if err != nil {
 		return fmt.Errorf("reading response: %w", err)
 	}
@@ -480,7 +479,7 @@ func (c *APIClient) deleteCNAME(ctx context.Context, record piholeRecord) error 
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := httputil.ReadBody(resp, 0)
 	if err != nil {
 		return fmt.Errorf("reading response: %w", err)
 	}

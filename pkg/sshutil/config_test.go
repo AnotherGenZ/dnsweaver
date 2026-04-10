@@ -435,14 +435,13 @@ func TestGetEnvOrFile(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to direct when file missing", func(t *testing.T) {
+	t.Run("returns empty when file specified but missing", func(t *testing.T) {
 		os.Setenv("TEST_DIRECT", "direct-value")
 		os.Setenv("TEST_DIRECT_FILE", "/nonexistent/path")
 
 		got := getEnvOrFile("TEST_DIRECT", "TEST_DIRECT_FILE")
-		want := "direct-value"
-		if got != want {
-			t.Errorf("getEnvOrFile() = %q, want %q", got, want)
+		if got != "" {
+			t.Errorf("getEnvOrFile() = %q, want empty (file specified but unreadable should not fall back)", got)
 		}
 	})
 

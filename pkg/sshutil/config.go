@@ -14,6 +14,7 @@ package sshutil
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -283,7 +284,15 @@ func getEnvOrFile(directKey, fileKey string) string {
 		if err == nil {
 			return strings.TrimSpace(string(content))
 		}
-		// If file read fails, fall through to direct value
+		// File key was explicitly set but file can't be read — this is a
+		// configuration error. Return empty rather than silently falling
+		// through to the direct env var, which would mask the problem.
+		slog.Warn("secret file specified but unreadable, ignoring direct env var",
+			slog.String("file_key", fileKey),
+			slog.String("file_path", filePath),
+			slog.String("error", err.Error()),
+		)
+		return ""
 	}
 
 	return os.Getenv(directKey)

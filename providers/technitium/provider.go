@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
@@ -185,9 +186,9 @@ func (p *Provider) List(ctx context.Context) ([]provider.Record, error) {
 				TTL:        r.TTL,
 				ProviderID: fmt.Sprintf("%s:%s:%d:%d:%d:%s", r.Name, r.Type, r.RData.Priority, r.RData.Weight, r.RData.Port, r.RData.SrvTarget),
 				SRV: &provider.SRVData{
-					Priority: uint16(r.RData.Priority),
-					Weight:   uint16(r.RData.Weight),
-					Port:     uint16(r.RData.Port),
+					Priority: uint16(min(max(0, r.RData.Priority), math.MaxUint16)),
+					Weight:   uint16(min(max(0, r.RData.Weight), math.MaxUint16)),
+					Port:     uint16(min(max(0, r.RData.Port), math.MaxUint16)),
 				},
 			})
 		case "HTTPS":
@@ -198,7 +199,7 @@ func (p *Provider) List(ctx context.Context) ([]provider.Record, error) {
 				TTL:        r.TTL,
 				ProviderID: fmt.Sprintf("%s:%s:%d:%s:%s", r.Name, r.Type, r.RData.SvcPriority, r.RData.SvcTargetName, r.RData.SvcParams),
 				HTTPS: &provider.HTTPSData{
-					Priority:   uint16(r.RData.SvcPriority),
+					Priority:   uint16(min(max(0, r.RData.SvcPriority), math.MaxUint16)),
 					TargetName: r.RData.SvcTargetName,
 					ALPN:       extractALPN(r.RData.SvcParams),
 				},
