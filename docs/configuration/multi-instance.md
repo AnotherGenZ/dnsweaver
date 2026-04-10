@@ -140,6 +140,19 @@ This prevents one copy's orphan cleanup from deleting records managed by the oth
 !!! warning
     Without `DNSWEAVER_INSTANCE_ID`, all copies share the same ownership namespace. Running multiple copies without distinct instance IDs may cause records to be incorrectly deleted as orphans.
 
+### Providers Without TXT Support
+
+Some providers — **AdGuard Home**, **Pi-hole** (file mode), and **dnsmasq** — cannot store TXT records. For these providers, dnsweaver uses **target-based ownership inference** instead of TXT ownership records.
+
+In target-based inference, orphan cleanup compares each record's type and target against the instance's configured values. Records that match are inferred as owned and cleaned up; records with different targets are preserved.
+
+This means `DNSWEAVER_INSTANCE_ID` has **no effect** on providers that don't support TXT records — ownership is determined entirely by target matching. If two copies of dnsweaver point at the same provider with different targets (e.g., different `DNSWEAVER_<INSTANCE>_TARGET` values), they will naturally avoid conflicting because each copy only touches records matching its own target.
+
+!!! tip
+    If two copies target the **same** provider with the **same** target value, there is no way to distinguish ownership. Avoid this configuration — instead, consolidate into a single copy with multiple instances.
+
+See [Operational Modes](modes.md) for details on how target-based inference works in managed mode.
+
 ## Domain Overlap
 
 When multiple instances match the same hostname, **all matching instances create records**. This is by design — it enables split-horizon, multi-provider redundancy, and webhook notification patterns.
