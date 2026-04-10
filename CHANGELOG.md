@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-04-10
+
+### Security
+- **CACHE_BUST build arg for Docker layer cache invalidation**: `--pull` alone was
+  insufficient — if the Alpine base image tag hasn't been rebuilt, Docker layer
+  caching preserves stale `apk upgrade` output. Added `ARG CACHE_BUST` in the
+  runtime stage and `--build-arg CACHE_BUST=$CI_PIPELINE_ID` to all CI Docker
+  build commands, ensuring every pipeline runs a fresh `apk upgrade`
+- **Reconciler race condition**: Added `reconcileMu` mutex to serialize
+  `Reconcile()` calls, preventing concurrent map access
+- **Case-sensitive hostname comparison**: Fixed orphan cleanup to use
+  `source.NormalizeHostname()` for consistent case-insensitive hostname matching
+- **SSH config `getEnvOrFile` alignment**: When `_FILE` key is set but file is
+  unreadable, now returns empty string (hard-fail) matching config behavior
+- **Dry-run orphan accuracy**: Always build record cache (was nil in dry-run mode);
+  refactored deletion functions to check dry-run per-record
+- **RecoverOwnership error handling**: Now returns error listing failed providers
+  instead of silently continuing
+- **Bounded HTTP response reading**: Replaced all `io.ReadAll` calls in Pi-hole
+  client with `httputil.ReadBody` (10 MB limit) to prevent memory exhaustion
+- **Integer overflow guards**: Added `gosec G115` clamps — TTL to `uint32` in
+  RFC 2136, SRV/HTTPS fields to `uint16` in Technitium
+
+### Fixed
+- **Hostname provider map initialization**: Initialize `hostnameProviders` map in
+  `New()` instead of lazy nil check
+
 ## [1.1.2] - 2026-04-10
 
 ### Security
@@ -653,7 +680,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitLab CI/CD pipeline with GitHub release automation
 - Docker Hub and GitHub Container Registry publishing
 
-[Unreleased]: https://github.com/maxfield-allison/dnsweaver/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/maxfield-allison/dnsweaver/compare/v1.1.3...HEAD
+[1.1.3]: https://github.com/maxfield-allison/dnsweaver/compare/v1.1.2...v1.1.3
+[1.1.2]: https://github.com/maxfield-allison/dnsweaver/compare/v1.1.1...v1.1.2
+[1.1.1]: https://github.com/maxfield-allison/dnsweaver/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/maxfield-allison/dnsweaver/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/maxfield-allison/dnsweaver/compare/v0.9.3...v1.0.0
 [0.9.3]: https://github.com/maxfield-allison/dnsweaver/compare/v0.9.2...v0.9.3
 [0.9.2]: https://github.com/maxfield-allison/dnsweaver/compare/v0.9.1...v0.9.2
