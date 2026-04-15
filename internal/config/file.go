@@ -62,14 +62,18 @@ type FileRotationConfig struct {
 
 // FileReconcilerConfig holds reconciliation settings.
 type FileReconcilerConfig struct {
-	Interval          string `yaml:"interval,omitempty"`           // Go duration format (e.g., "60s", "5m")
-	ShutdownTimeout   string `yaml:"shutdown_timeout,omitempty"`   // Max time to wait for in-flight ops during shutdown
-	DryRun            *bool  `yaml:"dry_run,omitempty"`            // Pointer to distinguish unset from false
-	CleanupOrphans    *bool  `yaml:"cleanup_orphans,omitempty"`    // Delete records for removed workloads
-	CleanupOnStop     *bool  `yaml:"cleanup_on_stop,omitempty"`    // Delete records when containers stop
-	OwnershipTracking *bool  `yaml:"ownership_tracking,omitempty"` // Use TXT records for ownership
-	AdoptExisting     *bool  `yaml:"adopt_existing,omitempty"`     // Adopt pre-existing DNS records
-	InstanceID        string `yaml:"instance_id,omitempty"`        // Unique ID for multi-instance coordination
+	Interval                            string   `yaml:"interval,omitempty"`                                // Go duration format (e.g., "60s", "5m")
+	ShutdownTimeout                     string   `yaml:"shutdown_timeout,omitempty"`                        // Max time to wait for in-flight ops during shutdown
+	DryRun                              *bool    `yaml:"dry_run,omitempty"`                                 // Pointer to distinguish unset from false
+	CleanupOrphans                      *bool    `yaml:"cleanup_orphans,omitempty"`                         // Delete records for removed workloads
+	CleanupOnStop                       *bool    `yaml:"cleanup_on_stop,omitempty"`                         // Delete records when containers stop
+	OwnershipTracking                   *bool    `yaml:"ownership_tracking,omitempty"`                      // Use TXT records for ownership
+	AdoptExisting                       *bool    `yaml:"adopt_existing,omitempty"`                          // Adopt pre-existing DNS records
+	DetachedCleanupAllowMassDelete      *bool    `yaml:"detached_cleanup_allow_mass_delete,omitempty"`      // Bypass detached cleanup circuit breaker
+	DetachedCleanupRatioThreshold       *float64 `yaml:"detached_cleanup_ratio_threshold,omitempty"`        // Detached cleanup ratio threshold (0,1]
+	DetachedCleanupRatioMinHostnames    *int     `yaml:"detached_cleanup_ratio_min_hostnames,omitempty"`    // Min hostnames before ratio breaker
+	DetachedCleanupAbsoluteMaxHostnames *int     `yaml:"detached_cleanup_absolute_max_hostnames,omitempty"` // Absolute detached hostname cap
+	InstanceID                          string   `yaml:"instance_id,omitempty"`                             // Unique ID for multi-instance coordination
 }
 
 // FileDockerConfig holds Docker connection settings.
@@ -242,29 +246,33 @@ func LoadFile(path string) (*FileConfig, error) {
 // Values from file take precedence over defaults; env vars override later.
 func (c *FileConfig) ToGlobalConfig() *GlobalConfig {
 	cfg := &GlobalConfig{
-		LogLevel:             DefaultLogLevel,
-		LogFormat:            DefaultLogFormat,
-		LogMaxSize:           DefaultLogMaxSize,
-		LogMaxBackups:        DefaultLogMaxBackups,
-		LogMaxAge:            DefaultLogMaxAge,
-		LogCompress:          DefaultLogCompress,
-		DryRun:               DefaultDryRun,
-		CleanupOrphans:       DefaultCleanupOrphans,
-		CleanupOnStop:        DefaultCleanupOnStop,
-		OwnershipTracking:    DefaultOwnershipTracking,
-		AdoptExisting:        DefaultAdoptExisting,
-		DefaultTTL:           DefaultTTL,
-		ReconcileInterval:    DefaultReconcileInterval,
-		ShutdownTimeout:      DefaultShutdownTimeout,
-		HealthPort:           DefaultHealthPort,
-		Platform:             DefaultPlatform,
-		DockerHost:           DefaultDockerHost,
-		DockerMode:           DefaultDockerMode,
-		K8sWatchIngress:      true,
-		K8sWatchIngressRoute: true,
-		K8sWatchHTTPRoute:    true,
-		K8sWatchServices:     false,
-		Source:               DefaultSource,
+		LogLevel:                            DefaultLogLevel,
+		LogFormat:                           DefaultLogFormat,
+		LogMaxSize:                          DefaultLogMaxSize,
+		LogMaxBackups:                       DefaultLogMaxBackups,
+		LogMaxAge:                           DefaultLogMaxAge,
+		LogCompress:                         DefaultLogCompress,
+		DryRun:                              DefaultDryRun,
+		CleanupOrphans:                      DefaultCleanupOrphans,
+		CleanupOnStop:                       DefaultCleanupOnStop,
+		OwnershipTracking:                   DefaultOwnershipTracking,
+		AdoptExisting:                       DefaultAdoptExisting,
+		DetachedCleanupAllowMassDelete:      DefaultDetachedCleanupAllowMassDelete,
+		DetachedCleanupRatioThreshold:       DefaultDetachedCleanupRatioThreshold,
+		DetachedCleanupRatioMinHostnames:    DefaultDetachedCleanupRatioMinHostnames,
+		DetachedCleanupAbsoluteMaxHostnames: DefaultDetachedCleanupAbsoluteMaxHostnames,
+		DefaultTTL:                          DefaultTTL,
+		ReconcileInterval:                   DefaultReconcileInterval,
+		ShutdownTimeout:                     DefaultShutdownTimeout,
+		HealthPort:                          DefaultHealthPort,
+		Platform:                            DefaultPlatform,
+		DockerHost:                          DefaultDockerHost,
+		DockerMode:                          DefaultDockerMode,
+		K8sWatchIngress:                     true,
+		K8sWatchIngressRoute:                true,
+		K8sWatchHTTPRoute:                   true,
+		K8sWatchServices:                    false,
+		Source:                              DefaultSource,
 	}
 
 	if c.Logging != nil {
@@ -308,6 +316,27 @@ func (c *FileConfig) ToGlobalConfig() *GlobalConfig {
 		}
 		if c.Reconciler.AdoptExisting != nil {
 			cfg.AdoptExisting = *c.Reconciler.AdoptExisting
+		}
+		if c.Reconciler.DetachedCleanupAllowMassDelete != nil {
+			cfg.DetachedCleanupAllowMassDelete = *c.Reconciler.DetachedCleanupAllowMassDelete
+		}
+		if c.Reconciler.DetachedCleanupRatioThreshold != nil {
+			ratio := *c.Reconciler.DetachedCleanupRatioThreshold
+			if ratio > 0 && ratio <= 1 {
+				cfg.DetachedCleanupRatioThreshold = ratio
+			}
+		}
+		if c.Reconciler.DetachedCleanupRatioMinHostnames != nil {
+			minHostnames := *c.Reconciler.DetachedCleanupRatioMinHostnames
+			if minHostnames >= 1 {
+				cfg.DetachedCleanupRatioMinHostnames = minHostnames
+			}
+		}
+		if c.Reconciler.DetachedCleanupAbsoluteMaxHostnames != nil {
+			absoluteMax := *c.Reconciler.DetachedCleanupAbsoluteMaxHostnames
+			if absoluteMax >= 1 {
+				cfg.DetachedCleanupAbsoluteMaxHostnames = absoluteMax
+			}
 		}
 		if c.Reconciler.Interval != "" {
 			if interval, err := time.ParseDuration(c.Reconciler.Interval); err == nil && interval >= time.Second {

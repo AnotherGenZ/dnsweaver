@@ -204,6 +204,27 @@ func (c *Config) AdoptExisting() bool {
 	return c.Global.AdoptExisting
 }
 
+// DetachedCleanupAllowMassDelete returns whether detached cleanup circuit
+// breaker safeguards are bypassed for large planned migrations.
+func (c *Config) DetachedCleanupAllowMassDelete() bool {
+	return c.Global.DetachedCleanupAllowMassDelete
+}
+
+// DetachedCleanupRatioThreshold returns the detached cleanup ratio threshold.
+func (c *Config) DetachedCleanupRatioThreshold() float64 {
+	return c.Global.DetachedCleanupRatioThreshold
+}
+
+// DetachedCleanupRatioMinHostnames returns the minimum detached hostnames for ratio breaker.
+func (c *Config) DetachedCleanupRatioMinHostnames() int {
+	return c.Global.DetachedCleanupRatioMinHostnames
+}
+
+// DetachedCleanupAbsoluteMaxHostnames returns the absolute detached hostname cap.
+func (c *Config) DetachedCleanupAbsoluteMaxHostnames() int {
+	return c.Global.DetachedCleanupAbsoluteMaxHostnames
+}
+
 // ReconcileInterval returns the reconciliation interval.
 func (c *Config) ReconcileInterval() time.Duration {
 	return c.Global.ReconcileInterval

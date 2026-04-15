@@ -33,6 +33,10 @@ dnsweaver --config /etc/dnsweaver/config.yml
 | `DNSWEAVER_CLEANUP_ON_STOP` | `true` | Delete DNS records when containers stop |
 | `DNSWEAVER_OWNERSHIP_TRACKING` | `true` | Use TXT records to track record ownership |
 | `DNSWEAVER_ADOPT_EXISTING` | `false` | Adopt existing DNS records by creating ownership TXT |
+| `DNSWEAVER_DETACHED_CLEANUP_ALLOW_MASS_DELETE` | `false` | Bypass detached-provider cleanup circuit breaker safeguards (for planned large migrations) |
+| `DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD` | `0.5` | Detached cleanup breaker ratio threshold (`0 < value <= 1`) |
+| `DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES` | `10` | Minimum detached hostnames before ratio-based detached breaker can trigger |
+| `DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES` | `100` | Absolute detached hostname cap per reconciliation cycle |
 | `DNSWEAVER_DEFAULT_TTL` | `300` | Default TTL for DNS records (seconds) |
 | `DNSWEAVER_RECONCILE_INTERVAL` | `60s` | Periodic reconciliation interval |
 | `DNSWEAVER_SHUTDOWN_TIMEOUT` | `30s` | Graceful shutdown timeout for in-flight updates |

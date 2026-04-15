@@ -203,6 +203,10 @@ server:
 func TestToGlobalConfig(t *testing.T) {
 	dryRun := true
 	cleanup := false
+	allowMassDelete := true
+	ratioThreshold := 0.75
+	ratioMin := 20
+	absoluteMax := 250
 
 	fileCfg := &FileConfig{
 		Logging: &FileLoggingConfig{
@@ -210,9 +214,13 @@ func TestToGlobalConfig(t *testing.T) {
 			Format: "json",
 		},
 		Reconciler: &FileReconcilerConfig{
-			Interval:       "5m",
-			DryRun:         &dryRun,
-			CleanupOrphans: &cleanup,
+			Interval:                            "5m",
+			DryRun:                              &dryRun,
+			CleanupOrphans:                      &cleanup,
+			DetachedCleanupAllowMassDelete:      &allowMassDelete,
+			DetachedCleanupRatioThreshold:       &ratioThreshold,
+			DetachedCleanupRatioMinHostnames:    &ratioMin,
+			DetachedCleanupAbsoluteMaxHostnames: &absoluteMax,
 		},
 		Docker: &FileDockerConfig{
 			Host: "tcp://docker:2375",
@@ -236,6 +244,18 @@ func TestToGlobalConfig(t *testing.T) {
 	}
 	if global.CleanupOrphans {
 		t.Error("CleanupOrphans should be false")
+	}
+	if !global.DetachedCleanupAllowMassDelete {
+		t.Error("DetachedCleanupAllowMassDelete should be true")
+	}
+	if global.DetachedCleanupRatioThreshold != ratioThreshold {
+		t.Errorf("DetachedCleanupRatioThreshold = %v, want %v", global.DetachedCleanupRatioThreshold, ratioThreshold)
+	}
+	if global.DetachedCleanupRatioMinHostnames != ratioMin {
+		t.Errorf("DetachedCleanupRatioMinHostnames = %d, want %d", global.DetachedCleanupRatioMinHostnames, ratioMin)
+	}
+	if global.DetachedCleanupAbsoluteMaxHostnames != absoluteMax {
+		t.Errorf("DetachedCleanupAbsoluteMaxHostnames = %d, want %d", global.DetachedCleanupAbsoluteMaxHostnames, absoluteMax)
 	}
 	if global.ReconcileInterval.String() != "5m0s" {
 		t.Errorf("ReconcileInterval = %s, want 5m0s", global.ReconcileInterval)

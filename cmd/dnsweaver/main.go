@@ -226,13 +226,17 @@ func run() error {
 
 	// Initialize reconciler
 	reconcilerCfg := reconciler.Config{
-		DryRun:            cfg.DryRun(),
-		CleanupOrphans:    cfg.CleanupOrphans(),
-		OwnershipTracking: cfg.OwnershipTracking(),
-		AdoptExisting:     cfg.AdoptExisting(),
-		ReconcileInterval: cfg.ReconcileInterval(),
-		Enabled:           true,
-		InstanceID:        cfg.InstanceID(),
+		DryRun:                              cfg.DryRun(),
+		CleanupOrphans:                      cfg.CleanupOrphans(),
+		OwnershipTracking:                   cfg.OwnershipTracking(),
+		AdoptExisting:                       cfg.AdoptExisting(),
+		DetachedCleanupAllowMassDelete:      cfg.DetachedCleanupAllowMassDelete(),
+		DetachedCleanupRatioThreshold:       cfg.DetachedCleanupRatioThreshold(),
+		DetachedCleanupRatioMinHostnames:    cfg.DetachedCleanupRatioMinHostnames(),
+		DetachedCleanupAbsoluteMaxHostnames: cfg.DetachedCleanupAbsoluteMaxHostnames(),
+		ReconcileInterval:                   cfg.ReconcileInterval(),
+		Enabled:                             true,
+		InstanceID:                          cfg.InstanceID(),
 	}
 
 	// Build workload listers for each enabled platform

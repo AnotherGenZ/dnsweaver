@@ -10,26 +10,30 @@ import (
 
 // Global configuration defaults.
 const (
-	DefaultLogLevel          = "info"
-	DefaultLogFormat         = "json"
-	DefaultLogMaxSize        = 100  // megabytes
-	DefaultLogMaxBackups     = 5    // number of old log files to keep
-	DefaultLogMaxAge         = 30   // days to retain old logs
-	DefaultLogCompress       = true // compress rotated log files
-	DefaultDryRun            = false
-	DefaultCleanupOrphans    = true
-	DefaultCleanupOnStop     = true
-	DefaultOwnershipTracking = true
-	DefaultAdoptExisting     = false
-	DefaultTTL               = 300
-	DefaultReconcileInterval = 60 * time.Second
-	DefaultShutdownTimeout   = 30 * time.Second
-	DefaultHealthPort        = 8080
-	DefaultDockerHost        = "unix:///var/run/docker.sock"
-	DefaultDockerMode        = "auto"
-	DefaultSource            = "traefik"
-	DefaultInstanceID        = ""
-	DefaultPlatform          = "docker"
+	DefaultLogLevel                            = "info"
+	DefaultLogFormat                           = "json"
+	DefaultLogMaxSize                          = 100  // megabytes
+	DefaultLogMaxBackups                       = 5    // number of old log files to keep
+	DefaultLogMaxAge                           = 30   // days to retain old logs
+	DefaultLogCompress                         = true // compress rotated log files
+	DefaultDryRun                              = false
+	DefaultCleanupOrphans                      = true
+	DefaultCleanupOnStop                       = true
+	DefaultOwnershipTracking                   = true
+	DefaultAdoptExisting                       = false
+	DefaultDetachedCleanupAllowMassDelete      = false
+	DefaultDetachedCleanupRatioThreshold       = 0.5
+	DefaultDetachedCleanupRatioMinHostnames    = 10
+	DefaultDetachedCleanupAbsoluteMaxHostnames = 100
+	DefaultTTL                                 = 300
+	DefaultReconcileInterval                   = 60 * time.Second
+	DefaultShutdownTimeout                     = 30 * time.Second
+	DefaultHealthPort                          = 8080
+	DefaultDockerHost                          = "unix:///var/run/docker.sock"
+	DefaultDockerMode                          = "auto"
+	DefaultSource                              = "traefik"
+	DefaultInstanceID                          = ""
+	DefaultPlatform                            = "docker"
 )
 
 // InstanceID validation constraints.
@@ -50,15 +54,19 @@ type GlobalConfig struct {
 	LogCompress   bool   // Compress rotated log files with gzip
 
 	// Behavior
-	DryRun            bool          // If true, don't make actual DNS changes
-	CleanupOrphans    bool          // If true, delete DNS records for removed workloads
-	CleanupOnStop     bool          // If true, delete DNS records when containers stop; if false, only when removed
-	OwnershipTracking bool          // If true, use TXT records to track record ownership
-	AdoptExisting     bool          // If true, adopt existing DNS records by creating ownership TXT records
-	DefaultTTL        int           // Default TTL for records if not specified per-provider
-	ReconcileInterval time.Duration // How often to reconcile DNS records
-	ShutdownTimeout   time.Duration // Max time to wait for in-flight operations during shutdown
-	HealthPort        int           // Port for health/metrics endpoints
+	DryRun                              bool          // If true, don't make actual DNS changes
+	CleanupOrphans                      bool          // If true, delete DNS records for removed workloads
+	CleanupOnStop                       bool          // If true, delete DNS records when containers stop; if false, only when removed
+	OwnershipTracking                   bool          // If true, use TXT records to track record ownership
+	AdoptExisting                       bool          // If true, adopt existing DNS records by creating ownership TXT records
+	DetachedCleanupAllowMassDelete      bool          // If true, bypass detached cleanup circuit breaker safeguards
+	DetachedCleanupRatioThreshold       float64       // Detached cleanup breaker ratio threshold (0 < value <= 1)
+	DetachedCleanupRatioMinHostnames    int           // Minimum hostnames before ratio-based detached breaker applies
+	DetachedCleanupAbsoluteMaxHostnames int           // Absolute detached hostname cap per cycle
+	DefaultTTL                          int           // Default TTL for records if not specified per-provider
+	ReconcileInterval                   time.Duration // How often to reconcile DNS records
+	ShutdownTimeout                     time.Duration // Max time to wait for in-flight operations during shutdown
+	HealthPort                          int           // Port for health/metrics endpoints
 
 	// Platform selection
 	Platform string // docker, kubernetes, both
@@ -234,6 +242,52 @@ func loadGlobalConfig() (*GlobalConfig, []*ConfigError) {
 		cfg.AdoptExisting = parseBool(adoptStr, DefaultAdoptExisting)
 	} else {
 		cfg.AdoptExisting = DefaultAdoptExisting
+	}
+
+	// Parse DETACHED_CLEANUP_ALLOW_MASS_DELETE
+	if allowMassDeleteStr := getEnv("DNSWEAVER_DETACHED_CLEANUP_ALLOW_MASS_DELETE"); allowMassDeleteStr != "" {
+		cfg.DetachedCleanupAllowMassDelete = parseBool(allowMassDeleteStr, DefaultDetachedCleanupAllowMassDelete)
+	} else {
+		cfg.DetachedCleanupAllowMassDelete = DefaultDetachedCleanupAllowMassDelete
+	}
+
+	if ratioStr := getEnv("DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD"); ratioStr != "" {
+		ratio, err := strconv.ParseFloat(ratioStr, 64)
+		if err != nil {
+			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD", fmt.Sprintf("invalid float %q", ratioStr), "Must be a decimal between 0 and 1 (exclusive of 0, inclusive of 1)", "DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD=0.5"))
+		} else if ratio <= 0 || ratio > 1 {
+			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD", fmt.Sprintf("must be > 0 and <= 1, got %v", ratio), "Use a ratio like 0.5 for 50%", "DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD=0.5"))
+		} else {
+			cfg.DetachedCleanupRatioThreshold = ratio
+		}
+	} else {
+		cfg.DetachedCleanupRatioThreshold = DefaultDetachedCleanupRatioThreshold
+	}
+
+	if minStr := getEnv("DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES"); minStr != "" {
+		minHostnames, err := strconv.Atoi(minStr)
+		if err != nil {
+			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES", fmt.Sprintf("invalid integer %q", minStr), "Must be an integer >= 1", "DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES=10"))
+		} else if minHostnames < 1 {
+			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES", "must be at least 1", "Use at least 1 to avoid always-on ratio breaker", "DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES=10"))
+		} else {
+			cfg.DetachedCleanupRatioMinHostnames = minHostnames
+		}
+	} else {
+		cfg.DetachedCleanupRatioMinHostnames = DefaultDetachedCleanupRatioMinHostnames
+	}
+
+	if absoluteStr := getEnv("DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES"); absoluteStr != "" {
+		absoluteMax, err := strconv.Atoi(absoluteStr)
+		if err != nil {
+			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES", fmt.Sprintf("invalid integer %q", absoluteStr), "Must be an integer >= 1", "DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES=100"))
+		} else if absoluteMax < 1 {
+			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES", "must be at least 1", "Use at least 1 to keep detached cleanup bounded", "DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES=100"))
+		} else {
+			cfg.DetachedCleanupAbsoluteMaxHostnames = absoluteMax
+		}
+	} else {
+		cfg.DetachedCleanupAbsoluteMaxHostnames = DefaultDetachedCleanupAbsoluteMaxHostnames
 	}
 
 	// Parse DEFAULT_TTL

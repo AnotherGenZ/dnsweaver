@@ -54,6 +54,10 @@ reconciler:
   cleanup_on_stop: true   # Delete records when containers stop (not just remove)
   ownership_tracking: true # Use TXT records to track record ownership
   adopt_existing: false   # Adopt pre-existing DNS records by creating TXT records
+  detached_cleanup_allow_mass_delete: false # Bypass detached cleanup circuit breaker for planned migrations
+  detached_cleanup_ratio_threshold: 0.5 # Ratio threshold (0 < value <= 1)
+  detached_cleanup_ratio_min_hostnames: 10 # Minimum hostnames before ratio breaker applies
+  detached_cleanup_absolute_max_hostnames: 100 # Absolute detached hostname cap per cycle
 
 # Multi-instance coordination
 # Unique identifier for this dnsweaver instance (for shared zone management)

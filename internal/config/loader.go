@@ -240,6 +240,43 @@ func mergeGlobalConfig(base *GlobalConfig) (*GlobalConfig, []*ConfigError) {
 		cfg.AdoptExisting = parseBool(v, cfg.AdoptExisting)
 	}
 
+	if v := getEnv("DNSWEAVER_DETACHED_CLEANUP_ALLOW_MASS_DELETE"); v != "" {
+		cfg.DetachedCleanupAllowMassDelete = parseBool(v, cfg.DetachedCleanupAllowMassDelete)
+	}
+
+	if v := getEnv("DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD"); v != "" {
+		ratio, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD", fmt.Sprintf("invalid value %q", v), "Must be a decimal between 0 and 1 (exclusive of 0, inclusive of 1)", "DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD=0.5"))
+		} else if ratio <= 0 || ratio > 1 {
+			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD", fmt.Sprintf("must be > 0 and <= 1, got %v", ratio), "Use a ratio like 0.5 for 50%", "DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD=0.5"))
+		} else {
+			cfg.DetachedCleanupRatioThreshold = ratio
+		}
+	}
+
+	if v := getEnv("DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES"); v != "" {
+		minHostnames, err := parseIntEnv(v)
+		if err != nil {
+			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES", fmt.Sprintf("invalid value %q", v), "Must be an integer >= 1", "DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES=10"))
+		} else if minHostnames < 1 {
+			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES", "must be at least 1", "Use at least 1 to avoid always-on ratio breaker", "DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES=10"))
+		} else {
+			cfg.DetachedCleanupRatioMinHostnames = minHostnames
+		}
+	}
+
+	if v := getEnv("DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES"); v != "" {
+		absoluteMax, err := parseIntEnv(v)
+		if err != nil {
+			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES", fmt.Sprintf("invalid value %q", v), "Must be an integer >= 1", "DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES=100"))
+		} else if absoluteMax < 1 {
+			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES", "must be at least 1", "Use at least 1 to keep detached cleanup bounded", "DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES=100"))
+		} else {
+			cfg.DetachedCleanupAbsoluteMaxHostnames = absoluteMax
+		}
+	}
+
 	if v := getEnv("DNSWEAVER_DEFAULT_TTL"); v != "" {
 		if ttl, err := parseIntEnv(v); err == nil && ttl >= 1 {
 			cfg.DefaultTTL = ttl

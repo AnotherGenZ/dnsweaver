@@ -2,6 +2,7 @@ package reconciler
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
@@ -280,5 +281,425 @@ func TestCleanupOrphans_UsesProviderMapping(t *testing.T) {
 	}
 	if !foundInternalDNS {
 		t.Errorf("cleanupOrphans() did not attempt to delete from internal-dns (stored provider mapping); actions: %v", deleteActions)
+	}
+}
+
+func TestCleanupDetachedProviders_CleansUpPreviousProviderWhenNoLongerMatched(t *testing.T) {
+	logger := quietLogger()
+
+	mockInternalDNS := newTestMockProvider("internal-dns")
+	mockInternalDNS.AddRecord(provider.Record{
+		Hostname: "app.example.com",
+		Type:     provider.RecordTypeA,
+		Target:   "10.0.0.1",
+	})
+
+	reg := provider.NewRegistry(logger)
+	reg.RegisterFactory("mock", func(cfg provider.FactoryConfig) (provider.Provider, error) {
+		if cfg.Name == "internal-dns" {
+			return mockInternalDNS, nil
+		}
+		return newTestMockProvider(cfg.Name), nil
+	})
+
+	err := reg.CreateInstance(provider.ProviderInstanceConfig{
+		Name:       "internal-dns",
+		TypeName:   "mock",
+		Domains:    []string{"*.example.com"},
+		RecordType: "A",
+		Target:     "10.0.0.1",
+		Mode:       provider.ModeAuthoritative,
+		TTL:        300,
+	})
+	if err != nil {
+		t.Fatalf("create internal-dns: %v", err)
+	}
+
+	rec := &Reconciler{
+		providers: reg,
+		logger:    logger,
+		config: Config{
+			CleanupOrphans:    true,
+			OwnershipTracking: false,
+		},
+		knownHostnames: map[string]struct{}{
+			"app.example.com": {},
+		},
+		hostnameProviders: map[string][]string{
+			"app.example.com": {"internal-dns"},
+		},
+	}
+	rec.syncAtomics()
+
+	currentHostnames := map[string]*source.Hostname{
+		"app.example.com": {Name: "app.example.com", Source: "traefik"},
+	}
+	currentProviderMapping := map[string][]string{}
+
+	cache := &recordCache{
+		records: map[string]map[string][]provider.Record{
+			"internal-dns": {
+				"app.example.com": {
+					{Hostname: "app.example.com", Type: provider.RecordTypeA, Target: "10.0.0.1"},
+				},
+			},
+		},
+		logger: logger,
+	}
+
+	actions := rec.cleanupDetachedProviders(context.Background(), currentHostnames, currentProviderMapping, map[string]detachedRoutingState{}, cache)
+
+	var deleteActions []Action
+	for _, action := range actions {
+		if action.Type == ActionDelete && action.Status == StatusSuccess {
+			deleteActions = append(deleteActions, action)
+		}
+	}
+
+	if len(deleteActions) == 0 {
+		t.Fatalf("cleanupDetachedProviders() produced no successful delete actions; actions: %+v", actions)
+	}
+	if deleteActions[0].Provider != "internal-dns" {
+		t.Errorf("delete provider = %q, want internal-dns", deleteActions[0].Provider)
+	}
+	if deleteActions[0].Hostname != "app.example.com" {
+		t.Errorf("delete hostname = %q, want app.example.com", deleteActions[0].Hostname)
+	}
+}
+
+func TestCleanupDetachedProviders_DefersWhenCurrentProviderUnhealthy(t *testing.T) {
+	logger := quietLogger()
+
+	internal := newTestMockProvider("internal-dns")
+	external := newTestMockProvider("external-dns")
+	internal.AddRecord(provider.Record{Hostname: "app.example.com", Type: provider.RecordTypeA, Target: "10.0.0.1"})
+
+	reg := provider.NewRegistry(logger)
+	reg.RegisterFactory("mock", func(cfg provider.FactoryConfig) (provider.Provider, error) {
+		if cfg.Name == "internal-dns" {
+			return internal, nil
+		}
+		if cfg.Name == "external-dns" {
+			return external, nil
+		}
+		return newTestMockProvider(cfg.Name), nil
+	})
+
+	_ = reg.CreateInstance(provider.ProviderInstanceConfig{
+		Name:       "internal-dns",
+		TypeName:   "mock",
+		Domains:    []string{"*.example.com"},
+		RecordType: "A",
+		Target:     "10.0.0.1",
+		Mode:       provider.ModeAuthoritative,
+		TTL:        300,
+	})
+	_ = reg.CreateInstance(provider.ProviderInstanceConfig{
+		Name:       "external-dns",
+		TypeName:   "mock",
+		Domains:    []string{"*.example.com"},
+		RecordType: "A",
+		Target:     "203.0.113.10",
+		Mode:       provider.ModeAuthoritative,
+		TTL:        300,
+	})
+
+	rec := &Reconciler{
+		providers: reg,
+		logger:    logger,
+		config: Config{
+			CleanupOrphans:    true,
+			OwnershipTracking: false,
+		},
+		hostnameProviders: map[string][]string{
+			"app.example.com": {"internal-dns", "external-dns"},
+		},
+	}
+	rec.syncAtomics()
+
+	currentHostnames := map[string]*source.Hostname{
+		"app.example.com": {Name: "app.example.com", Source: "traefik"},
+	}
+	currentProviderMapping := map[string][]string{
+		"app.example.com": {"external-dns"},
+	}
+	currentRoutingState := map[string]detachedRoutingState{
+		"app.example.com": {
+			hasCurrentProviderError: true,
+		},
+	}
+	cache := &recordCache{
+		records: map[string]map[string][]provider.Record{
+			"internal-dns": {
+				"app.example.com": {
+					{Hostname: "app.example.com", Type: provider.RecordTypeA, Target: "10.0.0.1"},
+				},
+			},
+		},
+		logger: logger,
+	}
+
+	actions := rec.cleanupDetachedProviders(context.Background(), currentHostnames, currentProviderMapping, currentRoutingState, cache)
+	if len(actions) != 0 {
+		t.Fatalf("expected deferred detached cleanup with no actions, got: %+v", actions)
+	}
+
+	if deleted := internal.GetDeleted(); len(deleted) != 0 {
+		t.Fatalf("expected no internal deletions while current provider unhealthy, got: %+v", deleted)
+	}
+}
+
+func TestCleanupDetachedProviders_CircuitBreakerByRatio(t *testing.T) {
+	logger := quietLogger()
+	internal := newTestMockProvider("internal-dns")
+	reg := provider.NewRegistry(logger)
+	reg.RegisterFactory("mock", func(cfg provider.FactoryConfig) (provider.Provider, error) {
+		if cfg.Name == "internal-dns" {
+			return internal, nil
+		}
+		return newTestMockProvider(cfg.Name), nil
+	})
+
+	_ = reg.CreateInstance(provider.ProviderInstanceConfig{
+		Name:       "internal-dns",
+		TypeName:   "mock",
+		Domains:    []string{"*.example.com"},
+		RecordType: "A",
+		Target:     "10.0.0.1",
+		Mode:       provider.ModeAuthoritative,
+		TTL:        300,
+	})
+
+	rec := &Reconciler{
+		providers: reg,
+		logger:    logger,
+		config: Config{
+			CleanupOrphans:    true,
+			OwnershipTracking: false,
+		},
+		hostnameProviders: make(map[string][]string),
+	}
+	rec.syncAtomics()
+
+	currentHostnames := make(map[string]*source.Hostname)
+	currentProviderMapping := make(map[string][]string)
+	cacheRecords := make(map[string][]provider.Record)
+
+	// 20 previous routed hostnames, 12 detached this cycle (60% > 50%, and >=10).
+	for i := 0; i < 20; i++ {
+		hostname := "app" + string(rune('a'+i)) + ".example.com"
+		rec.hostnameProviders[hostname] = []string{"internal-dns"}
+		if i < 12 {
+			currentHostnames[hostname] = &source.Hostname{Name: hostname, Source: "traefik"}
+			cacheRecords[hostname] = []provider.Record{
+				{Hostname: hostname, Type: provider.RecordTypeA, Target: "10.0.0.1"},
+			}
+		}
+	}
+
+	cache := &recordCache{
+		records: map[string]map[string][]provider.Record{
+			"internal-dns": cacheRecords,
+		},
+		logger: logger,
+	}
+
+	actions := rec.cleanupDetachedProviders(context.Background(), currentHostnames, currentProviderMapping, map[string]detachedRoutingState{}, cache)
+	if len(actions) != 0 {
+		t.Fatalf("expected detached cleanup breaker to skip actions, got: %+v", actions)
+	}
+	if deleted := internal.GetDeleted(); len(deleted) != 0 {
+		t.Fatalf("expected no deletions when breaker triggers, got: %+v", deleted)
+	}
+}
+
+func TestCleanupDetachedProviders_UsesCustomThresholds(t *testing.T) {
+	logger := quietLogger()
+	internal := newTestMockProvider("internal-dns")
+	reg := provider.NewRegistry(logger)
+	reg.RegisterFactory("mock", func(cfg provider.FactoryConfig) (provider.Provider, error) {
+		if cfg.Name == "internal-dns" {
+			return internal, nil
+		}
+		return newTestMockProvider(cfg.Name), nil
+	})
+	_ = reg.CreateInstance(provider.ProviderInstanceConfig{
+		Name:       "internal-dns",
+		TypeName:   "mock",
+		Domains:    []string{"*.example.com"},
+		RecordType: "A",
+		Target:     "10.0.0.1",
+		Mode:       provider.ModeAuthoritative,
+		TTL:        300,
+	})
+
+	rec := &Reconciler{
+		providers: reg,
+		logger:    logger,
+		config: Config{
+			CleanupOrphans:                      true,
+			OwnershipTracking:                   false,
+			DetachedCleanupRatioThreshold:       0.8,
+			DetachedCleanupRatioMinHostnames:    10,
+			DetachedCleanupAbsoluteMaxHostnames: 1000,
+		},
+		hostnameProviders: make(map[string][]string),
+	}
+	rec.syncAtomics()
+
+	currentHostnames := make(map[string]*source.Hostname)
+	currentProviderMapping := make(map[string][]string)
+	cacheRecords := make(map[string][]provider.Record)
+
+	// 20 previous routed hostnames, 12 detached this cycle (60%).
+	// Default threshold (50%) would trigger breaker; custom 80% should allow cleanup.
+	for i := 0; i < 20; i++ {
+		hostname := "app" + string(rune('a'+i)) + ".example.com"
+		rec.hostnameProviders[hostname] = []string{"internal-dns"}
+		if i < 12 {
+			currentHostnames[hostname] = &source.Hostname{Name: hostname, Source: "traefik"}
+			cacheRecords[hostname] = []provider.Record{
+				{Hostname: hostname, Type: provider.RecordTypeA, Target: "10.0.0.1"},
+			}
+		}
+	}
+
+	cache := &recordCache{
+		records: map[string]map[string][]provider.Record{
+			"internal-dns": cacheRecords,
+		},
+		logger: logger,
+	}
+
+	actions := rec.cleanupDetachedProviders(context.Background(), currentHostnames, currentProviderMapping, map[string]detachedRoutingState{}, cache)
+	if len(actions) == 0 {
+		t.Fatal("expected detached cleanup to proceed with custom thresholds")
+	}
+	if deleted := internal.GetDeleted(); len(deleted) == 0 {
+		t.Fatal("expected deletions with custom thresholds")
+	}
+}
+
+func TestCleanupDetachedProviders_CircuitBreakerByAbsoluteLimit(t *testing.T) {
+	logger := quietLogger()
+	internal := newTestMockProvider("internal-dns")
+	reg := provider.NewRegistry(logger)
+	reg.RegisterFactory("mock", func(cfg provider.FactoryConfig) (provider.Provider, error) {
+		if cfg.Name == "internal-dns" {
+			return internal, nil
+		}
+		return newTestMockProvider(cfg.Name), nil
+	})
+	_ = reg.CreateInstance(provider.ProviderInstanceConfig{
+		Name:       "internal-dns",
+		TypeName:   "mock",
+		Domains:    []string{"*.example.com"},
+		RecordType: "A",
+		Target:     "10.0.0.1",
+		Mode:       provider.ModeAuthoritative,
+		TTL:        300,
+	})
+
+	rec := &Reconciler{
+		providers: reg,
+		logger:    logger,
+		config: Config{
+			CleanupOrphans:    true,
+			OwnershipTracking: false,
+		},
+		hostnameProviders: make(map[string][]string),
+	}
+	rec.syncAtomics()
+
+	currentHostnames := make(map[string]*source.Hostname)
+	currentProviderMapping := make(map[string][]string)
+	cacheRecords := make(map[string][]provider.Record)
+
+	// 500 previous hostnames, 100 detached this cycle (20% ratio, but absolute cap hit).
+	for i := 0; i < 500; i++ {
+		hostname := fmt.Sprintf("svc-%d.example.com", i)
+		rec.hostnameProviders[hostname] = []string{"internal-dns"}
+		if i < 100 {
+			currentHostnames[hostname] = &source.Hostname{Name: hostname, Source: "traefik"}
+			cacheRecords[hostname] = []provider.Record{
+				{Hostname: hostname, Type: provider.RecordTypeA, Target: "10.0.0.1"},
+			}
+		}
+	}
+
+	cache := &recordCache{
+		records: map[string]map[string][]provider.Record{
+			"internal-dns": cacheRecords,
+		},
+		logger: logger,
+	}
+
+	actions := rec.cleanupDetachedProviders(context.Background(), currentHostnames, currentProviderMapping, map[string]detachedRoutingState{}, cache)
+	if len(actions) != 0 {
+		t.Fatalf("expected detached cleanup breaker to skip actions at absolute limit, got: %+v", actions)
+	}
+	if deleted := internal.GetDeleted(); len(deleted) != 0 {
+		t.Fatalf("expected no deletions at absolute breaker limit, got: %+v", deleted)
+	}
+}
+
+func TestCleanupDetachedProviders_AllowMassDeleteBypassesBreaker(t *testing.T) {
+	logger := quietLogger()
+	internal := newTestMockProvider("internal-dns")
+	reg := provider.NewRegistry(logger)
+	reg.RegisterFactory("mock", func(cfg provider.FactoryConfig) (provider.Provider, error) {
+		if cfg.Name == "internal-dns" {
+			return internal, nil
+		}
+		return newTestMockProvider(cfg.Name), nil
+	})
+	_ = reg.CreateInstance(provider.ProviderInstanceConfig{
+		Name:       "internal-dns",
+		TypeName:   "mock",
+		Domains:    []string{"*.example.com"},
+		RecordType: "A",
+		Target:     "10.0.0.1",
+		Mode:       provider.ModeAuthoritative,
+		TTL:        300,
+	})
+
+	rec := &Reconciler{
+		providers: reg,
+		logger:    logger,
+		config: Config{
+			CleanupOrphans:                 true,
+			OwnershipTracking:              false,
+			DetachedCleanupAllowMassDelete: true,
+		},
+		hostnameProviders: make(map[string][]string),
+	}
+	rec.syncAtomics()
+
+	currentHostnames := make(map[string]*source.Hostname)
+	currentProviderMapping := make(map[string][]string)
+	cacheRecords := make(map[string][]provider.Record)
+
+	for i := 0; i < 12; i++ {
+		hostname := fmt.Sprintf("mass-%d.example.com", i)
+		rec.hostnameProviders[hostname] = []string{"internal-dns"}
+		currentHostnames[hostname] = &source.Hostname{Name: hostname, Source: "traefik"}
+		cacheRecords[hostname] = []provider.Record{
+			{Hostname: hostname, Type: provider.RecordTypeA, Target: "10.0.0.1"},
+		}
+	}
+
+	cache := &recordCache{
+		records: map[string]map[string][]provider.Record{
+			"internal-dns": cacheRecords,
+		},
+		logger: logger,
+	}
+
+	actions := rec.cleanupDetachedProviders(context.Background(), currentHostnames, currentProviderMapping, map[string]detachedRoutingState{}, cache)
+	if len(actions) == 0 {
+		t.Fatal("expected mass-delete override to allow detached cleanup actions")
+	}
+	if deleted := internal.GetDeleted(); len(deleted) == 0 {
+		t.Fatal("expected deletions when mass-delete override is enabled")
 	}
 }

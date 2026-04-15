@@ -20,6 +20,10 @@ import (
 const (
 	errRecordAlreadyExists = "record already exists"
 	errRecordTypeConflict  = "record type conflict"
+
+	defaultDetachedCleanupRatioThreshold       = 0.5
+	defaultDetachedCleanupRatioMinHostnames    = 10
+	defaultDetachedCleanupAbsoluteMaxHostnames = 100
 )
 
 // Config holds reconciler configuration options.
@@ -51,17 +55,37 @@ type Config struct {
 	// Used for multi-instance coordination to scope ownership records.
 	// Empty string means single-instance mode (legacy behavior).
 	InstanceID string
+
+	// DetachedCleanupAllowMassDelete bypasses detached-provider cleanup circuit
+	// breakers. Keep false unless performing a deliberate large migration.
+	DetachedCleanupAllowMassDelete bool
+
+	// DetachedCleanupRatioThreshold triggers detached-cleanup circuit breaker
+	// when detached hostnames exceed this ratio of previously routed hostnames.
+	DetachedCleanupRatioThreshold float64
+
+	// DetachedCleanupRatioMinHostnames is the minimum detached hostname count
+	// required before ratio-based circuit breaker logic can trigger.
+	DetachedCleanupRatioMinHostnames int
+
+	// DetachedCleanupAbsoluteMaxHostnames triggers detached-cleanup circuit
+	// breaker when detached hostname count reaches this absolute threshold.
+	DetachedCleanupAbsoluteMaxHostnames int
 }
 
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		DryRun:            false,
-		CleanupOrphans:    true,
-		OwnershipTracking: true,
-		AdoptExisting:     false,
-		ReconcileInterval: 60 * time.Second,
-		Enabled:           true,
+		DryRun:                              false,
+		CleanupOrphans:                      true,
+		OwnershipTracking:                   true,
+		AdoptExisting:                       false,
+		ReconcileInterval:                   60 * time.Second,
+		Enabled:                             true,
+		DetachedCleanupAllowMassDelete:      false,
+		DetachedCleanupRatioThreshold:       defaultDetachedCleanupRatioThreshold,
+		DetachedCleanupRatioMinHostnames:    defaultDetachedCleanupRatioMinHostnames,
+		DetachedCleanupAbsoluteMaxHostnames: defaultDetachedCleanupAbsoluteMaxHostnames,
 	}
 }
 
@@ -108,6 +132,33 @@ type Reconciler struct {
 	// by the first reconciliation cycle. After the first cycle completes, this
 	// map is cleared — sources become the authoritative metadata source.
 	recoveredMetadata map[string]map[string]string
+}
+
+// detachedRoutingState captures whether current provider routing for a hostname
+// is healthy enough to safely clean up previously-attached providers.
+type detachedRoutingState struct {
+	hasReadyCurrentProvider bool
+	hasCurrentProviderError bool
+}
+
+func classifyDetachedRoutingAction(state *detachedRoutingState, action Action) {
+	switch action.Status {
+	case StatusFailed:
+		state.hasCurrentProviderError = true
+	case StatusSuccess:
+		state.hasReadyCurrentProvider = true
+	case StatusSkipped:
+		// A skip due to existing desired record is a healthy routed state.
+		if action.Error == errRecordAlreadyExists {
+			state.hasReadyCurrentProvider = true
+			return
+		}
+		// Other skip reasons (e.g. type conflict) are not healthy enough to
+		// safely remove the old provider mapping in this cycle.
+		state.hasCurrentProviderError = true
+	default:
+		state.hasCurrentProviderError = true
+	}
 }
 
 // Option is a functional option for configuring the Reconciler.
@@ -231,18 +282,34 @@ func (r *Reconciler) Reconcile(ctx context.Context) (*Result, error) {
 	// Step 4: Ensure records exist for all discovered hostnames.
 	// Track which providers each hostname is routed to for orphan cleanup (#51).
 	currentProviderMapping := make(map[string][]string, len(discoveredHostnames))
-	for _, hostname := range discoveredHostnames {
+	currentRoutingState := make(map[string]detachedRoutingState, len(discoveredHostnames))
+	for normalizedName, hostname := range discoveredHostnames {
 		actions := r.ensureRecord(ctx, hostname, cache)
 		for _, action := range actions {
 			result.AddAction(action)
-			if action.Provider != "" && action.Type != ActionSkip {
-				currentProviderMapping[hostname.Name] = appendUnique(currentProviderMapping[hostname.Name], action.Provider)
+			if action.Provider == "" {
+				continue
 			}
+			if _, exists := r.providers.Get(action.Provider); !exists {
+				continue
+			}
+			currentProviderMapping[normalizedName] = appendUnique(currentProviderMapping[normalizedName], action.Provider)
+			state := currentRoutingState[normalizedName]
+			classifyDetachedRoutingAction(&state, action)
+			currentRoutingState[normalizedName] = state
 		}
 	}
 
-	// Step 5: Orphan cleanup (if enabled)
+	// Step 5: Cleanup for hostnames that lost provider routing, and true orphans.
 	if r.config.CleanupOrphans {
+		// Step 5a: Hostname still exists but no longer routes to one or more providers
+		// (e.g., match filter/config changes). Clean up records from detached providers.
+		detachedActions := r.cleanupDetachedProviders(ctx, discoveredHostnames, currentProviderMapping, currentRoutingState, cache)
+		for _, action := range detachedActions {
+			result.AddAction(action)
+		}
+
+		// Step 5b: Hostname no longer exists in discovered sources.
 		orphanActions := r.cleanupOrphans(ctx, discoveredHostnames, cache)
 		for _, action := range orphanActions {
 			result.AddAction(action)
