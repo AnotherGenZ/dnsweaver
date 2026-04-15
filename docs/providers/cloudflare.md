@@ -5,7 +5,7 @@ Cloudflare provides public DNS with optional proxy/CDN capabilities. dnsweaver s
 ## Requirements
 
 - Cloudflare account with at least one domain
-- API token with DNS edit permissions
+- User-owned or account-owned API token with DNS edit permissions
 
 ## Basic Configuration
 
@@ -49,6 +49,10 @@ environment:
    - **Zone Resources**: Include → Specific zone → your-domain.com
 5. Click **Continue to summary** → **Create Token**
 6. Copy the token (shown only once)
+
+dnsweaver supports both user-owned and account-owned tokens.
+When using Cloudflare's scannable token formats, `cfut_` (user token) and `cfat_` (account token)
+are detected automatically.
 
 !!! tip
     Use scoped API tokens instead of Global API Key for better security.
@@ -120,9 +124,16 @@ environment:
 Verify your token:
 
 ```bash
+# User-owned token
 curl -X GET "https://api.cloudflare.com/client/v4/user/tokens/verify" \
   -H "Authorization: Bearer YOUR_TOKEN"
+
+# Account-owned token
+curl -X GET "https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/tokens/verify" \
+  -H "Authorization: Bearer YOUR_TOKEN"
 ```
+
+Legacy unprefixed tokens are also supported.
 
 ### Zone Not Found
 

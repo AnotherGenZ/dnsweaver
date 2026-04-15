@@ -146,6 +146,50 @@ func TestClient_GetZoneID_NotFound(t *testing.T) {
 	}
 }
 
+func TestClient_GetAccountIDFromZoneID_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/zones/zone-123" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(successResponse(map[string]interface{}{
+			"id":   "zone-123",
+			"name": "example.com",
+			"account": map[string]interface{}{
+				"id": "acct-456",
+			},
+		}))
+	}))
+	defer server.Close()
+
+	client := NewClient("test-token", WithAPIEndpoint(server.URL))
+	accountID, err := client.GetAccountIDFromZoneID(context.Background(), "zone-123")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if accountID != "acct-456" {
+		t.Errorf("expected account ID acct-456, got %s", accountID)
+	}
+}
+
+func TestClient_GetAccountIDFromZoneID_MissingAccount(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(successResponse(map[string]interface{}{
+			"id":   "zone-123",
+			"name": "example.com",
+		}))
+	}))
+	defer server.Close()
+
+	client := NewClient("test-token", WithAPIEndpoint(server.URL))
+	_, err := client.GetAccountIDFromZoneID(context.Background(), "zone-123")
+	if err == nil {
+		t.Error("expected error, got nil")
+	}
+}
+
 func TestClient_ListRecords_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/zones/zone-123/dns_records" {

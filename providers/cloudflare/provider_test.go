@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
@@ -20,10 +21,25 @@ func successProviderResponse(result interface{}) map[string]interface{} {
 	}
 }
 
+func errorProviderResponse(code int, message string) map[string]interface{} {
+	return map[string]interface{}{
+		"success": false,
+		"errors": []map[string]interface{}{
+			{"code": code, "message": message},
+		},
+		"messages": []interface{}{},
+		"result":   nil,
+	}
+}
+
 func newTestProvider(t *testing.T, serverURL string) *Provider {
+	return newTestProviderWithToken(t, serverURL, "test-token")
+}
+
+func newTestProviderWithToken(t *testing.T, serverURL, token string) *Provider {
 	t.Helper()
 	config := &Config{
-		Token:   "test-token",
+		Token:   token,
 		ZoneID:  "zone-123",
 		TTL:     300,
 		Proxied: false,
@@ -107,6 +123,126 @@ func TestProvider_Ping_Success(t *testing.T) {
 
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestProvider_Ping_UserTokenPrefixFastPath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/user/tokens/verify":
+			_ = json.NewEncoder(w).Encode(successProviderResponse(map[string]interface{}{
+				"id":     "token-id",
+				"status": "active",
+			}))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	p := newTestProviderWithToken(t, server.URL, "cfut_test_token")
+	if err := p.Ping(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestProvider_Ping_AccountTokenPrefixFastPath(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/zones/zone-123":
+			_ = json.NewEncoder(w).Encode(successProviderResponse(map[string]interface{}{
+				"id":   "zone-123",
+				"name": "example.com",
+				"account": map[string]interface{}{
+					"id": "acct-1",
+				},
+			}))
+		case "/accounts/acct-1/tokens/verify":
+			_ = json.NewEncoder(w).Encode(successProviderResponse(map[string]interface{}{
+				"id":     "token-id",
+				"status": "active",
+			}))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	p := newTestProviderWithToken(t, server.URL, "cfat_test_token")
+	if err := p.Ping(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestProvider_Ping_AccountTokenFallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/user/tokens/verify":
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(errorProviderResponse(1000, "Invalid API token"))
+		case "/zones/zone-123":
+			_ = json.NewEncoder(w).Encode(successProviderResponse(map[string]interface{}{
+				"id":   "zone-123",
+				"name": "example.com",
+				"account": map[string]interface{}{
+					"id": "acct-1",
+				},
+			}))
+		case "/accounts/acct-1/tokens/verify":
+			_ = json.NewEncoder(w).Encode(successProviderResponse(map[string]interface{}{
+				"id":     "token-id",
+				"status": "active",
+			}))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	p := newTestProvider(t, server.URL)
+	if err := p.Ping(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestProvider_Ping_AccountTokenFallbackFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.Path {
+		case "/user/tokens/verify":
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(errorProviderResponse(1000, "Invalid API token"))
+		case "/zones/zone-123":
+			_ = json.NewEncoder(w).Encode(successProviderResponse(map[string]interface{}{
+				"id":   "zone-123",
+				"name": "example.com",
+				"account": map[string]interface{}{
+					"id": "acct-1",
+				},
+			}))
+		case "/accounts/acct-1/tokens/verify":
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(errorProviderResponse(1000, "Invalid API token"))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	p := newTestProvider(t, server.URL)
+	err := p.Ping(context.Background())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "account token verify failed") {
+		t.Fatalf("expected account token verification error, got: %v", err)
 	}
 }
 

@@ -4,6 +4,7 @@ package cloudflare
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -26,6 +27,21 @@ type apiError struct {
 	Message string `json:"message"`
 }
 
+// apiRequestError wraps Cloudflare API errors with their code.
+type apiRequestError struct {
+	Code    int
+	Message string
+}
+
+func (e *apiRequestError) Error() string {
+	return fmt.Sprintf("API error: %s (code: %d)", e.Message, e.Code)
+}
+
+func isAPIErrorCode(err error, code int) bool {
+	var apiErr *apiRequestError
+	return errors.As(err, &apiErr) && apiErr.Code == code
+}
+
 // apiMessage represents a message from the Cloudflare API.
 // Cloudflare returns messages as objects with code/message fields (same shape as errors).
 type apiMessage struct {
@@ -43,14 +59,15 @@ type apiResponse struct {
 
 // zoneResult represents a zone from the Cloudflare API.
 type zoneResult struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Status string `json:"status"`
+	ID      string       `json:"id"`
+	Name    string       `json:"name"`
+	Status  string       `json:"status"`
+	Account *zoneAccount `json:"account,omitempty"`
 }
 
-// zonesResponse wraps the zones list response.
-type zonesResponse struct {
-	Result []zoneResult `json:"result"`
+// zoneAccount represents zone ownership details from the Cloudflare API.
+type zoneAccount struct {
+	ID string `json:"id"`
 }
 
 // dnsRecord represents a DNS record from the Cloudflare API.
@@ -186,7 +203,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body io.Rea
 			if errCode == 81057 || strings.Contains(strings.ToLower(errMsg), "cname") && strings.Contains(strings.ToLower(errMsg), "cannot") {
 				return nil, provider.ErrTypeConflict
 			}
-			return nil, fmt.Errorf("API error: %s (code: %d)", errMsg, errCode)
+			return nil, &apiRequestError{Code: errCode, Message: errMsg}
 		}
 		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
 	}
@@ -198,7 +215,10 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body io.Rea
 
 	if !apiResp.Success {
 		if len(apiResp.Errors) > 0 {
-			return nil, fmt.Errorf("API error: %s (code: %d)", apiResp.Errors[0].Message, apiResp.Errors[0].Code)
+			return nil, &apiRequestError{
+				Code:    apiResp.Errors[0].Code,
+				Message: apiResp.Errors[0].Message,
+			}
 		}
 		return nil, fmt.Errorf("API request failed with unknown error")
 	}
@@ -209,16 +229,35 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body io.Rea
 // Ping checks connectivity to the Cloudflare API.
 // Uses the /user/tokens/verify endpoint which is lightweight.
 func (c *Client) Ping(ctx context.Context) error {
-	_, err := c.doRequest(ctx, http.MethodGet, "/user/tokens/verify", nil)
-	if err != nil {
+	if err := c.verifyUserToken(ctx); err != nil {
 		return fmt.Errorf("ping failed: %w", err)
 	}
 	return nil
 }
 
+func (c *Client) verifyUserToken(ctx context.Context) error {
+	_, err := c.doRequest(ctx, http.MethodGet, "/user/tokens/verify", nil)
+	return err
+}
+
+func (c *Client) verifyAccountToken(ctx context.Context, accountID string) error {
+	path := fmt.Sprintf("/accounts/%s/tokens/verify", accountID)
+	_, err := c.doRequest(ctx, http.MethodGet, path, nil)
+	return err
+}
+
 // GetZoneID returns the zone ID for a given domain name.
 // It looks up the zone by name using the Cloudflare API.
 func (c *Client) GetZoneID(ctx context.Context, domain string) (string, error) {
+	zone, err := c.findZone(ctx, domain)
+	if err != nil {
+		return "", err
+	}
+
+	return zone.ID, nil
+}
+
+func (c *Client) findZone(ctx context.Context, domain string) (*zoneResult, error) {
 	// Find the root zone for this domain by progressively stripping subdomains
 	parts := strings.Split(domain, ".")
 	for i := 0; i < len(parts)-1; i++ {
@@ -232,22 +271,42 @@ func (c *Client) GetZoneID(ctx context.Context, domain string) (string, error) {
 			continue // Try next level
 		}
 
-		var zones zonesResponse
-		if err := json.Unmarshal(resp.Result, &zones.Result); err != nil {
+		var zones []zoneResult
+		if err := json.Unmarshal(resp.Result, &zones); err != nil {
 			continue
 		}
 
-		if len(zones.Result) > 0 {
+		if len(zones) > 0 {
 			c.logger.Debug("found zone",
 				slog.String("domain", domain),
 				slog.String("zone", zoneName),
-				slog.String("zone_id", zones.Result[0].ID),
+				slog.String("zone_id", zones[0].ID),
 			)
-			return zones.Result[0].ID, nil
+			return &zones[0], nil
 		}
 	}
 
-	return "", fmt.Errorf("no zone found for domain %s", domain)
+	return nil, fmt.Errorf("no zone found for domain %s", domain)
+}
+
+// GetAccountIDFromZoneID resolves the owning account ID for a Cloudflare zone.
+func (c *Client) GetAccountIDFromZoneID(ctx context.Context, zoneID string) (string, error) {
+	path := fmt.Sprintf("/zones/%s", zoneID)
+	resp, err := c.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return "", fmt.Errorf("getting zone details: %w", err)
+	}
+
+	var zone zoneResult
+	if err := json.Unmarshal(resp.Result, &zone); err != nil {
+		return "", fmt.Errorf("parsing zone details response: %w", err)
+	}
+
+	if zone.Account == nil || zone.Account.ID == "" {
+		return "", fmt.Errorf("zone details missing account id for zone %s", zoneID)
+	}
+
+	return zone.Account.ID, nil
 }
 
 // ListRecords returns all DNS records of the specified type in the given zone.

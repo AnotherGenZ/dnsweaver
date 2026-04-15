@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
@@ -174,7 +175,75 @@ func (p *Provider) ZoneID(ctx context.Context) (string, error) {
 
 // Ping checks connectivity to the Cloudflare API.
 func (p *Provider) Ping(ctx context.Context) error {
-	return p.client.Ping(ctx)
+	switch p.tokenType() {
+	case "user":
+		if err := p.client.verifyUserToken(ctx); err != nil {
+			return fmt.Errorf("ping failed: %w", err)
+		}
+		return nil
+	case "account":
+		if err := p.verifyAccountToken(ctx); err != nil {
+			return fmt.Errorf("ping failed: %w", err)
+		}
+		return nil
+	}
+
+	userErr := p.client.verifyUserToken(ctx)
+	if userErr == nil {
+		return nil
+	}
+
+	// Account-owned tokens fail /user/tokens/verify with code 1000.
+	// Fall back to account token verification using the zone's account ID.
+	if !isAPIErrorCode(userErr, 1000) {
+		return fmt.Errorf("ping failed: %w", userErr)
+	}
+
+	// Legacy unprefixed tokens may be either user- or account-owned.
+	// Fall back to account token verification if user verification fails with code 1000.
+	if err := p.verifyAccountToken(ctx); err != nil {
+		return fmt.Errorf("ping failed: user token verify failed: %s; %w", userErr.Error(), err)
+	}
+
+	return nil
+}
+
+func (p *Provider) verifyAccountToken(ctx context.Context) error {
+	zoneID, err := p.ZoneID(ctx)
+	if err != nil {
+		return fmt.Errorf("resolving zone ID failed: %w", err)
+	}
+
+	accountID, err := p.client.GetAccountIDFromZoneID(ctx, zoneID)
+	if err != nil {
+		return fmt.Errorf("resolving account ID failed: %w", err)
+	}
+
+	if err := p.client.verifyAccountToken(ctx, accountID); err != nil {
+		return fmt.Errorf("account token verify failed: %w", err)
+	}
+
+	p.logger.Debug("cloudflare account token verification succeeded",
+		slog.String("provider", p.name),
+		slog.String("zone_id", zoneID),
+		slog.String("account_id", accountID),
+	)
+
+	return nil
+}
+
+// tokenType detects token ownership using Cloudflare's scannable token prefixes.
+// Returns "user", "account", or empty string for legacy/unprefixed tokens.
+func (p *Provider) tokenType() string {
+	token := strings.TrimSpace(p.client.token)
+	switch {
+	case strings.HasPrefix(token, "cfut_"):
+		return "user"
+	case strings.HasPrefix(token, "cfat_"):
+		return "account"
+	default:
+		return ""
+	}
 }
 
 // List returns all managed records in the zone.
