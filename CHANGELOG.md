@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-04-15
+
+### Added
+- **Instance-targeted provider routing controls**: Added configuration and routing
+  logic so instances can target specific providers more precisely in multi-instance
+  deployments
+
+### Fixed
+- **Cloudflare token verification**: Added support for user/account-scoped token
+  verification flows
+- **Technitium list parsing**: Added support for object-shaped `svcParams` values
+  in record list responses
+
 ## [1.1.3] - 2026-04-10
 
 ### Security
