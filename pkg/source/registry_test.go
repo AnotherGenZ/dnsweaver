@@ -544,3 +544,150 @@ func TestRegistry_ExtractAll_EnabledWorkload(t *testing.T) {
 		t.Errorf("hostname = %q, want %q", hostnames[0].Name, "app.example.com")
 	}
 }
+
+func TestRegistry_ExtractAll_WorkloadProviderLabelAppliesHint(t *testing.T) {
+	r := NewRegistry(testLogger())
+
+	src := &mockSource{
+		name: "traefik",
+		hostnames: []Hostname{
+			{Name: "app.example.com", Source: "traefik", Router: "app"},
+		},
+	}
+	_ = r.Register(src)
+
+	w := workload.Workload{
+		Name:     "labeled-container",
+		Labels:   map[string]string{WorkloadProviderLabel: "external"},
+		Platform: workload.PlatformDocker,
+	}
+	hostnames := r.ExtractAll(context.Background(), w)
+	if len(hostnames) != 1 {
+		t.Fatalf("ExtractAll returned %d hostnames, want 1", len(hostnames))
+	}
+	if hostnames[0].RecordHints == nil {
+		t.Fatal("expected RecordHints to be set from workload provider label")
+	}
+	if hostnames[0].RecordHints.Provider != "external" {
+		t.Errorf("RecordHints.Provider = %q, want %q", hostnames[0].RecordHints.Provider, "external")
+	}
+}
+
+func TestRegistry_ExtractAll_WorkloadProviderLabelDoesNotOverrideExplicitHint(t *testing.T) {
+	r := NewRegistry(testLogger())
+
+	src := &mockSource{
+		name: "dnsweaver",
+		hostnames: []Hostname{
+			{
+				Name:   "app.example.com",
+				Source: "dnsweaver",
+				RecordHints: &RecordHints{
+					Provider: "internal",
+				},
+			},
+		},
+	}
+	_ = r.Register(src)
+
+	w := workload.Workload{
+		Name:     "labeled-container",
+		Labels:   map[string]string{WorkloadProviderLabel: "external"},
+		Platform: workload.PlatformDocker,
+	}
+	hostnames := r.ExtractAll(context.Background(), w)
+	if len(hostnames) != 1 {
+		t.Fatalf("ExtractAll returned %d hostnames, want 1", len(hostnames))
+	}
+	if hostnames[0].RecordHints == nil {
+		t.Fatal("expected RecordHints to be present")
+	}
+	if hostnames[0].RecordHints.Provider != "internal" {
+		t.Errorf("RecordHints.Provider = %q, want %q", hostnames[0].RecordHints.Provider, "internal")
+	}
+}
+
+func TestRegistry_ExtractAll_WorkloadProviderLabelTrimmed(t *testing.T) {
+	r := NewRegistry(testLogger())
+
+	src := &mockSource{
+		name: "traefik",
+		hostnames: []Hostname{
+			{Name: "app.example.com", Source: "traefik", Router: "app"},
+		},
+	}
+	_ = r.Register(src)
+
+	w := workload.Workload{
+		Name:     "labeled-container",
+		Labels:   map[string]string{WorkloadProviderLabel: "  external  "},
+		Platform: workload.PlatformDocker,
+	}
+	hostnames := r.ExtractAll(context.Background(), w)
+	if len(hostnames) != 1 {
+		t.Fatalf("ExtractAll returned %d hostnames, want 1", len(hostnames))
+	}
+	if hostnames[0].RecordHints == nil {
+		t.Fatal("expected RecordHints to be set from workload provider label")
+	}
+	if hostnames[0].RecordHints.Provider != "external" {
+		t.Errorf("RecordHints.Provider = %q, want %q", hostnames[0].RecordHints.Provider, "external")
+	}
+}
+
+func TestRegistry_ExtractAll_WorkloadProviderLabelMultipleProvidersPreserved(t *testing.T) {
+	r := NewRegistry(testLogger())
+
+	src := &mockSource{
+		name: "traefik",
+		hostnames: []Hostname{
+			{Name: "app.example.com", Source: "traefik", Router: "app"},
+		},
+	}
+	_ = r.Register(src)
+
+	w := workload.Workload{
+		Name:     "labeled-container",
+		Labels:   map[string]string{WorkloadProviderLabel: "  external, internal  "},
+		Platform: workload.PlatformDocker,
+	}
+	hostnames := r.ExtractAll(context.Background(), w)
+	if len(hostnames) != 1 {
+		t.Fatalf("ExtractAll returned %d hostnames, want 1", len(hostnames))
+	}
+	if hostnames[0].RecordHints == nil {
+		t.Fatal("expected RecordHints to be set from workload provider label")
+	}
+	if hostnames[0].RecordHints.Provider != "external, internal" {
+		t.Errorf("RecordHints.Provider = %q, want %q", hostnames[0].RecordHints.Provider, "external, internal")
+	}
+}
+
+func TestRegistry_ExtractAll_WorkloadProviderAnnotationAppliesHint(t *testing.T) {
+	r := NewRegistry(testLogger())
+
+	src := &mockSource{
+		name: "kubernetes",
+		hostnames: []Hostname{
+			{Name: "app.example.com", Source: "kubernetes", Router: "ingress:default/app"},
+		},
+		platforms: []workload.Platform{workload.PlatformKubernetes},
+	}
+	_ = r.Register(src)
+
+	w := workload.Workload{
+		Name:        "default/app",
+		Annotations: map[string]string{WorkloadProviderAnnotation: "internal"},
+		Platform:    workload.PlatformKubernetes,
+	}
+	hostnames := r.ExtractAll(context.Background(), w)
+	if len(hostnames) != 1 {
+		t.Fatalf("ExtractAll returned %d hostnames, want 1", len(hostnames))
+	}
+	if hostnames[0].RecordHints == nil {
+		t.Fatal("expected RecordHints to be set from workload provider annotation")
+	}
+	if hostnames[0].RecordHints.Provider != "internal" {
+		t.Errorf("RecordHints.Provider = %q, want %q", hostnames[0].RecordHints.Provider, "internal")
+	}
+}

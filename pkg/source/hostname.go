@@ -257,7 +257,8 @@ type RecordHints struct {
 	// Zero means use provider default.
 	TTL int
 
-	// Provider targets a specific provider instance by name.
+	// Provider targets one or more provider instances by name.
+	// Use a comma-separated list to target multiple instances.
 	// Empty means use domain matching as usual.
 	Provider string
 

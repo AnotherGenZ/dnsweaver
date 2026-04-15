@@ -338,14 +338,15 @@ func TestConfig_GetProviderInstance_NotFound(t *testing.T) {
 
 func TestProviderInstanceConfig_ToProviderConfig(t *testing.T) {
 	cfg := &ProviderInstanceConfig{
-		Name:           "test-dns",
-		TypeName:       "technitium",
-		RecordType:     provider.RecordTypeA,
-		Target:         "10.0.0.1",
-		TTL:            300,
-		Domains:        []string{"*.example.com"},
-		ExcludeDomains: []string{"admin.example.com"},
-		ProviderConfig: map[string]string{"URL": "http://dns:5380"},
+		Name:             "test-dns",
+		TypeName:         "technitium",
+		RecordType:       provider.RecordTypeA,
+		Target:           "10.0.0.1",
+		TTL:              300,
+		MatchLabeledOnly: true,
+		Domains:          []string{"*.example.com"},
+		ExcludeDomains:   []string{"admin.example.com"},
+		ProviderConfig:   map[string]string{"URL": "http://dns:5380"},
 	}
 
 	provCfg := cfg.ToProviderConfig()
@@ -364,6 +365,9 @@ func TestProviderInstanceConfig_ToProviderConfig(t *testing.T) {
 	}
 	if provCfg.TTL != cfg.TTL {
 		t.Errorf("TTL = %d, want %d", provCfg.TTL, cfg.TTL)
+	}
+	if provCfg.MatchLabeledOnly != cfg.MatchLabeledOnly {
+		t.Errorf("MatchLabeledOnly = %v, want %v", provCfg.MatchLabeledOnly, cfg.MatchLabeledOnly)
 	}
 }
 

@@ -134,13 +134,14 @@ func (r *Registry) CreateInstance(cfg ProviderInstanceConfig) error {
 
 	// Create provider instance
 	instance := &ProviderInstance{
-		Provider:   provider,
-		Matcher:    domainMatcher,
-		RecordType: cfg.RecordType,
-		Target:     cfg.Target,
-		TTL:        cfg.TTL,
-		Mode:       cfg.Mode,
-		InstanceID: r.instanceID,
+		Provider:         provider,
+		Matcher:          domainMatcher,
+		RecordType:       cfg.RecordType,
+		Target:           cfg.Target,
+		TTL:              cfg.TTL,
+		Mode:             cfg.Mode,
+		MatchLabeledOnly: cfg.MatchLabeledOnly,
+		InstanceID:       r.instanceID,
 	}
 
 	// Default to managed mode if not set
@@ -157,6 +158,7 @@ func (r *Registry) CreateInstance(cfg ProviderInstanceConfig) error {
 		slog.String("record_type", string(cfg.RecordType)),
 		slog.String("target", cfg.Target),
 		slog.String("mode", string(instance.Mode)),
+		slog.Bool("match_labeled_only", instance.MatchLabeledOnly),
 	)
 
 	return nil
@@ -189,6 +191,9 @@ func (r *Registry) MatchingProviders(hostname string) []*ProviderInstance {
 
 	var matches []*ProviderInstance
 	for _, inst := range r.instances {
+		if inst.MatchLabeledOnly {
+			continue
+		}
 		if inst.Matches(hostname) {
 			matches = append(matches, inst)
 		}
@@ -204,6 +209,9 @@ func (r *Registry) FirstMatchingProvider(hostname string) *ProviderInstance {
 	defer r.mu.RUnlock()
 
 	for _, inst := range r.instances {
+		if inst.MatchLabeledOnly {
+			continue
+		}
 		if inst.Matches(hostname) {
 			return inst
 		}

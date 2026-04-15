@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
@@ -19,31 +20,47 @@ import (
 // 4. If exists with different type → log warning, skip (don't delete manual records)
 //
 // When hostname has RecordHints, they override provider defaults:
-// - RecordHints.Provider: route directly to named provider instead of domain matching
+// - RecordHints.Provider: route directly to one or more named providers instead of domain matching
 // - RecordHints.Type/Target/TTL: override provider instance defaults
 func (r *Reconciler) ensureRecord(ctx context.Context, hostname *source.Hostname, cache *recordCache) []Action {
 	var actions []Action
 
 	// Check for explicit provider targeting via RecordHints
 	if hostname.RecordHints != nil && hostname.RecordHints.Provider != "" {
-		targetProvider := hostname.RecordHints.Provider
-		inst, exists := r.providers.Get(targetProvider)
-		if !exists {
-			r.logger.Warn("explicit provider not found",
-				slog.String("hostname", hostname.Name),
-				slog.String("target_provider", targetProvider),
-			)
+		targetProviders := parseExplicitProviders(hostname.RecordHints.Provider)
+		if len(targetProviders) == 0 {
 			actions = append(actions, Action{
 				Type:     ActionSkip,
 				Status:   StatusSkipped,
 				Hostname: hostname.Name,
-				Error:    fmt.Sprintf("explicit provider %q not found", targetProvider),
+				Error:    "explicit provider hint is empty after parsing",
 			})
 			return actions
 		}
-		// Route to explicit provider, bypassing domain matching
-		action := r.ensureRecordForProvider(ctx, hostname, inst, cache)
-		return append(actions, action)
+
+		for _, targetProvider := range targetProviders {
+			inst, exists := r.providers.Get(targetProvider)
+			if !exists {
+				r.logger.Warn("explicit provider not found",
+					slog.String("hostname", hostname.Name),
+					slog.String("target_provider", targetProvider),
+				)
+				actions = append(actions, Action{
+					Type:     ActionSkip,
+					Status:   StatusSkipped,
+					Provider: targetProvider,
+					Hostname: hostname.Name,
+					Error:    fmt.Sprintf("explicit provider %q not found", targetProvider),
+				})
+				continue
+			}
+
+			// Route to explicit providers, bypassing domain matching.
+			action := r.ensureRecordForProvider(ctx, hostname, inst, cache)
+			actions = append(actions, action)
+		}
+
+		return actions
 	}
 
 	// Standard domain-based matching
@@ -68,6 +85,28 @@ func (r *Reconciler) ensureRecord(ctx context.Context, hostname *source.Hostname
 	}
 
 	return actions
+}
+
+// parseExplicitProviders parses a comma-separated provider hint list.
+// Empty entries are ignored, and duplicate names are removed while preserving order.
+func parseExplicitProviders(raw string) []string {
+	parts := strings.Split(raw, ",")
+	seen := make(map[string]struct{}, len(parts))
+	providers := make([]string, 0, len(parts))
+
+	for _, part := range parts {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		providers = append(providers, name)
+	}
+
+	return providers
 }
 
 // ensureRecordForProvider handles record creation for a single provider with List+Compare logic.

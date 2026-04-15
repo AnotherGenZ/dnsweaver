@@ -8,15 +8,16 @@ import (
 
 func TestConvertFileProvider(t *testing.T) {
 	tests := []struct {
-		name       string
-		input      FileProviderConfig
-		defaultTTL int
-		wantName   string
-		wantType   string
-		wantTarget string
-		wantTTL    int
-		wantMode   provider.OperationalMode
-		wantErrCnt int
+		name                 string
+		input                FileProviderConfig
+		defaultTTL           int
+		wantName             string
+		wantType             string
+		wantTarget           string
+		wantTTL              int
+		wantMode             provider.OperationalMode
+		wantMatchLabeledOnly bool
+		wantErrCnt           int
 	}{
 		{
 			name: "valid minimal config",
@@ -26,13 +27,14 @@ func TestConvertFileProvider(t *testing.T) {
 				Domains: []string{"*.example.com"},
 				Target:  "10.0.0.100",
 			},
-			defaultTTL: 300,
-			wantName:   "test",
-			wantType:   "technitium",
-			wantTarget: "10.0.0.100",
-			wantTTL:    300,
-			wantMode:   provider.ModeManaged,
-			wantErrCnt: 0,
+			defaultTTL:           300,
+			wantName:             "test",
+			wantType:             "technitium",
+			wantTarget:           "10.0.0.100",
+			wantTTL:              300,
+			wantMode:             provider.ModeManaged,
+			wantMatchLabeledOnly: false,
+			wantErrCnt:           0,
 		},
 		{
 			name: "with custom TTL and mode",
@@ -45,13 +47,32 @@ func TestConvertFileProvider(t *testing.T) {
 				RecordType: "CNAME",
 				Mode:       "authoritative",
 			},
-			defaultTTL: 300,
-			wantName:   "internal",
-			wantType:   "cloudflare",
-			wantTarget: "lb.example.com",
-			wantTTL:    600,
-			wantMode:   provider.ModeAuthoritative,
-			wantErrCnt: 0,
+			defaultTTL:           300,
+			wantName:             "internal",
+			wantType:             "cloudflare",
+			wantTarget:           "lb.example.com",
+			wantTTL:              600,
+			wantMode:             provider.ModeAuthoritative,
+			wantMatchLabeledOnly: false,
+			wantErrCnt:           0,
+		},
+		{
+			name: "match labeled only enabled",
+			input: FileProviderConfig{
+				Name:             "internal",
+				Type:             "technitium",
+				Domains:          []string{"*.example.com"},
+				Target:           "10.0.0.100",
+				MatchLabeledOnly: boolPtr(true),
+			},
+			defaultTTL:           300,
+			wantName:             "internal",
+			wantType:             "technitium",
+			wantTarget:           "10.0.0.100",
+			wantTTL:              300,
+			wantMode:             provider.ModeManaged,
+			wantMatchLabeledOnly: true,
+			wantErrCnt:           0,
 		},
 		{
 			name: "missing name",
@@ -141,13 +162,14 @@ func TestConvertFileProvider(t *testing.T) {
 					"Token": "secret123",
 				},
 			},
-			defaultTTL: 300,
-			wantName:   "test",
-			wantType:   "technitium",
-			wantTarget: "10.0.0.100",
-			wantTTL:    300,
-			wantMode:   provider.ModeManaged,
-			wantErrCnt: 0,
+			defaultTTL:           300,
+			wantName:             "test",
+			wantType:             "technitium",
+			wantTarget:           "10.0.0.100",
+			wantTTL:              300,
+			wantMode:             provider.ModeManaged,
+			wantMatchLabeledOnly: false,
+			wantErrCnt:           0,
 		},
 	}
 
@@ -175,9 +197,16 @@ func TestConvertFileProvider(t *testing.T) {
 				if cfg.Mode != tt.wantMode {
 					t.Errorf("Mode = %v, want %v", cfg.Mode, tt.wantMode)
 				}
+				if cfg.MatchLabeledOnly != tt.wantMatchLabeledOnly {
+					t.Errorf("MatchLabeledOnly = %v, want %v", cfg.MatchLabeledOnly, tt.wantMatchLabeledOnly)
+				}
 			}
 		})
 	}
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
 
 func TestConvertFileSources(t *testing.T) {

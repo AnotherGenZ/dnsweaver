@@ -61,6 +61,7 @@ labels:
 labels:
   - "dnsweaver.hostname=myapp.example.com"
   - "dnsweaver.ttl=600"  # Override default TTL
+  - "dnsweaver.provider=internal"  # Route all hostnames from this workload to one instance
   - "dnsweaver.enabled=true"  # Explicit enable (default)
 ```
 
@@ -81,6 +82,7 @@ labels:
 | `dnsweaver.hostnames` | - | Comma-separated list of hostnames |
 | `dnsweaver.enabled` | `true` | Enable/disable processing |
 | `dnsweaver.ttl` | - | Override TTL for this container |
+| `dnsweaver.provider` | _(auto-matched)_ | Route all hostnames on this workload to one or more provider instances (comma-separated) |
 
 ### Named Record Labels
 

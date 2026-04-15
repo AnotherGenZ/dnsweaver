@@ -3,6 +3,7 @@ package reconciler
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
@@ -462,6 +463,206 @@ func TestEnsureRecord_ExplicitProviderHint(t *testing.T) {
 	}
 	if externalCalls != 1 {
 		t.Errorf("external-dns should be called once, got %d calls", externalCalls)
+	}
+}
+
+func TestEnsureRecord_ExplicitProviderHint_MultipleProviders(t *testing.T) {
+	mock1 := newTestMockProvider("internal-dns")
+	mock2 := newTestMockProvider("external-dns")
+
+	logger := quietLogger()
+	providers := provider.NewRegistry(logger)
+
+	var internalCalls, externalCalls int
+	providers.RegisterFactory("mock-internal", func(cfg provider.FactoryConfig) (provider.Provider, error) {
+		mock1.createFn = func(_ context.Context, r provider.Record) error {
+			if r.Type != provider.RecordTypeTXT {
+				internalCalls++
+			}
+			return nil
+		}
+		return mock1, nil
+	})
+	providers.RegisterFactory("mock-external", func(cfg provider.FactoryConfig) (provider.Provider, error) {
+		mock2.createFn = func(_ context.Context, r provider.Record) error {
+			if r.Type != provider.RecordTypeTXT {
+				externalCalls++
+			}
+			return nil
+		}
+		return mock2, nil
+	})
+
+	_ = providers.CreateInstance(provider.ProviderInstanceConfig{
+		Name:       "internal-dns",
+		TypeName:   "mock-internal",
+		RecordType: provider.RecordTypeA,
+		Target:     "10.0.0.1",
+		TTL:        300,
+		Domains:    []string{"*.example.com"},
+	})
+	_ = providers.CreateInstance(provider.ProviderInstanceConfig{
+		Name:       "external-dns",
+		TypeName:   "mock-external",
+		RecordType: provider.RecordTypeA,
+		Target:     "203.0.113.1",
+		TTL:        300,
+		Domains:    []string{"*.example.com"},
+	})
+
+	r := &Reconciler{
+		providers:      providers,
+		config:         Config{Enabled: true, OwnershipTracking: true},
+		logger:         logger,
+		knownHostnames: make(map[string]struct{}),
+	}
+	r.syncAtomics()
+
+	hostname := &source.Hostname{
+		Name:   "app.example.com",
+		Source: "test",
+		RecordHints: &source.RecordHints{
+			Provider: " external-dns, internal-dns, external-dns ",
+		},
+	}
+	actions := r.ensureRecord(context.Background(), hostname, nil)
+
+	if len(actions) != 2 {
+		t.Fatalf("expected 2 actions for explicit provider list, got %d", len(actions))
+	}
+	if actions[0].Provider != "external-dns" {
+		t.Errorf("actions[0].Provider = %q, want external-dns", actions[0].Provider)
+	}
+	if actions[1].Provider != "internal-dns" {
+		t.Errorf("actions[1].Provider = %q, want internal-dns", actions[1].Provider)
+	}
+
+	if internalCalls != 1 {
+		t.Errorf("internal-dns should be called once, got %d", internalCalls)
+	}
+	if externalCalls != 1 {
+		t.Errorf("external-dns should be called once, got %d", externalCalls)
+	}
+}
+
+func TestEnsureRecord_ExplicitProviderHint_MissingProviderDoesNotBlockOthers(t *testing.T) {
+	mock := newTestMockProvider("external-dns")
+
+	logger := quietLogger()
+	providers := provider.NewRegistry(logger)
+
+	var externalCalls int
+	providers.RegisterFactory("mock-external", func(cfg provider.FactoryConfig) (provider.Provider, error) {
+		mock.createFn = func(_ context.Context, r provider.Record) error {
+			if r.Type != provider.RecordTypeTXT {
+				externalCalls++
+			}
+			return nil
+		}
+		return mock, nil
+	})
+
+	_ = providers.CreateInstance(provider.ProviderInstanceConfig{
+		Name:       "external-dns",
+		TypeName:   "mock-external",
+		RecordType: provider.RecordTypeA,
+		Target:     "203.0.113.1",
+		TTL:        300,
+		Domains:    []string{"*.example.com"},
+	})
+
+	r := &Reconciler{
+		providers:      providers,
+		config:         Config{Enabled: true, OwnershipTracking: true},
+		logger:         logger,
+		knownHostnames: make(map[string]struct{}),
+	}
+	r.syncAtomics()
+
+	hostname := &source.Hostname{
+		Name:   "app.example.com",
+		Source: "test",
+		RecordHints: &source.RecordHints{
+			Provider: "missing, external-dns",
+		},
+	}
+	actions := r.ensureRecord(context.Background(), hostname, nil)
+
+	if len(actions) != 2 {
+		t.Fatalf("expected 2 actions for explicit provider list, got %d", len(actions))
+	}
+	if actions[0].Status != StatusSkipped {
+		t.Fatalf("actions[0].Status = %s, want %s", actions[0].Status, StatusSkipped)
+	}
+	if actions[0].Provider != "missing" {
+		t.Errorf("actions[0].Provider = %q, want missing", actions[0].Provider)
+	}
+	if !strings.Contains(actions[0].Error, `explicit provider "missing" not found`) {
+		t.Errorf("actions[0].Error = %q, want not found error", actions[0].Error)
+	}
+	if actions[1].Provider != "external-dns" {
+		t.Errorf("actions[1].Provider = %q, want external-dns", actions[1].Provider)
+	}
+	if actions[1].Status != StatusSuccess {
+		t.Errorf("actions[1].Status = %s, want %s", actions[1].Status, StatusSuccess)
+	}
+	if externalCalls != 1 {
+		t.Errorf("external-dns should be called once, got %d", externalCalls)
+	}
+}
+
+func TestEnsureRecord_ExplicitProviderHint_WithMatchLabeledOnlyInstance(t *testing.T) {
+	mock := newTestMockProvider("internal-dns")
+
+	logger := quietLogger()
+	providers := provider.NewRegistry(logger)
+
+	var createCalls int
+	providers.RegisterFactory("mock-internal", func(cfg provider.FactoryConfig) (provider.Provider, error) {
+		mock.createFn = func(_ context.Context, r provider.Record) error {
+			if r.Type != provider.RecordTypeTXT {
+				createCalls++
+			}
+			return nil
+		}
+		return mock, nil
+	})
+
+	_ = providers.CreateInstance(provider.ProviderInstanceConfig{
+		Name:             "internal-dns",
+		TypeName:         "mock-internal",
+		RecordType:       provider.RecordTypeA,
+		Target:           "10.0.0.1",
+		TTL:              300,
+		MatchLabeledOnly: true,
+		Domains:          []string{"*.example.com"},
+	})
+
+	r := &Reconciler{
+		providers:      providers,
+		config:         Config{Enabled: true, OwnershipTracking: true},
+		logger:         logger,
+		knownHostnames: make(map[string]struct{}),
+	}
+	r.syncAtomics()
+
+	hostname := &source.Hostname{
+		Name:   "app.example.com",
+		Source: "test",
+		RecordHints: &source.RecordHints{
+			Provider: "internal-dns",
+		},
+	}
+	actions := r.ensureRecord(context.Background(), hostname, nil)
+
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action, got %d", len(actions))
+	}
+	if actions[0].Provider != "internal-dns" {
+		t.Errorf("expected action for internal-dns, got %q", actions[0].Provider)
+	}
+	if createCalls != 1 {
+		t.Errorf("internal-dns should be called once, got %d calls", createCalls)
 	}
 }
 

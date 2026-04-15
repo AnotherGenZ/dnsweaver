@@ -112,6 +112,7 @@ type FileProviderConfig struct {
 	DomainsRegex        []string          `yaml:"domains_regex,omitempty"`         // Regex patterns
 	ExcludeDomains      []string          `yaml:"exclude_domains,omitempty"`       // Glob exclude patterns
 	ExcludeDomainsRegex []string          `yaml:"exclude_domains_regex,omitempty"` // Regex exclude patterns
+	MatchLabeledOnly    *bool             `yaml:"match_labeled_only,omitempty"`    // Require explicit provider-instance label routing
 	RecordType          string            `yaml:"record_type,omitempty"`           // A, AAAA, CNAME
 	Target              string            `yaml:"target"`                          // IP or hostname
 	TTL                 int               `yaml:"ttl,omitempty"`                   // Default TTL

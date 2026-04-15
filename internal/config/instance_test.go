@@ -19,6 +19,7 @@ func clearInstanceEnv(t *testing.T, instanceName string) {
 		prefix + "TARGET",
 		prefix + "TTL",
 		prefix + "MODE",
+		prefix + "MATCH_LABELED_ONLY",
 		prefix + "DOMAINS",
 		prefix + "DOMAINS_REGEX",
 		prefix + "EXCLUDE_DOMAINS",
@@ -161,6 +162,9 @@ func TestLoadInstanceConfig_Minimal(t *testing.T) {
 	}
 	if len(cfg.Domains) != 1 || cfg.Domains[0] != "*.example.com" {
 		t.Errorf("Domains = %v, want [*.example.com]", cfg.Domains)
+	}
+	if cfg.MatchLabeledOnly {
+		t.Error("MatchLabeledOnly = true, want false by default")
 	}
 }
 
@@ -554,6 +558,63 @@ func TestLoadInstanceConfig_OperationalMode(t *testing.T) {
 	}
 }
 
+func TestLoadInstanceConfig_MatchLabeledOnly(t *testing.T) {
+	tests := []struct {
+		name   string
+		envVal string
+		want   bool
+		setEnv bool
+	}{
+		{
+			name:   "default false when not set",
+			want:   false,
+			setEnv: false,
+		},
+		{
+			name:   "explicit true",
+			envVal: "true",
+			want:   true,
+			setEnv: true,
+		},
+		{
+			name:   "explicit false",
+			envVal: "false",
+			want:   false,
+			setEnv: true,
+		},
+		{
+			name:   "invalid value falls back to false",
+			envVal: "maybe",
+			want:   false,
+			setEnv: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const instanceName = "match-test"
+			clearInstanceEnv(t, instanceName)
+			defer clearInstanceEnv(t, instanceName)
+
+			prefix := envPrefix(instanceName)
+			os.Setenv(prefix+"TYPE", "technitium")
+			os.Setenv(prefix+"TARGET", "10.0.0.1")
+			os.Setenv(prefix+"DOMAINS", "*.example.com")
+			if tt.setEnv {
+				os.Setenv(prefix+"MATCH_LABELED_ONLY", tt.envVal)
+			}
+
+			cfg, errs := loadInstanceConfig(instanceName, 300)
+			if len(errs) > 0 {
+				t.Fatalf("unexpected errors: %v", errs)
+			}
+			if cfg.MatchLabeledOnly != tt.want {
+				t.Errorf("MatchLabeledOnly = %v, want %v", cfg.MatchLabeledOnly, tt.want)
+			}
+		})
+	}
+}
+
 func TestMergeProviderEnvOverrides(t *testing.T) {
 	t.Run("overrides TOKEN from env var", func(t *testing.T) {
 		instanceName := "test-override"
@@ -691,6 +752,32 @@ func TestMergeProviderEnvOverrides(t *testing.T) {
 
 		if cfg.Mode != provider.ModeAuthoritative {
 			t.Errorf("Mode = %q, want %q", cfg.Mode, provider.ModeAuthoritative)
+		}
+	})
+
+	t.Run("overrides MATCH_LABELED_ONLY from env var", func(t *testing.T) {
+		instanceName := "test-match-labeled-only-override"
+		prefix := envPrefix(instanceName)
+		defer os.Unsetenv(prefix + "MATCH_LABELED_ONLY")
+
+		cfg := &ProviderInstanceConfig{
+			Name:             instanceName,
+			TypeName:         "technitium",
+			Target:           "10.0.0.1",
+			TTL:              300,
+			Mode:             provider.ModeManaged,
+			MatchLabeledOnly: false,
+			ProviderConfig: map[string]string{
+				"URL": "http://dns:5380",
+			},
+		}
+
+		os.Setenv(prefix+"MATCH_LABELED_ONLY", "true")
+
+		mergeProviderEnvOverrides(cfg)
+
+		if !cfg.MatchLabeledOnly {
+			t.Error("MatchLabeledOnly = false, want true")
 		}
 	})
 

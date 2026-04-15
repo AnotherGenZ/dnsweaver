@@ -23,6 +23,16 @@ type Registry struct {
 	logger  *slog.Logger
 }
 
+const (
+	// WorkloadProviderLabel routes all hostnames from a workload to one or more
+	// provider instances by name (Docker label form, comma-separated).
+	WorkloadProviderLabel = "dnsweaver.provider"
+
+	// WorkloadProviderAnnotation routes all hostnames from a workload to one or
+	// more provider instances by name (Kubernetes annotation form, comma-separated).
+	WorkloadProviderAnnotation = "dnsweaver.dev/provider"
+)
+
 // NewRegistry creates a new source registry.
 func NewRegistry(logger *slog.Logger) *Registry {
 	if logger == nil {
@@ -113,6 +123,7 @@ func (r *Registry) ExtractAll(ctx context.Context, w workload.Workload) Hostname
 	r.mu.RUnlock()
 
 	var allHostnames Hostnames
+	workloadProvider := getWorkloadProviderHint(w)
 
 	for _, src := range sources {
 		// Skip sources that don't support this workload's platform
@@ -130,6 +141,8 @@ func (r *Registry) ExtractAll(ctx context.Context, w workload.Workload) Hostname
 		}
 
 		if len(hostnames) > 0 {
+			applyWorkloadProviderHint(hostnames, workloadProvider)
+
 			r.logger.Debug("source extracted hostnames",
 				slog.String("source", src.Name()),
 				slog.Int("count", len(hostnames)),
@@ -140,6 +153,37 @@ func (r *Registry) ExtractAll(ctx context.Context, w workload.Workload) Hostname
 	}
 
 	return allHostnames
+}
+
+// getWorkloadProviderHint returns a workload-level provider instance hint from
+// Docker labels or Kubernetes annotations. Empty means no hint.
+// The value may contain a comma-separated provider list.
+func getWorkloadProviderHint(w workload.Workload) string {
+	if v, ok := w.Labels[WorkloadProviderLabel]; ok {
+		return strings.TrimSpace(v)
+	}
+	if v, ok := w.Annotations[WorkloadProviderAnnotation]; ok {
+		return strings.TrimSpace(v)
+	}
+	return ""
+}
+
+// applyWorkloadProviderHint sets RecordHints.Provider for hostnames that don't
+// already have an explicit provider hint. The provider hint may be a
+// comma-separated provider list.
+func applyWorkloadProviderHint(hostnames []Hostname, providerName string) {
+	if providerName == "" {
+		return
+	}
+	for i := range hostnames {
+		if hostnames[i].RecordHints == nil {
+			hostnames[i].RecordHints = &RecordHints{Provider: providerName}
+			continue
+		}
+		if hostnames[i].RecordHints.Provider == "" {
+			hostnames[i].RecordHints.Provider = providerName
+		}
+	}
 }
 
 // sourceSupports returns true if the source supports the given platform.

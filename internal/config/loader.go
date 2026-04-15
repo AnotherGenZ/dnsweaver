@@ -56,7 +56,12 @@ func convertFileProvider(fp FileProviderConfig, defaultTTL int) (*ProviderInstan
 		DomainsRegex:        fp.DomainsRegex,
 		ExcludeDomains:      fp.ExcludeDomains,
 		ExcludeDomainsRegex: fp.ExcludeDomainsRegex,
+		MatchLabeledOnly:    false,
 		ProviderConfig:      make(map[string]string),
+	}
+
+	if fp.MatchLabeledOnly != nil {
+		cfg.MatchLabeledOnly = *fp.MatchLabeledOnly
 	}
 
 	// Validate name

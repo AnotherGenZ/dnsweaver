@@ -69,7 +69,7 @@ The Kubernetes source reads `dnsweaver.dev/*` annotations from resources to over
 | `dnsweaver.dev/record-type` | `string` | _(from provider)_ | Override record type: `A`, `AAAA`, `CNAME`, `SRV`, `TXT` |
 | `dnsweaver.dev/target` | `string` | _(from provider)_ | Override DNS target (IP or hostname) |
 | `dnsweaver.dev/ttl` | `int` | _(from provider)_ | Override TTL in seconds |
-| `dnsweaver.dev/provider` | `string` | _(auto-matched)_ | Route to a specific DNS provider by name |
+| `dnsweaver.dev/provider` | `string` | _(auto-matched)_ | Route to one or more DNS provider instances by name (comma-separated) |
 | `dnsweaver.dev/proxied` | `bool` | _(from provider)_ | Enable Cloudflare proxy for this record |
 
 ### Behavior
@@ -77,7 +77,8 @@ The Kubernetes source reads `dnsweaver.dev/*` annotations from resources to over
 - **Annotations are optional** — resources without annotations are processed normally using provider defaults
 - **`dnsweaver.dev/enabled`** defaults to `true` when absent; explicitly set `"false"` to exclude a resource
 - **RecordHints are per-hostname** — all hostnames from a resource inherit the same annotations
-- **Provider matching** — if `dnsweaver.dev/provider` is set, only that provider handles the record; otherwise, normal domain-matching applies
+- **Provider matching** — if `dnsweaver.dev/provider` is set, only those providers handle the record; otherwise, normal domain-matching applies
+- **Docker equivalent** — for Docker/Swarm workloads, use `dnsweaver.provider=<instance-name>` (or a comma-separated list)
 - **Multiple sources** — if both `dnsweaver` and `kubernetes` sources are enabled, annotations are processed by both (the dnsweaver source converts `dnsweaver.dev/*` annotations to its native label format)
 
 ### Examples

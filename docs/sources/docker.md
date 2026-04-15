@@ -15,6 +15,40 @@ Configure which sources to use:
 - DNSWEAVER_SOURCES=traefik,dnsweaver
 ```
 
+## Route to a Specific Provider Instance
+
+Use `dnsweaver.provider` on a container/service to route all extracted hostnames
+from that workload to one or more provider instance names (for example
+`internal`, `external`):
+
+```yaml
+labels:
+  - "traefik.http.routers.app.rule=Host(`app.example.com`)"
+  - "dnsweaver.provider=internal"
+```
+
+For split routing, provide a comma-separated list:
+
+```yaml
+labels:
+  - "traefik.http.routers.app.rule=Host(`app.example.com`)"
+  - "dnsweaver.provider=internal,external"
+```
+
+This works with Traefik labels and native dnsweaver labels.
+
+## Disable a Workload Across All Sources
+
+Set `dnsweaver.enabled=false` on a container/service to skip DNS management for
+that workload entirely. This disables hostname extraction from **all** enabled
+sources for that workload, including Traefik labels.
+
+```yaml
+labels:
+  - "traefik.http.routers.app.rule=Host(`app.example.com`)"
+  - "dnsweaver.enabled=false"
+```
+
 ## Docker Modes
 
 ### Standalone Docker
@@ -109,7 +143,7 @@ When a container/service starts:
 1. dnsweaver receives the Docker event
 2. Inspects the container/service for labels
 3. Extracts hostnames from matching labels
-4. Matches hostnames against provider domain patterns
+4. If `dnsweaver.provider` is set, routes to those provider instances; otherwise matches by provider domain patterns
 5. Creates DNS records in matching providers
 
 When a container/service stops:

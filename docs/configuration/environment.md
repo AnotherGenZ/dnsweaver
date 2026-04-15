@@ -111,6 +111,7 @@ Replace `{NAME}` with your instance name. For example, instance `internal-dns` u
 | `DNSWEAVER_{NAME}_EXCLUDE_DOMAINS_REGEX` | No | Regex patterns to exclude (alternative to glob) |
 | `DNSWEAVER_{NAME}_TTL` | No | Per-instance TTL override |
 | `DNSWEAVER_{NAME}_MODE` | No | Operational mode: `managed` (default), `authoritative`, `additive` |
+| `DNSWEAVER_{NAME}_MATCH_LABELED_ONLY` | No | If `true`, instance only matches hostnames explicitly routed with `dnsweaver.provider`, `dnsweaver.dev/provider`, or `dnsweaver.records.<name>.provider` |
 | `DNSWEAVER_{NAME}_INSECURE_SKIP_VERIFY` | No | Skip TLS certificate verification (`true`/`false`, default: `false`) |
 
 ## Source Settings

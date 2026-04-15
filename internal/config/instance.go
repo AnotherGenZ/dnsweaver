@@ -31,6 +31,11 @@ type ProviderInstanceConfig struct {
 	// Defaults to "managed" if not set.
 	Mode provider.OperationalMode
 
+	// MatchLabeledOnly requires explicit provider-instance targeting labels
+	// (dnsweaver.provider / dnsweaver.dev/provider / dnsweaver.records.*.provider)
+	// for this instance to match. When false (default), normal domain matching applies.
+	MatchLabeledOnly bool
+
 	// Domain matching patterns
 	Domains             []string // Glob patterns (default)
 	DomainsRegex        []string // Regex patterns (opt-in)
@@ -51,6 +56,7 @@ func (c *ProviderInstanceConfig) ToProviderConfig() provider.ProviderInstanceCon
 		Target:              c.Target,
 		TTL:                 c.TTL,
 		Mode:                c.Mode,
+		MatchLabeledOnly:    c.MatchLabeledOnly,
 		Domains:             c.Domains,
 		DomainsRegex:        c.DomainsRegex,
 		ExcludeDomains:      c.ExcludeDomains,
@@ -145,6 +151,14 @@ func loadInstanceConfig(instanceName string, defaultTTL int) (*ProviderInstanceC
 		}
 	} else {
 		cfg.Mode = provider.ModeManaged
+	}
+
+	// MATCH_LABELED_ONLY (optional, defaults to false)
+	// When true, this instance only acts on hostnames explicitly routed to it.
+	if v := getEnv(prefix + "MATCH_LABELED_ONLY"); v != "" {
+		cfg.MatchLabeledOnly = parseBool(v, false)
+	} else {
+		cfg.MatchLabeledOnly = false
 	}
 
 	// Domain patterns - either DOMAINS or DOMAINS_REGEX, not both
@@ -290,6 +304,16 @@ func mergeProviderEnvOverrides(cfg *ProviderInstanceConfig) {
 			)
 			cfg.Mode = mode
 		}
+	}
+
+	// MATCH_LABELED_ONLY override
+	if v := getEnv(prefix + "MATCH_LABELED_ONLY"); v != "" {
+		matchLabeledOnly := parseBool(v, cfg.MatchLabeledOnly)
+		slog.Debug("env override applied to provider match_labeled_only",
+			slog.String("provider", cfg.Name),
+			slog.Bool("match_labeled_only", matchLabeledOnly),
+		)
+		cfg.MatchLabeledOnly = matchLabeledOnly
 	}
 }
 

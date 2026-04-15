@@ -109,6 +109,7 @@ providers:
     domains:
       - "*.internal.example.com"
       - "*.home.example.com"
+    # match_labeled_only: true   # Optional: only create records when workload explicitly targets this instance
     record_type: A        # A, AAAA, or CNAME
     target: 192.0.2.100    # Where to point DNS records (your load balancer/gateway IP)
     ttl: 300              # TTL in seconds

@@ -71,6 +71,11 @@ type ProviderInstance struct {
 	// Defaults to ModeManaged if not set.
 	Mode OperationalMode
 
+	// MatchLabeledOnly requires explicit provider-instance targeting labels
+	// for this instance to be selected during standard domain matching.
+	// Explicit provider routing still works regardless of this flag.
+	MatchLabeledOnly bool
+
 	// InstanceID is the unique identifier for the dnsweaver instance.
 	// Used for multi-instance coordination to scope ownership records.
 	// Empty string means single-instance mode (legacy behavior).
@@ -461,6 +466,11 @@ type ProviderInstanceConfig struct {
 	// Mode is the operational mode (managed, authoritative, additive).
 	// Defaults to "managed" if not set.
 	Mode OperationalMode
+
+	// MatchLabeledOnly requires explicit provider-instance targeting labels
+	// for this instance to match during standard domain-based routing.
+	// Defaults to false.
+	MatchLabeledOnly bool
 
 	// Domains is a list of glob patterns for matching hostnames.
 	// At least one is required.

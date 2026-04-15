@@ -168,6 +168,18 @@ To prevent overlap, use `EXCLUDE_DOMAINS`:
 - DNSWEAVER_B_DOMAINS=*.internal.example.com
 ```
 
+For opt-in instances, set `MATCH_LABELED_ONLY=true`:
+
+```yaml
+# Internal instance is opt-in only
+- DNSWEAVER_INTERNAL_MATCH_LABELED_ONLY=true
+
+# Workload must explicitly target it
+# Docker/Swarm label: dnsweaver.provider=internal
+# Multiple explicit targets: dnsweaver.provider=internal,external
+# Kubernetes annotation: dnsweaver.dev/provider: "internal"
+```
+
 ## Debugging Multi-Instance
 
 Enable debug logging to see per-instance reconciliation:

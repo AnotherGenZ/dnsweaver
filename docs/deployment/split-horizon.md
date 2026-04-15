@@ -40,6 +40,7 @@ environment:
   - DNSWEAVER_INTERNAL_RECORD_TYPE=A
   - DNSWEAVER_INTERNAL_TARGET=192.0.2.100
   - DNSWEAVER_INTERNAL_DOMAINS=*.example.com
+  - DNSWEAVER_INTERNAL_MATCH_LABELED_ONLY=true
 
   # External DNS (Cloudflare)
   - DNSWEAVER_EXTERNAL_TYPE=cloudflare
@@ -51,8 +52,15 @@ environment:
 ```
 
 When container `app.example.com` starts:
-- Internal DNS → `A` record → `192.0.2.100`
+- Internal DNS → no record by default (opt-in only)
 - External DNS → `CNAME` record → `tunnel.example.com`
+
+To route a specific workload to internal DNS, add:
+
+```yaml
+labels:
+  - "dnsweaver.provider=internal"
+```
 
 !!! tip "Companion HTTPS Records"
     When using Technitium for internal DNS, dnsweaver automatically creates companion HTTPS (SVCB) records alongside A/CNAME records. This prevents ECH (Encrypted Client Hello) fallback errors that commonly occur in split-horizon setups where external DNS (e.g., Cloudflare) provides HTTPS records but internal DNS doesn't. See [Technitium — Companion HTTPS Records](../providers/technitium.md#companion-https-records) for details.
