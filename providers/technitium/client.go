@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -40,7 +41,117 @@ type apiRData struct {
 	SvcParams     string `json:"svcParams,omitempty"`     // For HTTPS/SVCB records (e.g., "alpn|h2")
 }
 
-// Note: older Technitium versions might represent svcParams differently; keep parsing flexible.
+// UnmarshalJSON supports Technitium's multiple svcParams response formats.
+// Some versions return svcParams as a string ("alpn|h2"), while newer versions
+// may return an object ({"alpn":"h2"}).
+func (r *apiRData) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		IPAddress     string          `json:"ipAddress,omitempty"`
+		CName         string          `json:"cname,omitempty"`
+		Text          string          `json:"text,omitempty"`
+		Priority      int             `json:"priority,omitempty"`
+		Weight        int             `json:"weight,omitempty"`
+		Port          int             `json:"port,omitempty"`
+		SrvTarget     string          `json:"target,omitempty"`
+		SvcPriority   int             `json:"svcPriority,omitempty"`
+		SvcTargetName string          `json:"svcTargetName,omitempty"`
+		SvcParams     json.RawMessage `json:"svcParams,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	svcParams, err := decodeSvcParams(raw.SvcParams)
+	if err != nil {
+		return fmt.Errorf("parsing svcParams: %w", err)
+	}
+
+	*r = apiRData{
+		IPAddress:     raw.IPAddress,
+		CName:         raw.CName,
+		Text:          raw.Text,
+		Priority:      raw.Priority,
+		Weight:        raw.Weight,
+		Port:          raw.Port,
+		SrvTarget:     raw.SrvTarget,
+		SvcPriority:   raw.SvcPriority,
+		SvcTargetName: raw.SvcTargetName,
+		SvcParams:     svcParams,
+	}
+
+	return nil
+}
+
+func decodeSvcParams(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", nil
+	}
+
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s, nil
+	}
+
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err == nil {
+		return normalizeSvcParamsObject(obj), nil
+	}
+
+	return "", fmt.Errorf("unsupported svcParams format: %s", string(raw))
+}
+
+func normalizeSvcParamsObject(obj map[string]any) string {
+	if len(obj) == 0 {
+		return ""
+	}
+
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		value := normalizeSvcParamValue(obj[key])
+		if value == "" {
+			parts = append(parts, key)
+			continue
+		}
+		parts = append(parts, key+"|"+value)
+	}
+
+	return strings.Join(parts, " ")
+}
+
+func normalizeSvcParamValue(v any) string {
+	switch value := v.(type) {
+	case string:
+		return value
+	case bool:
+		return strconv.FormatBool(value)
+	case float64:
+		return strconv.FormatFloat(value, 'f', -1, 64)
+	case []any:
+		parts := make([]string, 0, len(value))
+		for _, item := range value {
+			part := normalizeSvcParamValue(item)
+			if part == "" {
+				continue
+			}
+			parts = append(parts, part)
+		}
+		return strings.Join(parts, ",")
+	case map[string]any:
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return ""
+		}
+		return string(encoded)
+	default:
+		return fmt.Sprintf("%v", value)
+	}
+}
 
 // apiResponse is the standard Technitium API response wrapper.
 type apiResponse struct {

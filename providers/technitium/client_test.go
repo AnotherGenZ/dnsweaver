@@ -388,6 +388,46 @@ func TestClient_ListZoneRecords_Success(t *testing.T) {
 	}
 }
 
+func TestClient_ListZoneRecords_SvcParamsObject(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "ok",
+			"response": map[string]interface{}{
+				"zone": mockZoneInfo("example.com"),
+				"records": []map[string]interface{}{
+					{
+						"name":     "app.example.com",
+						"type":     "HTTPS",
+						"ttl":      300,
+						"disabled": false,
+						"rData": map[string]interface{}{
+							"svcPriority":   1,
+							"svcTargetName": ".",
+							"svcParams": map[string]interface{}{
+								"alpn": "h2",
+							},
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, "test-token")
+	records, err := client.ListZoneRecords(context.Background(), "example.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	if records[0].RData.SvcParams != "alpn|h2" {
+		t.Fatalf("expected normalized svcParams alpn|h2, got %q", records[0].RData.SvcParams)
+	}
+}
+
 func TestClient_HTTPError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
