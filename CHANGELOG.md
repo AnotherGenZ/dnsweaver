@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-04-15
+
+### Added
+- **Configurable detached cleanup circuit breaker**: Added configurable detached
+  cleanup thresholds and mass-delete override controls via environment variables
+  and YAML config (`DNSWEAVER_DETACHED_CLEANUP_*`)
+
+### Fixed
+- **Detached-provider reconciliation after routing changes**: Reconciler now
+  deletes records from providers that no longer match a discovered hostname
+  after routing filter changes (for example, enabling
+  `DNSWEAVER_INTERNAL_MATCH_LABELED_ONLY=true` while external routing remains)
+- **Delete-on-failed-move protection**: Detached cleanup is deferred when a
+  hostname still has current routed providers but reconciliation to those
+  providers is unhealthy, preventing accidental deletions during provider
+  failures
+
 ## [1.2.0] - 2026-04-15
 
 ### Added
@@ -693,7 +710,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitLab CI/CD pipeline with GitHub release automation
 - Docker Hub and GitHub Container Registry publishing
 
-[Unreleased]: https://github.com/maxfield-allison/dnsweaver/compare/v1.1.3...HEAD
+[Unreleased]: https://github.com/maxfield-allison/dnsweaver/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/maxfield-allison/dnsweaver/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/maxfield-allison/dnsweaver/compare/v1.1.3...v1.2.0
 [1.1.3]: https://github.com/maxfield-allison/dnsweaver/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/maxfield-allison/dnsweaver/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/maxfield-allison/dnsweaver/compare/v1.1.0...v1.1.1
