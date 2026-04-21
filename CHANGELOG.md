@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Docker socket permission denied on first run**: The image runs as a non-root
+  user (UID/GID 1000), but the host's `docker` group GID is almost never 1000
+  (typically 999 on Debian/Ubuntu, varies on other distros), so mounting
+  `/var/run/docker.sock` failed with `permission denied` out of the box.
+  Added a small entrypoint script (`docker/entrypoint.sh`) that detects the
+  socket's GID at runtime, adds the `dnsweaver` user to a group with that GID,
+  then drops privileges via `su-exec` before exec'ing the binary. The standard
+  compose example now works without `group_add`. K8s-only deployments and
+  socket-proxy setups skip the logic entirely (no socket mounted = no-op).
+  Closes maxfield-allison/dnsweaver#79.
+
+### Changed
+- **Runtime image now includes `su-exec`** (~20KB) for the entrypoint privilege
+  drop. Container briefly starts as root to perform GID detection, then exec's
+  the binary as the unprivileged `dnsweaver` user.
+
 ## [1.1.3] - 2026-04-10
 
 ### Security
