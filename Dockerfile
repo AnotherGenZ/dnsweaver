@@ -71,8 +71,10 @@ ARG CACHE_BUST=dev
 
 # Install runtime dependencies (no wget/curl — reduces attack surface)
 # Upgrade base packages first to pick up security fixes
+# su-exec: drops privileges from root to dnsweaver in the entrypoint after
+#         performing one-time docker socket GID detection.
 RUN apk upgrade --no-cache && \
-    apk add --no-cache ca-certificates tzdata
+    apk add --no-cache ca-certificates tzdata su-exec
 
 # Create non-root user
 RUN addgroup -g 1000 dnsweaver && \
@@ -81,8 +83,11 @@ RUN addgroup -g 1000 dnsweaver && \
 # Copy binary from builder
 COPY --from=builder /build/dnsweaver /usr/local/bin/dnsweaver
 
-# Ensure binary is executable
-RUN chmod +x /usr/local/bin/dnsweaver
+# Copy entrypoint script (handles Docker socket GID auto-detection)
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+
+# Ensure binary and entrypoint are executable
+RUN chmod +x /usr/local/bin/dnsweaver /usr/local/bin/entrypoint.sh
 
 # Default environment variables (can be overridden)
 ENV DNSWEAVER_LOG_LEVEL="info" \
@@ -94,12 +99,15 @@ ENV DNSWEAVER_LOG_LEVEL="info" \
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["/bin/sh", "-c", "echo -e 'GET /health HTTP/1.0\r\nHost: localhost\r\n\r\n' | nc localhost 8080 | grep -q '200 OK' || exit 1"]
 
-# Run as non-root user
-# Note: When mounting Docker socket, ensure socket has appropriate permissions
-# or run as root if needed for Docker API access
-USER dnsweaver
+# Note: container starts as root so the entrypoint can detect the docker
+# socket GID and add the dnsweaver user to the matching group. The entrypoint
+# then drops privileges via su-exec before invoking the binary, so the
+# dnsweaver process always runs unprivileged.
+#
+# If you don't mount the docker socket (k8s-only, socket proxy), the entrypoint
+# skips the GID logic entirely.
 
 # Expose health port
 EXPOSE 8080
 
-ENTRYPOINT ["/usr/local/bin/dnsweaver"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
