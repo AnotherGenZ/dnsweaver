@@ -135,7 +135,7 @@ type ClusterResource struct {
 // Only fields relevant to IP resolution are populated.
 type LXCConfig struct {
 	// Net0 is the raw value of the net0 config field.
-	// Example: "name=eth0,bridge=vmbr0,hwaddr=AA:BB:CC:DD:EE:FF,ip=10.1.20.50/24,ip6=auto"
+	// Example: "name=eth0,bridge=vmbr0,hwaddr=AA:BB:CC:DD:EE:FF,ip=192.0.2.50/24,ip6=auto"
 	Net0 string `json:"net0"`
 }
 

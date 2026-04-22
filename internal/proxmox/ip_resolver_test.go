@@ -10,8 +10,8 @@ func TestParseLXCNet0IP(t *testing.T) {
 	}{
 		{
 			name:   "static IP with CIDR",
-			net0:   "name=eth0,bridge=vmbr0,hwaddr=AA:BB:CC:DD:EE:FF,ip=10.1.20.50/24,ip6=auto",
-			wantIP: "10.1.20.50",
+			net0:   "name=eth0,bridge=vmbr0,hwaddr=AA:BB:CC:DD:EE:FF,ip=192.0.2.50/24,ip6=auto",
+			wantIP: "192.0.2.50",
 		},
 		{
 			name:   "DHCP returns empty",
@@ -69,7 +69,7 @@ func TestIsLoopbackIP(t *testing.T) {
 	if !isLoopbackIP("127.1.2.3") {
 		t.Error("expected 127.1.2.3 to be loopback")
 	}
-	if isLoopbackIP("10.1.20.50") {
-		t.Error("expected 10.1.20.50 to not be loopback")
+	if isLoopbackIP("192.0.2.50") {
+		t.Error("expected 192.0.2.50 to not be loopback")
 	}
 }

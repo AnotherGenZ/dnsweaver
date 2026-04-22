@@ -82,7 +82,7 @@ func TestGetLXCConfig(t *testing.T) {
 
 		resp := map[string]any{
 			"data": map[string]any{
-				"net0": "name=eth0,bridge=vmbr0,hwaddr=AA:BB:CC:DD:EE:FF,ip=10.1.20.50/24,ip6=auto",
+				"net0": "name=eth0,bridge=vmbr0,hwaddr=AA:BB:CC:DD:EE:FF,ip=192.0.2.50/24,ip6=auto",
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -94,7 +94,7 @@ func TestGetLXCConfig(t *testing.T) {
 		t.Fatalf("GetLXCConfig: %v", err)
 	}
 
-	expected := "name=eth0,bridge=vmbr0,hwaddr=AA:BB:CC:DD:EE:FF,ip=10.1.20.50/24,ip6=auto"
+	expected := "name=eth0,bridge=vmbr0,hwaddr=AA:BB:CC:DD:EE:FF,ip=192.0.2.50/24,ip6=auto"
 	if cfg.Net0 != expected {
 		t.Errorf("Net0 = %q, want %q", cfg.Net0, expected)
 	}

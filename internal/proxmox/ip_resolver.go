@@ -46,7 +46,7 @@ func resolveLXCIP(ctx context.Context, client *Client, resource ClusterResource)
 }
 
 // parseLXCNet0IP parses the ip= component from a Proxmox LXC net0 config value.
-// Example input: "name=eth0,bridge=vmbr0,hwaddr=AA:BB:CC:DD:EE:FF,ip=10.1.20.50/24,ip6=auto"
+// Example input: "name=eth0,bridge=vmbr0,hwaddr=AA:BB:CC:DD:EE:FF,ip=192.0.2.50/24,ip6=auto"
 // Returns the IP address without the CIDR prefix, or empty string if not found.
 func parseLXCNet0IP(net0 string) string {
 	for _, part := range strings.Split(net0, ",") {
@@ -61,7 +61,7 @@ func parseLXCNet0IP(net0 string) string {
 			// DHCP — no static IP to return; caller can skip this resource.
 			return ""
 		}
-		// Strip CIDR prefix length (e.g. "10.1.20.50/24" → "10.1.20.50").
+		// Strip CIDR prefix length (e.g. "192.0.2.50/24" → "192.0.2.50").
 		ip, _, _ := strings.Cut(value, "/")
 		return ip
 	}
