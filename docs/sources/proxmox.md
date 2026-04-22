@@ -79,22 +79,45 @@ VMs without a running guest agent are skipped (a debug log entry is emitted). To
 
 ## PVE API Token
 
-Create a token with **read-only** permissions scoped to the `VM.Audit` privilege:
+dnsweaver requires a token with **read-only** permissions covering both VM
+listing and the QEMU guest agent. The built-in `PVEAuditor` role is **not
+sufficient** on its own — it grants `VM.Audit` (lists VMs) but not
+`VM.Monitor` (queries the guest agent for IP addresses). Without `VM.Monitor`,
+VM IP resolution returns `403 Permission check failed` and only LXC containers
+get DNS records.
+
+Create a dedicated minimal role and bind it to a token:
 
 ```bash
-# On the PVE host (or via the web UI)
+# On any PVE node (or via Datacenter → Permissions → Roles in the web UI)
+pveum role add DNSWeaver -privs "VM.Audit,VM.Monitor,Pool.Audit"
 pveum user add dnsweaver@pve --comment "dnsweaver read-only"
-pveum aclmod / -user dnsweaver@pve -role PVEAuditor
-pveum user token add dnsweaver@pve dnsweaver --privsep=1
+pveum aclmod / -user dnsweaver@pve -role DNSWeaver
+pveum user token add dnsweaver@pve dnsweaver --privsep=0
 ```
+
+| Privilege | Why it is required |
+| :-------- | :----------------- |
+| `VM.Audit` | List VMs and LXC containers via `/cluster/resources` |
+| `VM.Monitor` | Query the QEMU guest agent (`/agent/network-get-interfaces`) for VM IPs |
+| `Pool.Audit` | Required for `/cluster/resources` to enumerate pool-scoped resources |
 
 The token ID format is `<user>@<realm>!<tokenname>`, for example:
 `dnsweaver@pve!dnsweaver`
 
 !!! note "Privilege separation"
-    Using `--privsep=1` (privilege separation enabled) is recommended. It means
-    the token cannot exceed the user's permissions even if the user is later
-    granted broader access.
+    `--privsep=0` propagates the user's role to the token directly. If you set
+    `--privsep=1`, you must also explicitly grant the role to the token itself
+    via `pveum aclmod / -token 'dnsweaver@pve!dnsweaver' -role DNSWeaver` —
+    otherwise the token will have no permissions.
+
+!!! tip "Verify the token"
+    Confirm the token has the expected privileges:
+
+    ```bash
+    pveum user token permissions dnsweaver@pve dnsweaver --path /
+    # Expect: Pool.Audit, VM.Audit, VM.Monitor
+    ```
 
 ## Workload Labels
 
@@ -224,7 +247,18 @@ DNSWEAVER_PROXMOX_VERIFY_TLS=true
 ### No records created
 
 1. Verify `DNSWEAVER_PROXMOX_URL` is reachable from dnsweaver
-2. Confirm the token has `VM.Audit` privilege via: `pveum user permissions dnsweaver@pve`
+2. Confirm the token has `VM.Audit`, `VM.Monitor`, and `Pool.Audit` via:
+   `pveum user token permissions dnsweaver@pve dnsweaver --path /`
 3. Check that VMs are in the `running` state (or adjust `DNSWEAVER_PROXMOX_STATE_FILTER`)
 4. Confirm `DNSWEAVER_PROXMOX_DOMAIN_SUFFIX` is set if VM names are not already FQDNs
 5. Enable debug logging: `DNSWEAVER_LOG_LEVEL=debug`
+
+### Only LXC records appear, no VMs
+
+This is the classic symptom of a missing `VM.Monitor` privilege. LXC IPs are
+read directly from the PVE config (covered by `VM.Audit`), but VM IPs require
+the guest agent endpoint which is gated by `VM.Monitor`. Add it to the role:
+
+```bash
+pveum role modify DNSWeaver -privs "VM.Audit,VM.Monitor,Pool.Audit"
+```
