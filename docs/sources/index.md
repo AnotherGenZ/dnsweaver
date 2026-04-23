@@ -36,6 +36,14 @@ dnsweaver discovers hostnames to manage from multiple **sources**. Each source t
 
     [:octicons-arrow-right-24: Traefik Files](traefik-files.md)
 
+-   :material-rocket-launch:{ .lg .middle } **Caddy Labels**
+
+    ---
+
+    Parse hostnames from caddy-docker-proxy style container labels.
+
+    [:octicons-arrow-right-24: Caddy Labels](caddy.md)
+
 -   :material-tag-text:{ .lg .middle } **Native Labels**
 
     ---
@@ -68,9 +76,10 @@ When multiple sources provide the same hostname, dnsweaver uses the following pr
 
 1. **Native labels** (explicit dnsweaver configuration)
 2. **Traefik labels** (reverse proxy configuration)
-3. **Traefik files** (dynamic configuration)
-4. **Kubernetes** (resource spec hostnames)
-5. **Proxmox VE** (VM/LXC name + domain suffix)
+3. **Caddy labels** (caddy-docker-proxy configuration)
+4. **Traefik files** (dynamic configuration)
+5. **Kubernetes** (resource spec hostnames)
+6. **Proxmox VE** (VM/LXC name + domain suffix)
 
 ## Hostname Extraction
 
@@ -79,6 +88,7 @@ Each source extracts hostnames differently:
 | Source | Extracts From | Example Label/Config |
 | :----- | :------------ | :------------------- |
 | Docker (Traefik) | `traefik.http.routers.*.rule` | `` Host(`app.example.com`) `` |
+| Docker (Caddy) | `caddy` / `caddy_<n>` | `caddy=app.example.com` |
 | Docker Swarm | Service labels | Same as Docker |
 | Traefik Files | `http.routers.*.rule` in YAML/TOML | Standard Traefik config |
 | Native | `dnsweaver.hostname` | `dnsweaver.hostname=app.example.com` |

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Caddy source**: Extract hostnames from Docker containers that use
+  [caddy-docker-proxy](https://github.com/lucaslorentz/caddy-docker-proxy)
+  style labels (`caddy=app.example.com` or indexed `caddy_0`, `caddy_1`).
+  Enable with `DNSWEAVER_SOURCES=caddy` (combinable with other sources).
+  Caddyfile discovery is not included — only Docker labels are parsed.
+  Closes #175.
+
 ## [1.2.0] - 2026-04-22
 
 ### Added
