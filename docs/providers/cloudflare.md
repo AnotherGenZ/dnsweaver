@@ -30,7 +30,7 @@ environment:
 | `TOKEN_FILE` | Alt | - | Path to file containing API token |
 | `ZONE_ID` | No* | - | Cloudflare Zone ID (alternative to `ZONE`) |
 | `ZONE` | No* | - | DNS zone name for zone lookup |
-| `RECORD_TYPE` | Yes | - | `A`, `AAAA`, `CNAME`, or `TXT` |
+| `RECORD_TYPE` | Yes | - | `A`, `AAAA`, `CNAME`, `SRV`, or `TXT` |
 | `TARGET` | Yes | - | Record value |
 | `DOMAINS` | Yes | - | Glob patterns to match |
 | `EXCLUDE_DOMAINS` | No | - | Patterns to exclude |

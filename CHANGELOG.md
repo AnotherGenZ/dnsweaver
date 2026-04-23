@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-04-23
+
+### Added
+- **Caddy source**: Extract hostnames from Docker containers that use
+  [caddy-docker-proxy](https://github.com/lucaslorentz/caddy-docker-proxy)
+  style labels (`caddy=app.example.com` or indexed `caddy_0`, `caddy_1`).
+  Enable with `DNSWEAVER_SOURCES=caddy` (combinable with other sources).
+  Caddyfile discovery is not included — only Docker labels are parsed.
+  Closes #175.
+- **nginx-proxy source**: Extract hostnames from Docker containers that
+  declare a `VIRTUAL_HOST` in the jwilder/nginx-proxy convention.
+  Recognizes both the literal `VIRTUAL_HOST` label and the canonical
+  `com.nginx-proxy.virtual_host` label; comma-separated hostnames are
+  supported. Env-var extraction (upstream jwilder reads from container
+  environment) is not yet supported and is tracked separately.
+  Enable with `DNSWEAVER_SOURCES=nginx-proxy`.
+  Closes #174.
+
+### Fixed
+- **Proxmox: filter non-routable IPs from guest-agent and LXC responses**.
+  The guest-agent and LXC `net0` parsers were returning loopback, link-local,
+  and other non-routable addresses alongside real LAN IPs, producing
+  unusable A records. All RFC 5735 / RFC 4291 non-routable ranges are now
+  filtered out at the source (loopback, link-local, multicast, broadcast,
+  unspecified, documentation, benchmarking, IPv6 ULA non-fc00::/7 edges,
+  etc.).
+- **Proxmox: allow CGNAT range (100.64.0.0/10) for Tailscale IPs**.
+  The non-routable filter was too aggressive: it dropped 100.64.0.0/10
+  addresses, which Tailscale uses for its mesh (`100.x.y.z`). CGNAT is
+  now treated as routable so Proxmox VMs/LXCs on a Tailscale network
+  resolve correctly.
+
+### Changed
+- **Documentation accuracy pass**: Removed stale references to AdGuard
+  as a primary provider example, deleted unused Proxmox role-creation
+  copy that referenced internal hostnames, corrected provider capability
+  tables to reflect actual code (Pi-hole and dnsmasq are A/CNAME only;
+  Cloudflare adds SRV), simplified the architecture mermaid, and removed
+  inaccurate claims of Caddy/nginx-proxy support that have now been
+  properly implemented in this release.
+
 ## [1.2.0] - 2026-04-22
 
 ### Added

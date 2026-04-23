@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 )
 
@@ -42,6 +43,9 @@ func resolveLXCIP(ctx context.Context, client *Client, resource ClusterResource)
 	}
 
 	ip := parseLXCNet0IP(cfg.Net0)
+	if isNonRoutableIP(ip) {
+		return "", nil
+	}
 	return ip, nil
 }
 
@@ -90,7 +94,7 @@ func resolveVMIP(ctx context.Context, client *Client, resource ClusterResource, 
 			continue
 		}
 		for _, addr := range iface.IPAddresses {
-			if addr.IPAddressType == "ipv4" && !isLoopbackIP(addr.IPAddress) {
+			if addr.IPAddressType == "ipv4" && !isNonRoutableIP(addr.IPAddress) {
 				return addr.IPAddress, nil
 			}
 		}
@@ -104,7 +108,61 @@ func isLoopback(name string) bool {
 	return name == "lo" || name == "lo0"
 }
 
-// isLoopbackIP returns true for the IPv4 loopback address.
-func isLoopbackIP(ip string) bool {
-	return strings.HasPrefix(ip, "127.")
+// nonRoutableRanges contains IPv4 CIDR blocks that are reserved or not suitable
+// for use as DNS record targets. These supplement the ranges already handled by
+// net.IP's built-in methods (IsLoopback, IsLinkLocalUnicast, IsUnspecified, IsMulticast).
+var nonRoutableRanges = func() []*net.IPNet {
+	cidrs := []string{
+		// 100.64.0.0/10 (RFC 6598 CGNAT) is intentionally NOT filtered:
+		// Tailscale assigns addresses from this range, and DNS records pointing
+		// to a VM's Tailscale IP are a common and legitimate homelab use case.
+		"192.0.0.0/24",       // IETF Protocol Assignments (RFC 6890)
+		"192.0.2.0/24",       // TEST-NET-1 (RFC 5737)
+		"198.18.0.0/15",      // Network interconnect benchmarking (RFC 2544)
+		"198.51.100.0/24",    // TEST-NET-2 (RFC 5737)
+		"203.0.113.0/24",     // TEST-NET-3 (RFC 5737)
+		"240.0.0.0/4",        // Reserved for future use (RFC 1112)
+		"255.255.255.255/32", // Limited broadcast
+	}
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		_, n, _ := net.ParseCIDR(cidr)
+		nets = append(nets, n)
+	}
+	return nets
+}()
+
+// isNonRoutableIP reports whether ip should be skipped as a DNS record target.
+//
+// It rejects addresses that are non-routable or not suitable for external resolution:
+//   - Loopback (127.0.0.0/8)
+//   - Link-local / APIPA (169.254.0.0/16)
+//   - Unspecified (0.0.0.0)
+//   - Multicast (224.0.0.0/4)
+//   - Reserved, documentation, and benchmarking ranges (see nonRoutableRanges)
+//   - Any address that cannot be parsed
+//
+// RFC 1918 private addresses (10/8, 172.16/12, 192.168/16) are intentionally
+// kept as valid targets — these are the addresses most homelab VMs use.
+//
+// The CGNAT range (100.64.0.0/10) is also kept as a valid target because
+// Tailscale assigns addresses from that range, and DNS records pointing to
+// a VM's Tailscale IP are a common and legitimate homelab use case.
+func isNonRoutableIP(ip string) bool {
+	if ip == "" {
+		return true
+	}
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return true
+	}
+	if parsed.IsLoopback() || parsed.IsLinkLocalUnicast() || parsed.IsUnspecified() || parsed.IsMulticast() {
+		return true
+	}
+	for _, n := range nonRoutableRanges {
+		if n.Contains(parsed) {
+			return true
+		}
+	}
+	return false
 }

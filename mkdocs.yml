@@ -1,6 +1,6 @@
 site_name: dnsweaver
 site_url: https://maxfield-allison.github.io/dnsweaver/
-site_description: Automatic DNS management for Docker and Kubernetes workloads — multi-provider, split-horizon, and platform-agnostic
+site_description: Automatic DNS management for Docker, Kubernetes, and Proxmox VE workloads — multi-provider, split-horizon, and platform-agnostic
 site_author: Maxfield Allison
 
 repo_name: maxfield-allison/dnsweaver
@@ -72,9 +72,6 @@ extra:
     - icon: fontawesome/brands/docker
       link: https://hub.docker.com/r/maxamill/dnsweaver
       name: dnsweaver on Docker Hub
-    - icon: simple/gitlab
-      link: https://gitlab.bluewillows.net/root/dnsweaver
-      name: Source Repository
 
 markdown_extensions:
   - abbr
@@ -140,6 +137,8 @@ nav:
       - Docker Labels: sources/docker.md
       - Docker Swarm: sources/swarm.md
       - Traefik Files: sources/traefik-files.md
+      - Caddy Labels: sources/caddy.md
+      - nginx-proxy Labels: sources/nginx-proxy.md
       - Native Labels: sources/native-labels.md
       - Kubernetes: sources/kubernetes.md
       - Proxmox VE: sources/proxmox.md

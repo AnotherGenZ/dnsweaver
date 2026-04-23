@@ -21,8 +21,10 @@ import (
 	"gitlab.bluewillows.net/root/dnsweaver/providers/rfc2136"
 	"gitlab.bluewillows.net/root/dnsweaver/providers/technitium"
 	"gitlab.bluewillows.net/root/dnsweaver/providers/webhook"
+	"gitlab.bluewillows.net/root/dnsweaver/sources/caddy"
 	dnsweaversource "gitlab.bluewillows.net/root/dnsweaver/sources/dnsweaver"
 	k8ssource "gitlab.bluewillows.net/root/dnsweaver/sources/kubernetes"
+	"gitlab.bluewillows.net/root/dnsweaver/sources/nginxproxy"
 	proxmoxsource "gitlab.bluewillows.net/root/dnsweaver/sources/proxmox"
 	"gitlab.bluewillows.net/root/dnsweaver/sources/traefik"
 )
@@ -114,6 +116,24 @@ func registerSources(registry *source.Registry, cfg *config.Config, logger *slog
 			src := dnsweaversource.New(dnsweaversource.WithLogger(logger))
 			if err := registry.Register(src); err != nil {
 				return fmt.Errorf("registering dnsweaver source: %w", err)
+			}
+			logger.Info("registered source",
+				slog.String("name", name),
+				slog.Bool("file_discovery", src.SupportsDiscovery()),
+			)
+		case "caddy":
+			src := caddy.New(caddy.WithLogger(logger))
+			if err := registry.Register(src); err != nil {
+				return fmt.Errorf("registering caddy source: %w", err)
+			}
+			logger.Info("registered source",
+				slog.String("name", name),
+				slog.Bool("file_discovery", src.SupportsDiscovery()),
+			)
+		case "nginx-proxy":
+			src := nginxproxy.New(nginxproxy.WithLogger(logger))
+			if err := registry.Register(src); err != nil {
+				return fmt.Errorf("registering nginx-proxy source: %w", err)
 			}
 			logger.Info("registered source",
 				slog.String("name", name),

@@ -21,6 +21,8 @@ dnsweaver watches Docker events, Kubernetes resources, and Proxmox VE clusters t
 - 🏗️ **Multi-Instance Safe** — Run multiple dnsweaver instances on the same DNS zone without conflicts
 - 🔒 **Socket Proxy Compatible** — Connect via TCP to a Docker socket proxy for improved security
 - 🏷️ **Traefik Integration** — Parses `traefik.http.routers.*.rule` labels to extract hostnames
+- 🚀 **Caddy Integration** — Parses `caddy` / `caddy_<n>` labels from [caddy-docker-proxy](https://github.com/lucaslorentz/caddy-docker-proxy)
+- 🔧 **nginx-proxy Integration** — Parses `VIRTUAL_HOST` labels used by [jwilder/nginx-proxy](https://github.com/nginx-proxy/nginx-proxy)
 - 📊 **Observable** — Prometheus metrics, health endpoints, structured logging
 - 🔑 **Secrets Support** — Docker secrets and Kubernetes Secrets via `_FILE` suffix variables
 
@@ -29,11 +31,11 @@ dnsweaver watches Docker events, Kubernetes resources, and Proxmox VE clusters t
 | Provider | Record Types | Notes |
 |----------|--------------|-------|
 | [Technitium](https://maxfield-allison.github.io/dnsweaver/providers/technitium/) | A, AAAA, CNAME, SRV, TXT | Full-featured self-hosted DNS |
-| [Cloudflare](https://maxfield-allison.github.io/dnsweaver/providers/cloudflare/) | A, AAAA, CNAME, TXT | With optional proxy support |
+| [Cloudflare](https://maxfield-allison.github.io/dnsweaver/providers/cloudflare/) | A, AAAA, CNAME, SRV, TXT | With optional proxy support |
 | [RFC 2136](https://maxfield-allison.github.io/dnsweaver/providers/rfc2136/) | A, AAAA, CNAME, SRV, TXT | BIND, Windows DNS, PowerDNS, Knot |
-| [Pi-hole](https://maxfield-allison.github.io/dnsweaver/providers/pihole/) | A, AAAA, CNAME | API or file mode |
+| [Pi-hole](https://maxfield-allison.github.io/dnsweaver/providers/pihole/) | A, CNAME | API or file mode |
 | [AdGuard Home](https://maxfield-allison.github.io/dnsweaver/providers/adguard/) | A, AAAA, CNAME | DNS rewrite management |
-| [dnsmasq](https://maxfield-allison.github.io/dnsweaver/providers/dnsmasq/) | A, AAAA, CNAME | File-based configuration |
+| [dnsmasq](https://maxfield-allison.github.io/dnsweaver/providers/dnsmasq/) | A, CNAME | File-based configuration |
 | [Webhook](https://maxfield-allison.github.io/dnsweaver/providers/webhook/) | Any | Custom integrations |
 
 ## Quick Start
@@ -78,9 +80,10 @@ secrets:
 
 ```mermaid
 flowchart LR
-    A["Docker Events"] --> B["dnsweaver<br/>(matching)"]
-    D["Kubernetes Resources"] --> B
-    B --> C["DNS Providers<br/>(A/CNAME/SRV)"]
+    A["Docker / Swarm"] --> B["dnsweaver"]
+    D["Kubernetes"] --> B
+    P["Proxmox VE"] --> B
+    B --> C["DNS Providers<br/>(create / update / delete)"]
 ```
 
 1. A container starts with a Traefik label (or a Kubernetes Ingress/HTTPRoute is created):
