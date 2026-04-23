@@ -7,14 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.3.0] - 2026-04-15
+## [1.3.0] - 2026-04-23
 
 ### Added
+- **Caddy source**: Extract hostnames from Docker containers that use
+  [caddy-docker-proxy](https://github.com/lucaslorentz/caddy-docker-proxy)
+  style labels (`caddy=app.example.com` or indexed `caddy_0`, `caddy_1`).
+  Enable with `DNSWEAVER_SOURCES=caddy` (combinable with other sources).
+  Caddyfile discovery is not included — only Docker labels are parsed.
+  Closes #175.
+- **nginx-proxy source**: Extract hostnames from Docker containers that
+  declare a `VIRTUAL_HOST` in the jwilder/nginx-proxy convention.
+  Recognizes both the literal `VIRTUAL_HOST` label and the canonical
+  `com.nginx-proxy.virtual_host` label; comma-separated hostnames are
+  supported. Env-var extraction (upstream jwilder reads from container
+  environment) is not yet supported and is tracked separately.
+  Enable with `DNSWEAVER_SOURCES=nginx-proxy`.
+  Closes #174.
 - **Configurable detached cleanup circuit breaker**: Added configurable detached
   cleanup thresholds and mass-delete override controls via environment variables
   and YAML config (`DNSWEAVER_DETACHED_CLEANUP_*`)
 
 ### Fixed
+- **Proxmox: filter non-routable IPs from guest-agent and LXC responses**.
+  The guest-agent and LXC `net0` parsers were returning loopback, link-local,
+  and other non-routable addresses alongside real LAN IPs, producing
+  unusable A records. All RFC 5735 / RFC 4291 non-routable ranges are now
+  filtered out at the source (loopback, link-local, multicast, broadcast,
+  unspecified, documentation, benchmarking, IPv6 ULA non-fc00::/7 edges,
+  etc.).
+- **Proxmox: allow CGNAT range (100.64.0.0/10) for Tailscale IPs**.
+  The non-routable filter was too aggressive: it dropped 100.64.0.0/10
+  addresses, which Tailscale uses for its mesh (`100.x.y.z`). CGNAT is
+  now treated as routable so Proxmox VMs/LXCs on a Tailscale network
+  resolve correctly.
 - **Detached-provider reconciliation after routing changes**: Reconciler now
   deletes records from providers that no longer match a discovered hostname
   after routing filter changes (for example, enabling
@@ -24,18 +50,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   providers is unhealthy, preventing accidental deletions during provider
   failures
 
-## [1.2.0] - 2026-04-15
+### Changed
+- **Documentation accuracy pass**: Removed stale references to AdGuard
+  as a primary provider example, deleted unused Proxmox role-creation
+  copy that referenced internal hostnames, corrected provider capability
+  tables to reflect actual code (Pi-hole and dnsmasq are A/CNAME only;
+  Cloudflare adds SRV), simplified the architecture mermaid, and removed
+  inaccurate claims of Caddy/nginx-proxy support that have now been
+  properly implemented in this release.
+
+## [1.2.0] - 2026-04-22
 
 ### Added
-- **Instance-targeted provider routing controls**: Added configuration and routing
-  logic so instances can target specific providers more precisely in multi-instance
-  deployments
+- **Proxmox VE source**: Auto-create A records for VMs and LXC containers on a
+  Proxmox cluster. VMs resolve via the QEMU guest agent
+  (`/agent/network-get-interfaces`); LXC containers resolve via the `net0`
+  config field. Supports node, tag, and state filtering, and exposes PVE tags
+  as workload labels (`proxmox.tag/*`). Configure via `DNSWEAVER_PROXMOX_*`
+  environment variables. See `docs/sources/proxmox.md` for the required PVE
+  role privileges (`VM.Audit`, `VM.Monitor`, `Pool.Audit`).
+  Closes maxfield-allison/dnsweaver#78. Thanks @jaykumar2001 for the request.
 
 ### Fixed
-- **Cloudflare token verification**: Added support for user/account-scoped token
-  verification flows
-- **Technitium list parsing**: Added support for object-shaped `svcParams` values
-  in record list responses
+- **Technitium `svcParams` unmarshal failure on newer versions**: The
+  `zones/records/get` endpoint in newer Technitium DNS Server releases
+  returns `svcParams` as a JSON object (`{"alpn":"h2"}`) instead of the
+  documented pipe-delimited string (`"alpn|h2"`). This caused
+  `failed to recover ownership state` warnings and prevented the reconciler
+  from recognising its own existing HTTPS records, triggering spurious
+  recreate cycles. Added a `svcParamsValue` named type with a custom
+  `UnmarshalJSON` that accepts both representations and normalises to the
+  pipe-delimited form internally.
+## [1.1.4] - 2026-04-21
+
+### Fixed
+- **Docker socket permission denied on first run**: The image runs as a non-root
+  user (UID/GID 1000), but the host's `docker` group GID is almost never 1000
+  (typically 999 on Debian/Ubuntu, varies on other distros), so mounting
+  `/var/run/docker.sock` failed with `permission denied` out of the box.
+  Added a small entrypoint script (`docker/entrypoint.sh`) that detects the
+  socket's GID at runtime, adds the `dnsweaver` user to a group with that GID,
+  then drops privileges via `su-exec` before exec'ing the binary. The standard
+  compose example now works without `group_add`. K8s-only deployments and
+  socket-proxy setups skip the logic entirely (no socket mounted = no-op).
+  Closes maxfield-allison/dnsweaver#79.
+
+### Changed
+- **Runtime image now includes `su-exec`** (~20KB) for the entrypoint privilege
+  drop. Container briefly starts as root to perform GID detection, then exec's
+  the binary as the unprivileged `dnsweaver` user.
 
 ## [1.1.3] - 2026-04-10
 
@@ -275,7 +338,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Domain matcher strips trailing dots before comparison for consistent matching
   - Pi-hole v6 URL path values escaped with `url.PathEscape` to prevent injection
   - dnsmasq reload command validated against shell metacharacters
-  - SSH `RunWithSudo` pipes password via stdin instead of `echo` (no `/proc` exposure)
+  - SSH `RunWithSudo` pipes credentials via stdin instead of `echo` (no `/proc` exposure)
   - HTTP response bodies capped at 10 MB via `httputil.ReadBody` across all providers
 - **Documentation Alignment** (#151):
   - Added dnsmasq provider example to `config.example.yml`
@@ -515,7 +578,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pi-hole Provider** (#15): Native Pi-hole DNS integration with two operation modes
   - **API mode**: Uses Pi-hole's Admin API (recommended for Pi-hole v5)
     - Manages Local DNS Records (A/AAAA) and Local CNAME Records
-    - Authentication via admin password (supports `_FILE` suffix for secrets)
+    - Authentication via admin credentials (supports `_FILE` suffix for secrets)
   - **File mode**: Direct file manipulation for containerized Pi-hole setups
     - Uses dnsmasq config format internally
     - Configurable config directory, filename, and reload command
@@ -713,6 +776,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [Unreleased]: https://github.com/maxfield-allison/dnsweaver/compare/v1.3.0...HEAD
 [1.3.0]: https://github.com/maxfield-allison/dnsweaver/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/maxfield-allison/dnsweaver/compare/v1.1.3...v1.2.0
+[1.1.4]: https://github.com/maxfield-allison/dnsweaver/compare/v1.1.3...v1.1.4
 [1.1.3]: https://github.com/maxfield-allison/dnsweaver/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/maxfield-allison/dnsweaver/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/maxfield-allison/dnsweaver/compare/v1.1.0...v1.1.1

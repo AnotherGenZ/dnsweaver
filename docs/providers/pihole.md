@@ -62,7 +62,7 @@ volumes:
 | `RELOAD_COMMAND` | File mode | `pihole restartdns reload-lists` | Command to reload after file changes |
 | `ZONE` | No | - | DNS zone for record filtering |
 | `TTL` | No | `300` | Record TTL in seconds |
-| `RECORD_TYPE` | Yes | - | `A`, `AAAA`, or `CNAME` |
+| `RECORD_TYPE` | Yes | - | `A` or `CNAME` |
 | `TARGET` | Yes | - | Record value |
 | `DOMAINS` | Yes | - | Glob patterns to match |
 | `EXCLUDE_DOMAINS` | No | - | Patterns to exclude |
@@ -147,7 +147,7 @@ services:
 
 In file mode, dnsweaver manages these files:
 
-- `custom.list` - A/AAAA records
+- `custom.list` - A records
 - `05-pihole-custom-cname.conf` - CNAME records
 
 !!! warning

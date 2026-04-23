@@ -1,13 +1,13 @@
 ---
-title: Automatic DNS for Docker & Kubernetes
-description: dnsweaver automatically manages DNS records for Docker containers and Kubernetes workloads with multi-provider support
+title: Automatic DNS for Docker, Kubernetes & Proxmox VE
+description: dnsweaver automatically manages DNS records for Docker containers, Kubernetes workloads, and Proxmox VE VMs and LXCs with multi-provider support
 ---
 
 # dnsweaver
 
-**Automatic DNS management for Docker and Kubernetes workloads with multi-provider support.**
+**Automatic DNS management for Docker, Kubernetes, and Proxmox VE workloads with multi-provider support.**
 
-dnsweaver watches Docker events and Kubernetes resources to automatically create and delete DNS records. Unlike single-provider or single-platform tools, dnsweaver supports **split-horizon DNS**, **multiple DNS providers** simultaneously, and works across **Docker**, **Docker Swarm**, and **Kubernetes** — or all of them at once.
+dnsweaver watches Docker events, Kubernetes resources, and Proxmox VE clusters to automatically create and delete DNS records. Unlike single-provider or single-platform tools, dnsweaver supports **split-horizon DNS**, **multiple DNS providers** simultaneously, and works across **Docker**, **Docker Swarm**, **Kubernetes**, and **Proxmox VE** — or all of them at once.
 
 ---
 
@@ -19,7 +19,7 @@ dnsweaver watches Docker events and Kubernetes resources to automatically create
 
     ---
 
-    Route different domains to different DNS providers. Technitium, Cloudflare, Pi-hole, dnsmasq, and webhook—all at once.
+    Route different domains to different DNS providers. Seven providers: Technitium, Cloudflare, AdGuard Home, RFC 2136, Pi-hole, dnsmasq, and webhook.
 
     [:octicons-arrow-right-24: Providers](providers/index.md)
 
@@ -39,6 +39,14 @@ dnsweaver watches Docker events and Kubernetes resources to automatically create
 
     [:octicons-arrow-right-24: Sources Overview](sources/index.md)
 
+-   :material-server:{ .lg .middle } **Proxmox VE**
+
+    ---
+
+    Auto-creates A records for VMs and LXC containers by polling the PVE API. Filter by node, tag, or VM state.
+
+    [:octicons-arrow-right-24: Proxmox Source](sources/proxmox.md)
+
 -   :material-chart-line:{ .lg .middle } **Observable**
 
     ---
@@ -53,9 +61,10 @@ dnsweaver watches Docker events and Kubernetes resources to automatically create
 
 ```mermaid
 flowchart LR
-    A["Docker Events"] --> B["dnsweaver<br/>(matching)"]
-    D["Kubernetes Resources"] --> B
-    B --> C["DNS Providers<br/>(A/CNAME/SRV)"]
+    A["Docker / Swarm"] --> B["dnsweaver"]
+    D["Kubernetes"] --> B
+    P["Proxmox VE"] --> B
+    B --> C["DNS Providers<br/>(create / update / delete)"]
 ```
 
 === "Docker / Swarm"
@@ -67,7 +76,7 @@ flowchart LR
           - "traefik.http.routers.myapp.rule=Host(`myapp.home.example.com`)" # (1)!
         ```
 
-        1. dnsweaver extracts hostnames from Traefik, Caddy, and native labels
+        1. dnsweaver extracts hostnames from Traefik router labels and native `dnsweaver.*` labels
 
     2. dnsweaver extracts the hostname and matches it against configured provider domain patterns
 
@@ -101,6 +110,23 @@ flowchart LR
 
     4. When the resource is deleted, the DNS record is automatically cleaned up
 
+=== "Proxmox VE"
+
+    1. A VM or LXC container is running with a QEMU guest agent (or LXC network configured):
+
+        ```bash
+        # VM example: qm set 100 --name myvm --tags web # (1)!
+        ```
+
+        1. dnsweaver polls the PVE API and discovers VMs via QEMU guest agent IPs or LXC container IPs from net0 config
+
+    2. dnsweaver extracts the VM or LXC hostname and IP, then matches against configured provider domain patterns
+
+    3. The matching provider creates the DNS record:
+        - **A record**: `myvm.home.example.com → 192.0.2.10`
+
+    4. When the VM or LXC is stopped or deleted, the DNS record is automatically cleaned up
+
 ## Quick Start
 
 === "Docker Compose"
@@ -125,7 +151,7 @@ flowchart LR
     ```
 
     1. Comma-separated list of provider instance names
-    2. Provider type: `technitium`, `cloudflare`, `pihole`, `dnsmasq`, `rfc2136`, or `webhook`
+    2. Provider type: `technitium`, `cloudflare`, `pihole`, `adguard`, `dnsmasq`, `rfc2136`, or `webhook`
     3. Target IP for A records (or CNAME target hostname)
     4. Domain patterns to match—wildcards supported
 
@@ -161,10 +187,11 @@ flowchart LR
 | Provider | Record Types | Notes |
 | :------- | :----------- | :---- |
 | [Technitium](providers/technitium.md) | A, AAAA, CNAME, SRV, TXT | Full-featured self-hosted DNS |
-| [Cloudflare](providers/cloudflare.md) | A, AAAA, CNAME, TXT | With optional proxy support |
+| [Cloudflare](providers/cloudflare.md) | A, AAAA, CNAME, SRV, TXT | With optional proxy support |
 | [RFC 2136](providers/rfc2136.md) | A, AAAA, CNAME, SRV, TXT | BIND, Windows DNS, PowerDNS, Knot |
-| [Pi-hole](providers/pihole.md) | A, AAAA, CNAME | API or file mode |
-| [dnsmasq](providers/dnsmasq.md) | A, AAAA, CNAME | File-based configuration |
+| [Pi-hole](providers/pihole.md) | A, CNAME | API or file mode |
+| [AdGuard Home](providers/adguard.md) | A, AAAA, CNAME | DNS rewrite management |
+| [dnsmasq](providers/dnsmasq.md) | A, CNAME | File-based configuration |
 | [Webhook](providers/webhook.md) | A, AAAA, CNAME, TXT | Custom integrations |
 
 </div>
@@ -177,6 +204,7 @@ flowchart LR
 | :--- | :---: | :---: | :---: |
 | Docker support | :material-check: | :material-close: | :material-check: |
 | Kubernetes support | :material-check: | :material-check: | :material-close: |
+| Proxmox VE support | :material-check: | :material-close: | :material-close: |
 | Multiple providers | :material-check: | :material-close: | :material-close: |
 | Split-horizon DNS | :material-check: | :material-close: | :material-close: |
 | Self-hosted DNS focus | :material-check: | :material-close: | :material-close: |
