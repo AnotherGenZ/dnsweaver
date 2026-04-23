@@ -138,6 +138,7 @@ nav:
       - Docker Swarm: sources/swarm.md
       - Traefik Files: sources/traefik-files.md
       - Caddy Labels: sources/caddy.md
+      - nginx-proxy Labels: sources/nginx-proxy.md
       - Native Labels: sources/native-labels.md
       - Kubernetes: sources/kubernetes.md
       - Proxmox VE: sources/proxmox.md

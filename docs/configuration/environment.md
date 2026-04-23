@@ -117,7 +117,7 @@ Replace `{NAME}` with your instance name. For example, instance `internal-dns` u
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DNSWEAVER_SOURCES` | `traefik` | Comma-separated list: `traefik`, `caddy`, `dnsweaver`, `kubernetes`, `proxmox` |
+| `DNSWEAVER_SOURCES` | `traefik` | Comma-separated list: `traefik`, `caddy`, `nginx-proxy`, `dnsweaver`, `kubernetes`, `proxmox` |
 
 !!! warning "Deprecated Variable"
     `DNSWEAVER_SOURCE` (singular) is deprecated and will be removed in v2.0. Use `DNSWEAVER_SOURCES` (plural) instead.

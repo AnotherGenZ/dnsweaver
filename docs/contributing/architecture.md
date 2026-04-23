@@ -11,10 +11,11 @@ graph LR
     subgraph Sources
         S1[Traefik Container Labels<br/>Docker / Swarm]
         S2[Caddy Container Labels<br/>caddy-docker-proxy]
-        S3[Traefik Static Files]
-        S4[Native dnsweaver Labels]
-        S5[Kubernetes<br/>Ingress / IngressRoute /<br/>HTTPRoute / Service]
-        S6[Proxmox VE<br/>VMs / LXC]
+        S3[nginx-proxy Labels<br/>VIRTUAL_HOST]
+        S4[Traefik Static Files]
+        S5[Native dnsweaver Labels]
+        S6[Kubernetes<br/>Ingress / IngressRoute /<br/>HTTPRoute / Service]
+        S7[Proxmox VE<br/>VMs / LXC]
     end
 
     subgraph Core
@@ -32,7 +33,7 @@ graph LR
         P7[Webhook]
     end
 
-    S1 & S2 & S3 & S4 & S5 & S6 --> W
+    S1 & S2 & S3 & S4 & S5 & S6 & S7 --> W
     D --> |Create/Update/Delete| P1 & P2 & P3 & P4 & P5 & P6 & P7
 ```
 

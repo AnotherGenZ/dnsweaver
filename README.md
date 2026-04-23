@@ -22,6 +22,7 @@ dnsweaver watches Docker events, Kubernetes resources, and Proxmox VE clusters t
 - 🔒 **Socket Proxy Compatible** — Connect via TCP to a Docker socket proxy for improved security
 - 🏷️ **Traefik Integration** — Parses `traefik.http.routers.*.rule` labels to extract hostnames
 - 🚀 **Caddy Integration** — Parses `caddy` / `caddy_<n>` labels from [caddy-docker-proxy](https://github.com/lucaslorentz/caddy-docker-proxy)
+- 🔧 **nginx-proxy Integration** — Parses `VIRTUAL_HOST` labels used by [jwilder/nginx-proxy](https://github.com/nginx-proxy/nginx-proxy)
 - 📊 **Observable** — Prometheus metrics, health endpoints, structured logging
 - 🔑 **Secrets Support** — Docker secrets and Kubernetes Secrets via `_FILE` suffix variables
 

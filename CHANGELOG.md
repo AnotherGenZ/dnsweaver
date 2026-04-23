@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Enable with `DNSWEAVER_SOURCES=caddy` (combinable with other sources).
   Caddyfile discovery is not included — only Docker labels are parsed.
   Closes #175.
+- **nginx-proxy source**: Extract hostnames from Docker containers that
+  declare a `VIRTUAL_HOST` in the jwilder/nginx-proxy convention.
+  Recognizes both the literal `VIRTUAL_HOST` label and the canonical
+  `com.nginx-proxy.virtual_host` label; comma-separated hostnames are
+  supported. Env-var extraction (upstream jwilder reads from container
+  environment) is not yet supported and is tracked separately.
+  Enable with `DNSWEAVER_SOURCES=nginx-proxy`.
+  Closes #174.
 
 ## [1.2.0] - 2026-04-22
 
