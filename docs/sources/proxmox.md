@@ -12,11 +12,11 @@ The Proxmox VE source creates DNS A records for running VMs and LXC containers o
 
 ```mermaid
 flowchart LR
-    A["PVE API<br/>/cluster/resources"] -->|"Poll interval"| B["Workload Lister"]
-    B -->|"Filter: node/tag/state"| C["IP Resolver"]
-    C -->|"QEMU agent or<br/>LXC net0 config"| D["workload.Workload<br/>Metadata[ip]"]
+    A["PVE API<br/>/cluster/resources"] -->|"Poll interval"| B["List VMs / LXC"]
+    B -->|"Filter: node / tag / state"| C["Resolve IP"]
+    C -->|"QEMU guest agent (VM)<br/>or net0 config (LXC)"| D["Hostname + IP"]
     D --> E["Proxmox Source"]
-    E -->|"A record hint"| F["Reconciler → DNS"]
+    E -->|"A record"| F["Reconciler → DNS"]
 ```
 
 1. **Lister** polls `/cluster/resources` and applies node, tag, and state filters

@@ -1,12 +1,12 @@
 ---
 title: Sources
-description: How dnsweaver discovers hostnames from Docker containers and Kubernetes resources
+description: How dnsweaver discovers hostnames from Docker containers, Kubernetes resources, and Proxmox VE workloads
 icon: material/source-branch
 ---
 
 # Sources
 
-dnsweaver discovers hostnames to manage from multiple **sources**. Each source type extracts hostnames differently, allowing dnsweaver to work with existing reverse proxy configurations on Docker and Kubernetes.
+dnsweaver discovers hostnames to manage from multiple **sources**. Each source type extracts hostnames differently, allowing dnsweaver to work with existing reverse proxy configurations on Docker and Kubernetes, and with VMs and LXC containers on Proxmox VE.
 
 ## Available Sources
 
@@ -16,7 +16,7 @@ dnsweaver discovers hostnames to manage from multiple **sources**. Each source t
 
     ---
 
-    Parse hostnames from Traefik, Caddy, and nginx-proxy labels on Docker containers.
+    Parse hostnames from Traefik router labels on Docker containers.
 
     [:octicons-arrow-right-24: Docker Labels](docker.md)
 
@@ -67,7 +67,7 @@ dnsweaver discovers hostnames to manage from multiple **sources**. Each source t
 When multiple sources provide the same hostname, dnsweaver uses the following priority:
 
 1. **Native labels** (explicit dnsweaver configuration)
-2. **Traefik/Caddy labels** (reverse proxy configuration)
+2. **Traefik labels** (reverse proxy configuration)
 3. **Traefik files** (dynamic configuration)
 4. **Kubernetes** (resource spec hostnames)
 5. **Proxmox VE** (VM/LXC name + domain suffix)
@@ -79,7 +79,6 @@ Each source extracts hostnames differently:
 | Source | Extracts From | Example Label/Config |
 | :----- | :------------ | :------------------- |
 | Docker (Traefik) | `traefik.http.routers.*.rule` | `` Host(`app.example.com`) `` |
-| Docker (Caddy) | `caddy` or `caddy_*` | `caddy=app.example.com` |
 | Docker Swarm | Service labels | Same as Docker |
 | Traefik Files | `http.routers.*.rule` in YAML/TOML | Standard Traefik config |
 | Native | `dnsweaver.hostname` | `dnsweaver.hostname=app.example.com` |

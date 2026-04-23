@@ -32,7 +32,7 @@ volumes:
 | `RELOAD_COMMAND` | No | `systemctl reload dnsmasq` | Command to reload dnsmasq |
 | `ZONE` | No | - | DNS zone for record filtering |
 | `TTL` | No | `300` | Record TTL in seconds |
-| `RECORD_TYPE` | Yes | - | `A`, `AAAA`, or `CNAME` |
+| `RECORD_TYPE` | Yes | - | `A` or `CNAME` |
 | `TARGET` | Yes | - | Record value |
 | `DOMAINS` | Yes | - | Glob patterns to match |
 | `EXCLUDE_DOMAINS` | No | - | Patterns to exclude |
@@ -89,18 +89,6 @@ cname=alias.home.example.com,target.home.example.com
 Produces:
 ```
 address=/hostname.example.com/192.0.2.100
-```
-
-### AAAA Records
-
-```yaml
-- DNSWEAVER_DNSMASQ_RECORD_TYPE=AAAA
-- DNSWEAVER_DNSMASQ_TARGET=2001:db8::1
-```
-
-Produces:
-```
-address=/hostname.example.com/2001:db8::1
 ```
 
 ### CNAME Records
