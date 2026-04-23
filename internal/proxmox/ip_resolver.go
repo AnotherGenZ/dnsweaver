@@ -113,7 +113,9 @@ func isLoopback(name string) bool {
 // net.IP's built-in methods (IsLoopback, IsLinkLocalUnicast, IsUnspecified, IsMulticast).
 var nonRoutableRanges = func() []*net.IPNet {
 	cidrs := []string{
-		"100.64.0.0/10",      // Shared address space / carrier-grade NAT (RFC 6598)
+		// 100.64.0.0/10 (RFC 6598 CGNAT) is intentionally NOT filtered:
+		// Tailscale assigns addresses from this range, and DNS records pointing
+		// to a VM's Tailscale IP are a common and legitimate homelab use case.
 		"192.0.0.0/24",       // IETF Protocol Assignments (RFC 6890)
 		"192.0.2.0/24",       // TEST-NET-1 (RFC 5737)
 		"198.18.0.0/15",      // Network interconnect benchmarking (RFC 2544)
@@ -142,6 +144,10 @@ var nonRoutableRanges = func() []*net.IPNet {
 //
 // RFC 1918 private addresses (10/8, 172.16/12, 192.168/16) are intentionally
 // kept as valid targets — these are the addresses most homelab VMs use.
+//
+// The CGNAT range (100.64.0.0/10) is also kept as a valid target because
+// Tailscale assigns addresses from that range, and DNS records pointing to
+// a VM's Tailscale IP are a common and legitimate homelab use case.
 func isNonRoutableIP(ip string) bool {
 	if ip == "" {
 		return true

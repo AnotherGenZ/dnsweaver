@@ -84,10 +84,6 @@ func TestIsNonRoutableIP(t *testing.T) {
 		{"multicast 224.0.0.1", "224.0.0.1", true},
 		{"multicast 239.255.255.255", "239.255.255.255", true},
 
-		// Shared address space / carrier-grade NAT (100.64.0.0/10, RFC 6598)
-		{"shared CGN 100.64.0.1", "100.64.0.1", true},
-		{"shared CGN 100.127.255.255", "100.127.255.255", true},
-
 		// Documentation ranges (RFC 5737)
 		{"TEST-NET-1 192.0.2.1", "192.0.2.1", true},
 		{"TEST-NET-2 198.51.100.1", "198.51.100.1", true},
@@ -118,6 +114,11 @@ func TestIsNonRoutableIP(t *testing.T) {
 		{"RFC1918 172.31.255.255", "172.31.255.255", false},
 		{"RFC1918 192.168.0.1", "192.168.0.1", false},
 		{"RFC1918 192.168.1.100", "192.168.1.100", false},
+
+		// CGNAT range (100.64.0.0/10) — Tailscale uses this; must NOT be filtered
+		{"tailscale 100.64.0.1", "100.64.0.1", false},
+		{"tailscale 100.127.255.255", "100.127.255.255", false},
+		{"tailscale 100.100.100.100", "100.100.100.100", false},
 
 		// Valid public addresses — must NOT be filtered
 		{"public 1.1.1.1", "1.1.1.1", false},
