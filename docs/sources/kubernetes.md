@@ -12,11 +12,10 @@ The Kubernetes source extracts hostnames from Kubernetes networking resources. I
 
 ```mermaid
 flowchart LR
-    A["K8s API Server"] -->|"Informer Watch"| B["Resource Converters"]
-    B -->|"Ingress/IngressRoute/<br/>HTTPRoute/Service"| C["Workload Builder"]
-    C -->|"workload.Hostnames"| D["K8s Source"]
-    D -->|"+ Annotations"| E["source.Hostname[]"]
-    E --> F["Reconciler → DNS"]
+    A["Kubernetes API"] -->|"Watch (informer)"| B["Resource Watcher"]
+    B -->|"Ingress / IngressRoute /<br/>HTTPRoute / Service"| C["Extract Hostnames"]
+    C -->|"Apply annotations<br/>(record type, target, etc.)"| D["Kubernetes Source"]
+    D --> E["Reconciler → DNS"]
 ```
 
 1. **Informer-based watcher** monitors K8s resources via the API server

@@ -1,12 +1,12 @@
 ---
 title: Deployment
-description: Deploy dnsweaver in Docker, Kubernetes, or hybrid environments
+description: Deploy dnsweaver in Docker, Kubernetes, Proxmox VE, or hybrid environments
 icon: material/server
 ---
 
 # Deployment
 
-dnsweaver runs as a lightweight container in Docker or Kubernetes. This section provides production-ready configurations for all supported environments.
+dnsweaver runs as a lightweight container in Docker or Kubernetes, and can additionally watch Proxmox VE clusters via the PVE API. This section provides production-ready configurations for all supported environments.
 
 ## Deployment Options
 

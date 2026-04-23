@@ -4,15 +4,18 @@ High-level overview of dnsweaver's architecture, data flow, and package structur
 
 ## System Overview
 
-dnsweaver is a DNS record lifecycle manager. It watches for service changes on container orchestration platforms (Docker, Kubernetes), discovers which hostnames those services declare, and creates or removes DNS records in one or more DNS providers to match.
+dnsweaver is a DNS record lifecycle manager. It watches for service changes on container orchestration platforms (Docker, Kubernetes) and on Proxmox VE clusters, discovers which hostnames those services or VMs declare, and creates or removes DNS records in one or more DNS providers to match.
 
 ```mermaid
 graph LR
     subgraph Sources
-        S1[Traefik Labels]
-        S2[Traefik Files]
-        S3[K8s Ingress]
-        S4[Docker Labels]
+        S1[Traefik Container Labels<br/>Docker / Swarm]
+        S2[Caddy Container Labels<br/>caddy-docker-proxy]
+        S3[nginx-proxy Labels<br/>VIRTUAL_HOST]
+        S4[Traefik Static Files]
+        S5[Native dnsweaver Labels]
+        S6[Kubernetes<br/>Ingress / IngressRoute /<br/>HTTPRoute / Service]
+        S7[Proxmox VE<br/>VMs / LXC]
     end
 
     subgraph Core
@@ -25,12 +28,13 @@ graph LR
         P2[Cloudflare]
         P3[RFC 2136]
         P4[Pi-hole]
-        P5[dnsmasq]
-        P6[Webhook]
+        P5[AdGuard Home]
+        P6[dnsmasq]
+        P7[Webhook]
     end
 
-    S1 & S2 & S3 & S4 --> W
-    D --> |Create/Update/Delete| P1 & P2 & P3 & P4 & P5 & P6
+    S1 & S2 & S3 & S4 & S5 & S6 & S7 --> W
+    D --> |Create/Update/Delete| P1 & P2 & P3 & P4 & P5 & P6 & P7
 ```
 
 ## Data Flow

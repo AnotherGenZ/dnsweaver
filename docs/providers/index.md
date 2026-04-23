@@ -75,11 +75,11 @@ dnsweaver supports multiple DNS providers, each with different capabilities and 
 | Provider | API Type | Record Types | Best For |
 | :------- | :------- | :----------- | :------- |
 | [Technitium](technitium.md) | REST API | A, AAAA, CNAME, SRV, TXT | Self-hosted, full-featured DNS |
-| [Cloudflare](cloudflare.md) | REST API | A, AAAA, CNAME, TXT | Public DNS with CDN/proxy |
+| [Cloudflare](cloudflare.md) | REST API | A, AAAA, CNAME, SRV, TXT | Public DNS with CDN/proxy |
 | [RFC 2136](rfc2136.md) | DNS Protocol | A, AAAA, CNAME, SRV, TXT | BIND, Windows DNS, PowerDNS, Knot |
-| [Pi-hole](pihole.md) | REST API or File | A, AAAA, CNAME | Existing Pi-hole setups |
+| [Pi-hole](pihole.md) | REST API or File | A, CNAME | Existing Pi-hole setups |
 | [AdGuard Home](adguard.md) | REST API | A, AAAA, CNAME | Existing AdGuard Home setups |
-| [dnsmasq](dnsmasq.md) | File | A, AAAA, CNAME | Simple file-based DNS |
+| [dnsmasq](dnsmasq.md) | File | A, CNAME | Simple file-based DNS |
 | [Webhook](webhook.md) | HTTP Callback | Any | Custom integrations |
 
 ## Multi-Provider Architecture
