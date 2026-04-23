@@ -10,10 +10,11 @@ dnsweaver is a DNS record lifecycle manager. It watches for service changes on c
 graph LR
     subgraph Sources
         S1[Traefik Container Labels<br/>Docker / Swarm]
-        S2[Traefik Static Files]
-        S3[Native dnsweaver Labels]
-        S4[Kubernetes<br/>Ingress / IngressRoute /<br/>HTTPRoute / Service]
-        S5[Proxmox VE<br/>VMs / LXC]
+        S2[nginx-proxy Labels<br/>VIRTUAL_HOST]
+        S3[Traefik Static Files]
+        S4[Native dnsweaver Labels]
+        S5[Kubernetes<br/>Ingress / IngressRoute /<br/>HTTPRoute / Service]
+        S6[Proxmox VE<br/>VMs / LXC]
     end
 
     subgraph Core
@@ -31,7 +32,7 @@ graph LR
         P7[Webhook]
     end
 
-    S1 & S2 & S3 & S4 & S5 --> W
+    S1 & S2 & S3 & S4 & S5 & S6 --> W
     D --> |Create/Update/Delete| P1 & P2 & P3 & P4 & P5 & P6 & P7
 ```
 
