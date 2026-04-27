@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-04-27
+
+### Added
+- **Proxmox: opt-in `DNSWEAVER_PROXMOX_TARGET_MODE`**. Adds a new env var
+  controlling how the Proxmox source resolves DNS targets. Default `guest-ip`
+  preserves today's behavior (A record per VM IP). New `instance` mode emits
+  the hostname only and defers `RECORD_TYPE` and `TARGET` to the matching
+  provider instance — enabling, for example, CNAMEs from every Proxmox
+  workload to a reverse proxy. Closes #81.
+- **Traefik per-entrypoint routing**: Routers bound to multiple Traefik
+  entrypoints now produce one extraction per `(host, entrypoint)` pair,
+  and provider instances can opt in to entrypoint-scoped matching via
+  `DNSWEAVER_{NAME}_ENTRYPOINTS`. Hostnames carry generic
+  `Metadata` (currently `traefik.entrypoint`); instances filter on it
+  with AND-of-OR semantics, treating missing keys as wildcards so
+  pre-1.4 configs are unchanged. Enables split LAN/VPN DNS targets from
+  a single Traefik router. Closes #178. Refs upstream
+  https://github.com/maxfield-allison/dnsweaver/issues/82.
+
+### Fixed
+- **Proxmox: instance `TARGET` was silently ignored**. Previously the source
+  unconditionally set `RecordHints.Target` to the VM's IP, overriding any
+  configured `DNSWEAVER_{INSTANCE}_TARGET` and forcing `RECORD_TYPE=A`. Users
+  who wanted to point Proxmox-discovered hostnames at a reverse proxy could
+  not do so. Now opt-in via `DNSWEAVER_PROXMOX_TARGET_MODE=instance` (see
+  Added). Default behavior is unchanged. Closes #81.
+
 ## [1.3.0] - 2026-04-23
 
 ### Added

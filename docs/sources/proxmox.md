@@ -39,6 +39,7 @@ flowchart LR
 | `DNSWEAVER_PROXMOX_TAG_FILTER` | No | _(all tags)_ | Only include resources with this tag (prefix match) |
 | `DNSWEAVER_PROXMOX_STATE_FILTER` | No | `running` | PVE resource status filter (`running`, `stopped`, etc.) |
 | `DNSWEAVER_PROXMOX_DOMAIN_SUFFIX` | No | — | Domain suffix appended to VM names, e.g. `home.example.com` |
+| `DNSWEAVER_PROXMOX_TARGET_MODE` | No | `guest-ip` | Target resolution mode. `guest-ip` (default) emits an A record per VM IP. `instance` defers record type and target to the matching provider instance — useful for pointing all VMs at a reverse proxy via CNAME. |
 
 ### Source Registration
 
@@ -76,6 +77,47 @@ IP resolution differs by resource type:
 | **LXC container** | `net0` config field (`ip=<address>/prefix`) | Reads directly from the PVE API; no agent required |
 
 VMs without a running guest agent are skipped (a debug log entry is emitted). To include VMs, install and enable `qemu-guest-agent` inside the guest.
+
+## Target Mode
+
+`DNSWEAVER_PROXMOX_TARGET_MODE` controls what the source emits for each discovered workload:
+
+| Mode | Record Type | Target | Use Case |
+| :--- | :---------- | :----- | :------- |
+| `guest-ip` *(default)* | `A` | VM's resolved IP | Direct DNS resolution to each VM/LXC |
+| `instance` | _from instance_ | _from instance_ | Point all Proxmox-discovered hostnames at a reverse proxy |
+
+In `instance` mode, the source emits the hostname only (no record-type or target hints).
+The matching provider instance's `RECORD_TYPE` and `TARGET` drive the resulting record,
+so a CNAME instance pointed at NPMplus / Traefik / Caddy will create CNAME records for
+every Proxmox workload that matches its `DOMAINS` filter.
+
+!!! note "IP is still required"
+    A VM with no resolved IP is skipped in **both** modes — the IP existence acts as a
+    liveness gate. Don't treat `instance` mode as a way to register records for
+    powered-off VMs.
+
+### Example: CNAME everything to a reverse proxy
+
+```bash
+DNSWEAVER_SOURCES=proxmox
+DNSWEAVER_PROXMOX_URL=https://pve-00.home.example.com:8006
+DNSWEAVER_PROXMOX_TOKEN_ID=dnsweaver@pve!dnsweaver
+DNSWEAVER_PROXMOX_TOKEN_SECRET_FILE=/run/secrets/pve_token
+DNSWEAVER_PROXMOX_DOMAIN_SUFFIX=home.example.com
+DNSWEAVER_PROXMOX_TARGET_MODE=instance         # opt in
+
+DNSWEAVER_INSTANCES=npmplus
+DNSWEAVER_NPMPLUS_TYPE=technitium
+DNSWEAVER_NPMPLUS_RECORD_TYPE=CNAME
+DNSWEAVER_NPMPLUS_TARGET=npmplus.home.example.com   # all VMs point here
+DNSWEAVER_NPMPLUS_DOMAINS=*.home.example.com
+DNSWEAVER_NPMPLUS_URL=https://technitium.home.example.com
+DNSWEAVER_NPMPLUS_TOKEN_FILE=/run/secrets/technitium_token
+```
+
+Every Proxmox VM/LXC matching `*.home.example.com` will get a CNAME pointing to
+`npmplus.home.example.com` instead of an A record pointing at the guest's own IP.
 
 ## PVE API Token
 

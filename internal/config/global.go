@@ -89,6 +89,7 @@ type GlobalConfig struct {
 	ProxmoxStateFilter  string // Filter by PVE resource status (default: "running")
 	ProxmoxDomainSuffix string // Domain suffix to append to VM names (e.g., "home.example.com")
 	ProxmoxVerifyTLS    bool   // Verify TLS certificate on PVE API endpoint
+	ProxmoxTargetMode   string // Target resolution mode: "guest-ip" (default) or "instance"
 
 	// Multi-instance coordination
 	InstanceID string // Unique identifier for this dnsweaver instance (for shared zone management)
@@ -347,6 +348,20 @@ func loadGlobalConfig() (*GlobalConfig, []*ConfigError) {
 	cfg.ProxmoxTagFilter = getEnv("DNSWEAVER_PROXMOX_TAG_FILTER")
 	cfg.ProxmoxStateFilter = getEnv("DNSWEAVER_PROXMOX_STATE_FILTER")
 	cfg.ProxmoxDomainSuffix = getEnv("DNSWEAVER_PROXMOX_DOMAIN_SUFFIX")
+	cfg.ProxmoxTargetMode = getEnv("DNSWEAVER_PROXMOX_TARGET_MODE")
+	if cfg.ProxmoxTargetMode != "" {
+		switch strings.ToLower(strings.TrimSpace(cfg.ProxmoxTargetMode)) {
+		case "guest-ip", "instance":
+			// valid
+		default:
+			errs = append(errs, configErrFull(
+				"DNSWEAVER_PROXMOX_TARGET_MODE",
+				fmt.Sprintf("invalid value %q", cfg.ProxmoxTargetMode),
+				"Must be one of: guest-ip (default, A record per guest IP), instance (defer to instance TARGET/RECORD_TYPE)",
+				"DNSWEAVER_PROXMOX_TARGET_MODE=instance",
+			))
+		}
+	}
 	if v := getEnv("DNSWEAVER_PROXMOX_VERIFY_TLS"); v != "" {
 		cfg.ProxmoxVerifyTLS = parseBool(v, false)
 	}
