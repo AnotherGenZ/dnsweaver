@@ -335,6 +335,12 @@ func (c *Config) ProxmoxDomainSuffix() string {
 	return c.Global.ProxmoxDomainSuffix
 }
 
+// ProxmoxTargetMode returns the configured target resolution mode
+// ("guest-ip" or "instance"). Empty string means use the default.
+func (c *Config) ProxmoxTargetMode() string {
+	return c.Global.ProxmoxTargetMode
+}
+
 // ProxmoxVerifyTLS returns whether to verify TLS on the PVE API endpoint.
 func (c *Config) ProxmoxVerifyTLS() bool {
 	return c.Global.ProxmoxVerifyTLS
