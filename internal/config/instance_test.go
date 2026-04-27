@@ -23,6 +23,7 @@ func clearInstanceEnv(t *testing.T, instanceName string) {
 		prefix + "DOMAINS_REGEX",
 		prefix + "EXCLUDE_DOMAINS",
 		prefix + "EXCLUDE_DOMAINS_REGEX",
+		prefix + "ENTRYPOINTS",
 		prefix + "URL",
 		prefix + "TOKEN",
 		prefix + "TOKEN_FILE",
@@ -759,4 +760,93 @@ func TestMergeProviderEnvOverrides(t *testing.T) {
 			t.Errorf("TOKEN = %q, want %q", cfg.ProviderConfig["TOKEN"], "new-token")
 		}
 	})
+}
+
+// --- ENTRYPOINTS metadata filter (#178) ---
+
+func TestLoadInstanceConfig_Entrypoints_Single(t *testing.T) {
+	const instanceName = "webA"
+	clearInstanceEnv(t, instanceName)
+	defer clearInstanceEnv(t, instanceName)
+
+	prefix := envPrefix(instanceName)
+	os.Setenv(prefix+"TYPE", "technitium")
+	os.Setenv(prefix+"TARGET", "10.0.0.100")
+	os.Setenv(prefix+"DOMAINS", "*.example.com")
+	os.Setenv(prefix+"ENTRYPOINTS", "webA")
+
+	cfg, errs := loadInstanceConfig(instanceName, 300)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+
+	got := cfg.MetadataFilters["traefik.entrypoint"]
+	if len(got) != 1 || got[0] != "webA" {
+		t.Errorf("MetadataFilters[traefik.entrypoint] = %v, want [webA]", got)
+	}
+}
+
+func TestLoadInstanceConfig_Entrypoints_MultipleAndWhitespace(t *testing.T) {
+	const instanceName = "webMulti"
+	clearInstanceEnv(t, instanceName)
+	defer clearInstanceEnv(t, instanceName)
+
+	prefix := envPrefix(instanceName)
+	os.Setenv(prefix+"TYPE", "technitium")
+	os.Setenv(prefix+"TARGET", "10.0.0.100")
+	os.Setenv(prefix+"DOMAINS", "*.example.com")
+	os.Setenv(prefix+"ENTRYPOINTS", "  webA , webB ,  ")
+
+	cfg, errs := loadInstanceConfig(instanceName, 300)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+
+	got := cfg.MetadataFilters["traefik.entrypoint"]
+	if len(got) != 2 || got[0] != "webA" || got[1] != "webB" {
+		t.Errorf("MetadataFilters[traefik.entrypoint] = %v, want [webA webB]", got)
+	}
+}
+
+func TestLoadInstanceConfig_Entrypoints_UnsetMeansNoFilter(t *testing.T) {
+	// Regression guard: omitting ENTRYPOINTS leaves MetadataFilters nil so
+	// the legacy domain-only matching path stays intact.
+	const instanceName = "legacy"
+	clearInstanceEnv(t, instanceName)
+	defer clearInstanceEnv(t, instanceName)
+
+	prefix := envPrefix(instanceName)
+	os.Setenv(prefix+"TYPE", "technitium")
+	os.Setenv(prefix+"TARGET", "10.0.0.100")
+	os.Setenv(prefix+"DOMAINS", "*.example.com")
+
+	cfg, errs := loadInstanceConfig(instanceName, 300)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if cfg.MetadataFilters != nil {
+		t.Errorf("MetadataFilters = %v, want nil", cfg.MetadataFilters)
+	}
+}
+
+func TestLoadInstanceConfig_Entrypoints_EmptyValueIgnored(t *testing.T) {
+	// Setting ENTRYPOINTS to whitespace-only must be treated as unset, not
+	// as "match nothing".
+	const instanceName = "blank"
+	clearInstanceEnv(t, instanceName)
+	defer clearInstanceEnv(t, instanceName)
+
+	prefix := envPrefix(instanceName)
+	os.Setenv(prefix+"TYPE", "technitium")
+	os.Setenv(prefix+"TARGET", "10.0.0.100")
+	os.Setenv(prefix+"DOMAINS", "*.example.com")
+	os.Setenv(prefix+"ENTRYPOINTS", "  , , ")
+
+	cfg, errs := loadInstanceConfig(instanceName, 300)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if cfg.MetadataFilters != nil {
+		t.Errorf("MetadataFilters = %v, want nil for blank ENTRYPOINTS", cfg.MetadataFilters)
+	}
 }

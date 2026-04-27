@@ -579,3 +579,104 @@ func TestParser_DiscoverFromFiles_TOMLPatternMatching(t *testing.T) {
 		t.Errorf("expected hostname b.example.com, got %s", extractions[0].Hostname)
 	}
 }
+
+// --- entrypoint extraction (#178) ---
+
+func TestParser_DiscoverFromFiles_YAML_NoEntrypoints_IsWildcard(t *testing.T) {
+	tmpDir := t.TempDir()
+	yamlContent := "http:\n" +
+		"  routers:\n" +
+		"    myapp:\n" +
+		"      rule: \"Host(`app.example.com`)\"\n"
+	testFile := filepath.Join(tmpDir, "routers.yml")
+	if err := os.WriteFile(testFile, []byte(yamlContent), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	extractions, err := NewParser().DiscoverFromFiles(context.Background(), []string{testFile}, "*.yml")
+	if err != nil {
+		t.Fatalf("DiscoverFromFiles: %v", err)
+	}
+	if len(extractions) != 1 {
+		t.Fatalf("expected 1 extraction, got %d", len(extractions))
+	}
+	if extractions[0].EntryPoint != "" {
+		t.Errorf("expected wildcard entrypoint, got %q", extractions[0].EntryPoint)
+	}
+}
+
+func TestParser_DiscoverFromFiles_YAML_EntrypointsFanOut(t *testing.T) {
+	tmpDir := t.TempDir()
+	yamlContent := "http:\n" +
+		"  routers:\n" +
+		"    myapp:\n" +
+		"      rule: \"Host(`app.example.com`)\"\n" +
+		"      entryPoints:\n" +
+		"        - webA\n" +
+		"        - webB\n"
+	testFile := filepath.Join(tmpDir, "routers.yml")
+	if err := os.WriteFile(testFile, []byte(yamlContent), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	extractions, err := NewParser().DiscoverFromFiles(context.Background(), []string{testFile}, "*.yml")
+	if err != nil {
+		t.Fatalf("DiscoverFromFiles: %v", err)
+	}
+	if len(extractions) != 2 {
+		t.Fatalf("expected 2 extractions (one per entrypoint), got %d", len(extractions))
+	}
+
+	got := make(map[string]bool)
+	for _, e := range extractions {
+		got[e.EntryPoint] = true
+	}
+	if !got["webA"] || !got["webB"] {
+		t.Errorf("expected both webA and webB, got %+v", got)
+	}
+}
+
+func TestParser_DiscoverFromFiles_TOML_EntrypointsFanOut(t *testing.T) {
+	tmpDir := t.TempDir()
+	tomlContent := `[http.routers.myapp]
+rule = "Host(` + "`" + `app.example.com` + "`" + `)"
+entryPoints = ["webA", "webB"]
+`
+	testFile := filepath.Join(tmpDir, "routers.toml")
+	if err := os.WriteFile(testFile, []byte(tomlContent), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	extractions, err := NewParser().DiscoverFromFiles(context.Background(), []string{testFile}, "*.toml")
+	if err != nil {
+		t.Fatalf("DiscoverFromFiles: %v", err)
+	}
+	if len(extractions) != 2 {
+		t.Fatalf("expected 2 extractions, got %d", len(extractions))
+	}
+}
+
+func TestParser_DiscoverFromFiles_DedupePerEntrypoint(t *testing.T) {
+	// Two files declaring the same (host, entrypoint) pair should dedupe
+	// to one extraction; same host on a different entrypoint must survive.
+	tmpDir := t.TempDir()
+	yamlA := "http:\n  routers:\n    a:\n      rule: \"Host(`app.example.com`)\"\n      entryPoints: [webA]\n"
+	yamlB := "http:\n  routers:\n    b:\n      rule: \"Host(`app.example.com`)\"\n      entryPoints: [webA, webB]\n"
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "a.yml"), []byte(yamlA), 0644); err != nil {
+		t.Fatalf("write a: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "b.yml"), []byte(yamlB), 0644); err != nil {
+		t.Fatalf("write b: %v", err)
+	}
+
+	extractions, err := NewParser().DiscoverFromFiles(context.Background(), []string{tmpDir}, "*.yml")
+	if err != nil {
+		t.Fatalf("DiscoverFromFiles: %v", err)
+	}
+	// Expected unique pairs: (app, webA), (app, webB) — webA appears in
+	// both files but should dedupe.
+	if len(extractions) != 2 {
+		t.Fatalf("expected 2 unique (host,entrypoint) pairs, got %d: %+v", len(extractions), extractions)
+	}
+}

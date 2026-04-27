@@ -46,8 +46,9 @@ func (r *Reconciler) ensureRecord(ctx context.Context, hostname *source.Hostname
 		return append(actions, action)
 	}
 
-	// Standard domain-based matching
-	matchingProviders := r.providers.MatchingProviders(hostname.Name)
+	// Standard domain-based matching (with optional metadata-filter scoping
+	// — see ProviderInstance.MetadataFilters and DNSWEAVER_{NAME}_ENTRYPOINTS).
+	matchingProviders := r.providers.MatchingProvidersForHostname(hostname.Name, hostname.Metadata)
 
 	if len(matchingProviders) == 0 {
 		r.logger.Debug("no matching providers for hostname",

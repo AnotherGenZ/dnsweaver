@@ -134,13 +134,14 @@ func (r *Registry) CreateInstance(cfg ProviderInstanceConfig) error {
 
 	// Create provider instance
 	instance := &ProviderInstance{
-		Provider:   provider,
-		Matcher:    domainMatcher,
-		RecordType: cfg.RecordType,
-		Target:     cfg.Target,
-		TTL:        cfg.TTL,
-		Mode:       cfg.Mode,
-		InstanceID: r.instanceID,
+		Provider:        provider,
+		Matcher:         domainMatcher,
+		RecordType:      cfg.RecordType,
+		Target:          cfg.Target,
+		TTL:             cfg.TTL,
+		Mode:            cfg.Mode,
+		InstanceID:      r.instanceID,
+		MetadataFilters: cfg.MetadataFilters,
 	}
 
 	// Default to managed mode if not set
@@ -183,6 +184,10 @@ func (r *Registry) All() []*ProviderInstance {
 
 // MatchingProviders returns all provider instances that match the given hostname.
 // The order matches the priority order from DNSWEAVER_INSTANCES.
+//
+// This domain-only variant ignores MetadataFilters. Prefer
+// MatchingProvidersForHostname when full hostname metadata is available so
+// that DNSWEAVER_{NAME}_ENTRYPOINTS-style scoping takes effect.
 func (r *Registry) MatchingProviders(hostname string) []*ProviderInstance {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -190,6 +195,24 @@ func (r *Registry) MatchingProviders(hostname string) []*ProviderInstance {
 	var matches []*ProviderInstance
 	for _, inst := range r.instances {
 		if inst.Matches(hostname) {
+			matches = append(matches, inst)
+		}
+	}
+
+	return matches
+}
+
+// MatchingProvidersForHostname returns all provider instances that match
+// the given hostname AND satisfy any configured metadata filters. The order
+// matches the priority order from DNSWEAVER_INSTANCES, so callers can pick
+// the first match for first-match-wins precedence.
+func (r *Registry) MatchingProvidersForHostname(hostname string, metadata map[string]string) []*ProviderInstance {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var matches []*ProviderInstance
+	for _, inst := range r.instances {
+		if inst.MatchesWithMetadata(hostname, metadata) {
 			matches = append(matches, inst)
 		}
 	}

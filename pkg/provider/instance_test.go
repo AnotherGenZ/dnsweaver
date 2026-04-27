@@ -1,6 +1,10 @@
 package provider
 
-import "testing"
+import (
+	"testing"
+
+	"gitlab.bluewillows.net/root/dnsweaver/internal/matcher"
+)
 
 func TestIsIPAddress(t *testing.T) {
 	tests := []struct {
@@ -363,4 +367,112 @@ func containsString(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// --- MetadataFilters / MatchesWithMetadata (#178) ---
+
+// newTestInstance builds a ProviderInstance with a glob domain matcher and
+// optional metadata filters. Test-only helper.
+func newTestInstance(t *testing.T, includes []string, filters map[string][]string) *ProviderInstance {
+	t.Helper()
+	m, err := matcher.NewDomainMatcher(matcher.DomainMatcherConfig{Includes: includes})
+	if err != nil {
+		t.Fatalf("NewDomainMatcher: %v", err)
+	}
+	return &ProviderInstance{
+		Matcher:         m,
+		MetadataFilters: filters,
+	}
+}
+
+func TestMatchesWithMetadata_NoFilters_DomainOnlyDecides(t *testing.T) {
+	inst := newTestInstance(t, []string{"*.example.com"}, nil)
+
+	if !inst.MatchesWithMetadata("app.example.com", nil) {
+		t.Error("expected match: domain matches, no filters")
+	}
+	if inst.MatchesWithMetadata("app.other.com", nil) {
+		t.Error("expected no match: domain mismatch")
+	}
+}
+
+func TestMatchesWithMetadata_FilterMatches(t *testing.T) {
+	inst := newTestInstance(t, []string{"*.example.com"}, map[string][]string{
+		"traefik.entrypoint": {"webA"},
+	})
+
+	if !inst.MatchesWithMetadata("app.example.com", map[string]string{"traefik.entrypoint": "webA"}) {
+		t.Error("expected match: filter satisfied")
+	}
+	if inst.MatchesWithMetadata("app.example.com", map[string]string{"traefik.entrypoint": "webB"}) {
+		t.Error("expected no match: filter rejects webB")
+	}
+}
+
+func TestMatchesWithMetadata_MissingKey_IsWildcard(t *testing.T) {
+	// A hostname missing the filtered key must match — preserves backward
+	// compat for sources/routers that don't surface the metadata.
+	inst := newTestInstance(t, []string{"*.example.com"}, map[string][]string{
+		"traefik.entrypoint": {"webA"},
+	})
+
+	if !inst.MatchesWithMetadata("app.example.com", nil) {
+		t.Error("expected match: missing key is wildcard")
+	}
+	if !inst.MatchesWithMetadata("app.example.com", map[string]string{"unrelated": "x"}) {
+		t.Error("expected match: filter key absent in metadata")
+	}
+}
+
+func TestMatchesWithMetadata_MultipleFilters_AllMustMatch(t *testing.T) {
+	inst := newTestInstance(t, []string{"*.example.com"}, map[string][]string{
+		"traefik.entrypoint": {"webA"},
+		"k8s.ingressClass":   {"public"},
+	})
+
+	// Both keys present and allowed — match.
+	if !inst.MatchesWithMetadata("app.example.com", map[string]string{
+		"traefik.entrypoint": "webA",
+		"k8s.ingressClass":   "public",
+	}) {
+		t.Error("expected match: all filters satisfied")
+	}
+
+	// One key fails — no match.
+	if inst.MatchesWithMetadata("app.example.com", map[string]string{
+		"traefik.entrypoint": "webA",
+		"k8s.ingressClass":   "internal",
+	}) {
+		t.Error("expected no match: ingressClass not allowed")
+	}
+
+	// Missing one key — wildcard for that filter, other still applies.
+	if !inst.MatchesWithMetadata("app.example.com", map[string]string{
+		"traefik.entrypoint": "webA",
+	}) {
+		t.Error("expected match: missing ingressClass is wildcard")
+	}
+}
+
+func TestMatchesWithMetadata_DomainMismatch_FilterIrrelevant(t *testing.T) {
+	inst := newTestInstance(t, []string{"*.example.com"}, map[string][]string{
+		"traefik.entrypoint": {"webA"},
+	})
+	// Even with matching metadata, domain miss = no match.
+	if inst.MatchesWithMetadata("app.other.com", map[string]string{"traefik.entrypoint": "webA"}) {
+		t.Error("expected no match: domain miss short-circuits")
+	}
+}
+
+func TestMatches_LegacyDomainOnly_IgnoresFilters(t *testing.T) {
+	// Matches(string) is the pre-#178 signature and must keep ignoring
+	// MetadataFilters so existing callers (orphan detection, legacy paths)
+	// behave exactly as before.
+	inst := newTestInstance(t, []string{"*.example.com"}, map[string][]string{
+		"traefik.entrypoint": {"webA"},
+	})
+
+	if !inst.Matches("app.example.com") {
+		t.Error("expected match: legacy Matches ignores filters")
+	}
 }

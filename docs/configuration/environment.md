@@ -109,6 +109,7 @@ Replace `{NAME}` with your instance name. For example, instance `internal-dns` u
 | `DNSWEAVER_{NAME}_DOMAINS_REGEX` | No | Regex patterns (alternative to glob) |
 | `DNSWEAVER_{NAME}_EXCLUDE_DOMAINS` | No | Glob patterns to exclude |
 | `DNSWEAVER_{NAME}_EXCLUDE_DOMAINS_REGEX` | No | Regex patterns to exclude (alternative to glob) |
+| `DNSWEAVER_{NAME}_ENTRYPOINTS` | No | Comma-separated Traefik entrypoint allowlist for this instance (e.g. `webA,webB`). Only routers bound to one of these entrypoints will be matched. Routers without entrypoint metadata always match (wildcard). See [Traefik source](../sources/swarm.md#per-entrypoint-routing). |
 | `DNSWEAVER_{NAME}_TTL` | No | Per-instance TTL override |
 | `DNSWEAVER_{NAME}_MODE` | No | Operational mode: `managed` (default), `authoritative`, `additive` |
 | `DNSWEAVER_{NAME}_INSECURE_SKIP_VERIFY` | No | Skip TLS certificate verification (`true`/`false`, default: `false`) |

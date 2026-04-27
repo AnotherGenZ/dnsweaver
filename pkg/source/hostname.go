@@ -294,6 +294,14 @@ type Hostname struct {
 	// These allow per-hostname overrides for record type, target, TTL, and provider.
 	// nil means use provider defaults for everything.
 	RecordHints *RecordHints
+
+	// Metadata carries arbitrary key-value pairs from sources for use by
+	// instance-level filtering (e.g. "traefik.entrypoint" -> "webA"). Unlike
+	// RecordHints.Metadata — which is plumbed through to providers and may
+	// trigger provider-specific behavior — this map is consumed inside
+	// dnsweaver to decide which provider instance claims the hostname.
+	// nil means no metadata.
+	Metadata map[string]string
 }
 
 // HasRecordHints returns true if this hostname has any record hints set.

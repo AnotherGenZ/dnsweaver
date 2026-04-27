@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the hostname only and defers `RECORD_TYPE` and `TARGET` to the matching
   provider instance — enabling, for example, CNAMEs from every Proxmox
   workload to a reverse proxy. Closes #81.
+- **Traefik per-entrypoint routing**: Routers bound to multiple Traefik
+  entrypoints now produce one extraction per `(host, entrypoint)` pair,
+  and provider instances can opt in to entrypoint-scoped matching via
+  `DNSWEAVER_{NAME}_ENTRYPOINTS`. Hostnames carry generic
+  `Metadata` (currently `traefik.entrypoint`); instances filter on it
+  with AND-of-OR semantics, treating missing keys as wildcards so
+  pre-1.4 configs are unchanged. Enables split LAN/VPN DNS targets from
+  a single Traefik router. Closes #178. Refs upstream
+  https://github.com/maxfield-allison/dnsweaver/issues/82.
 
 ### Fixed
 - **Proxmox: instance `TARGET` was silently ignored**. Previously the source
