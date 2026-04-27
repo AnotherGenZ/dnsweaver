@@ -37,6 +37,12 @@ type ProviderInstanceConfig struct {
 	ExcludeDomains      []string // Glob exclude patterns
 	ExcludeDomainsRegex []string // Regex exclude patterns
 
+	// MetadataFilters scopes this instance to hostnames whose Metadata map
+	// satisfies every key. Today the only knob that populates this is
+	// DNSWEAVER_{NAME}_ENTRYPOINTS (key: "traefik.entrypoint"); future
+	// per-source filters layer in here without touching the matcher.
+	MetadataFilters map[string][]string
+
 	// ProviderConfig holds provider-specific settings.
 	// Keys are setting names (e.g., "URL", "TOKEN", "ZONE").
 	ProviderConfig map[string]string
@@ -55,6 +61,7 @@ func (c *ProviderInstanceConfig) ToProviderConfig() provider.ProviderInstanceCon
 		DomainsRegex:        c.DomainsRegex,
 		ExcludeDomains:      c.ExcludeDomains,
 		ExcludeDomainsRegex: c.ExcludeDomainsRegex,
+		MetadataFilters:     c.MetadataFilters,
 		ProviderConfig:      c.ProviderConfig,
 	}
 }
@@ -171,6 +178,20 @@ func loadInstanceConfig(instanceName string, defaultTTL int) (*ProviderInstanceC
 		cfg.ExcludeDomains = splitPatterns(excludeDomainsStr)
 	} else if excludeDomainsRegexStr != "" {
 		cfg.ExcludeDomainsRegex = splitPatterns(excludeDomainsRegexStr)
+	}
+
+	// ENTRYPOINTS — Traefik-source filter that scopes the instance to one or
+	// more Traefik entrypoints. Translates to a generic metadata filter on
+	// the "traefik.entrypoint" key. Empty/unset = no filter (today's
+	// behavior).
+	if entrypointsStr := getEnv(prefix + "ENTRYPOINTS"); entrypointsStr != "" {
+		eps := splitPatterns(entrypointsStr)
+		if len(eps) > 0 {
+			if cfg.MetadataFilters == nil {
+				cfg.MetadataFilters = make(map[string][]string)
+			}
+			cfg.MetadataFilters["traefik.entrypoint"] = eps
+		}
 	}
 
 	// Load provider-specific config using shared field definitions

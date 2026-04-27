@@ -75,6 +75,15 @@ type ProviderInstance struct {
 	// Used for multi-instance coordination to scope ownership records.
 	// Empty string means single-instance mode (legacy behavior).
 	InstanceID string
+
+	// MetadataFilters scopes this instance to hostnames whose Metadata map
+	// satisfies every key in this map. For each key, the hostname's value
+	// must appear in the configured allowlist. A hostname missing the key
+	// entirely is treated as a wildcard and matches any filter (mirrors
+	// Traefik's "no entrypoints declared = bound to all entrypoints"
+	// semantics). nil/empty means no metadata filtering — domain match alone
+	// decides ownership (full backward compatibility).
+	MetadataFilters map[string][]string
 }
 
 // Name returns the provider instance name (delegates to Provider).
@@ -88,8 +97,53 @@ func (pi *ProviderInstance) Type() string {
 }
 
 // Matches returns true if this instance should handle the given hostname.
+//
+// This is the legacy domain-only matcher. Metadata filters are NOT consulted
+// — callers that have a full source.Hostname in hand should prefer
+// MatchesWithMetadata so that DNSWEAVER_{NAME}_ENTRYPOINTS-style filters
+// take effect.
 func (pi *ProviderInstance) Matches(hostname string) bool {
 	return pi.Matcher.Matches(hostname)
+}
+
+// MatchesWithMetadata returns true if this instance should handle the given
+// hostname, AND the supplied metadata satisfies every configured
+// MetadataFilter. A hostname missing a filtered key entirely is treated as a
+// wildcard and matches any filter value.
+func (pi *ProviderInstance) MatchesWithMetadata(hostname string, metadata map[string]string) bool {
+	if !pi.Matcher.Matches(hostname) {
+		return false
+	}
+	return matchesMetadataFilters(metadata, pi.MetadataFilters)
+}
+
+// matchesMetadataFilters checks the AND-of-OR predicate: for every filter
+// key, either the hostname omits the key (wildcard) or its value is in the
+// allowlist. nil/empty filters always match.
+func matchesMetadataFilters(metadata map[string]string, filters map[string][]string) bool {
+	if len(filters) == 0 {
+		return true
+	}
+	for key, allowed := range filters {
+		value, present := metadata[key]
+		if !present {
+			// Missing key = wildcard — matches any filter.
+			continue
+		}
+		if !sliceContainsString(allowed, value) {
+			return false
+		}
+	}
+	return true
+}
+
+func sliceContainsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }
 
 // CreateRecord creates a DNS record for the given hostname using this instance's
@@ -475,6 +529,11 @@ type ProviderInstanceConfig struct {
 
 	// ExcludeDomainsRegex is an optional list of regex patterns to exclude.
 	ExcludeDomainsRegex []string
+
+	// MetadataFilters scopes this instance to hostnames whose Metadata map
+	// satisfies every key in this map. See ProviderInstance.MetadataFilters
+	// for the full semantics. nil/empty means no metadata filtering.
+	MetadataFilters map[string][]string
 
 	// ProviderConfig holds provider-specific settings (URL, token, zone, etc.).
 	ProviderConfig map[string]string

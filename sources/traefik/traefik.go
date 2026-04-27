@@ -100,9 +100,10 @@ func (t *Traefik) Extract(ctx context.Context, w workload.Workload) ([]source.Ho
 	hostnames := make([]source.Hostname, 0, len(extractions))
 	for _, e := range extractions {
 		hostnames = append(hostnames, source.Hostname{
-			Name:   e.Hostname,
-			Source: sourceName,
-			Router: e.Router,
+			Name:     e.Hostname,
+			Source:   sourceName,
+			Router:   e.Router,
+			Metadata: entryPointMetadata(e.EntryPoint),
 		})
 	}
 
@@ -141,9 +142,10 @@ func (t *Traefik) Discover(ctx context.Context) ([]source.Hostname, error) {
 	result := make([]source.Hostname, 0, len(hostnames))
 	for _, e := range hostnames {
 		result = append(result, source.Hostname{
-			Name:   e.Hostname,
-			Source: sourceName,
-			Router: e.Router,
+			Name:     e.Hostname,
+			Source:   sourceName,
+			Router:   e.Router,
+			Metadata: entryPointMetadata(e.EntryPoint),
 		})
 	}
 
@@ -174,3 +176,17 @@ func (t *Traefik) FileConfig() source.FileDiscoveryConfig {
 
 // Ensure Traefik implements source.Source
 var _ source.Source = (*Traefik)(nil)
+
+// entryPointMetadata returns a Metadata map carrying the traefik entrypoint,
+// or nil when the extraction is wildcard-bound (no entrypoint declared).
+// Returning nil for the wildcard case preserves Hostname.Matches semantics:
+// MatchingProvidersForHostname treats a missing key as “matches every
+// filter”, which mirrors Traefik's own “undeclared = bound to all
+// entrypoints” behavior and keeps backward compatibility for users who
+// don't opt into DNSWEAVER_{NAME}_ENTRYPOINTS.
+func entryPointMetadata(entrypoint string) map[string]string {
+	if entrypoint == "" {
+		return nil
+	}
+	return map[string]string{MetadataKeyEntryPoint: entrypoint}
+}

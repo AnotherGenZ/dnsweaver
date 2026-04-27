@@ -140,6 +140,63 @@ When a Swarm service is updated:
 4. Creates records for new hostnames
 5. Updates records if target changes
 
+## Per-Entrypoint Routing
+
+When the same Traefik router is bound to multiple `entrypoints`, dnsweaver
+emits one extraction per `(host, entrypoint)` pair. Combined with the
+per-instance `DNSWEAVER_{NAME}_ENTRYPOINTS` filter, this lets you point
+each Traefik entrypoint at a different DNS target — useful for
+split-horizon LAN/VPN setups, or any scenario where one router needs to
+resolve to different IPs depending on which listener it was published on.
+
+### Example: Split LAN / VPN Targets
+
+Two entrypoints (`webA`, `webB`) on the same Traefik router need to
+resolve `web.example.com` to different IPs:
+
+```yaml
+services:
+  reverse-proxy:
+    image: traefik:v3
+    command:
+      - "--entrypoints.webA.address=:80"
+      - "--entrypoints.webB.address=:8080"
+
+  myapp:
+    image: myapp:latest
+    labels:
+      - "traefik.http.routers.myapp.rule=Host(`web.example.com`)"
+      - "traefik.http.routers.myapp.entrypoints=webA,webB"
+
+  dnsweaver:
+    image: maxamill/dnsweaver:latest
+    environment:
+      - DNSWEAVER_INSTANCES=lan,vpn
+      # LAN instance answers only routers bound to webA -> 10.0.0.10
+      - DNSWEAVER_LAN_TYPE=technitium
+      - DNSWEAVER_LAN_TARGET=10.0.0.10
+      - DNSWEAVER_LAN_DOMAINS=*.example.com
+      - DNSWEAVER_LAN_ENTRYPOINTS=webA
+      # VPN instance answers only routers bound to webB -> 10.99.0.10
+      - DNSWEAVER_VPN_TYPE=technitium
+      - DNSWEAVER_VPN_TARGET=10.99.0.10
+      - DNSWEAVER_VPN_DOMAINS=*.example.com
+      - DNSWEAVER_VPN_ENTRYPOINTS=webB
+```
+
+### Matching Semantics
+
+- `DNSWEAVER_{NAME}_ENTRYPOINTS` accepts a comma-separated allowlist
+  (`webA,webB`). Whitespace is trimmed; empty values are ignored.
+- A router with **no** `entrypoints` label produces a wildcard extraction
+  that matches every instance regardless of `ENTRYPOINTS` filter
+  (preserves pre-1.4 behavior).
+- A router with `entrypoints=webA,webB` produces two distinct
+  extractions; each instance only receives the ones whose entrypoint is
+  in its allowlist.
+- The same `(host, entrypoint)` pair declared in multiple
+  containers/files is deduplicated.
+
 ## Troubleshooting
 
 ### Labels Not Detected

@@ -16,10 +16,20 @@ const routerLabelPrefix = "traefik.http.routers."
 // routerRuleSuffix is the suffix for router rule labels.
 const routerRuleSuffix = ".rule"
 
+// routerEntryPointsSuffix is the suffix for router entrypoints labels.
+const routerEntryPointsSuffix = ".entrypoints"
+
+// MetadataKeyEntryPoint is the Hostname.Metadata key under which the
+// Traefik source records the entrypoint a hostname was discovered through.
+// It is consumed by ProviderInstance.MetadataFilters when an instance is
+// scoped via DNSWEAVER_{NAME}_ENTRYPOINTS.
+const MetadataKeyEntryPoint = "traefik.entrypoint"
+
 // HostnameExtraction represents a hostname extracted from a specific router.
 type HostnameExtraction struct {
-	Hostname string // The extracted hostname
-	Router   string // The router name (e.g., "myapp")
+	Hostname   string // The extracted hostname
+	Router     string // The router name (e.g., "myapp")
+	EntryPoint string // The entrypoint this extraction is bound to (empty == wildcard)
 }
 
 // Parser extracts hostnames from Traefik labels.
@@ -50,14 +60,42 @@ func NewParser(opts ...ParserOption) *Parser {
 	return p
 }
 
-// ExtractHostnames extracts all hostnames from Traefik labels with router context.
-// Returns a slice of extractions that include both hostname and router name.
+// ExtractHostnames extracts all hostnames from Traefik labels with router
+// and entrypoint context.
+//
+// A router that declares `traefik.http.routers.<name>.entrypoints=webA,webB`
+// fans out into one extraction per (host, entrypoint) pair so per-instance
+// entrypoint filtering can claim each pair independently. Routers without
+// an entrypoints label produce a single extraction with EntryPoint="" —
+// this mirrors Traefik's own semantics ("undeclared = bound to all
+// entrypoints") and matches every DNSWEAVER_{NAME}_ENTRYPOINTS filter as a
+// wildcard.
+//
+// Dedupe key is widened from hostname → (hostname, entrypoint) so that the
+// same host bound to two entrypoints is preserved.
 func (p *Parser) ExtractHostnames(labels map[string]string) []HostnameExtraction {
-	seen := make(map[string]struct{})
+	// First pass: collect the entrypoints declared per router.
+	routerEntryPoints := make(map[string][]string)
+	for key, value := range labels {
+		router := extractRouterFromEntryPointsLabel(key)
+		if router == "" {
+			continue
+		}
+		eps := splitAndTrim(value)
+		if len(eps) > 0 {
+			routerEntryPoints[router] = eps
+		}
+	}
+
+	type seenKey struct {
+		hostname   string
+		entrypoint string
+	}
+	seen := make(map[seenKey]struct{})
 	var extractions []HostnameExtraction
 
+	// Second pass: walk router rules and fan out per (host, entrypoint).
 	for key, value := range labels {
-		// Only process traefik router rule labels
 		router := extractRouterName(key)
 		if router == "" {
 			continue
@@ -68,12 +106,17 @@ func (p *Parser) ExtractHostnames(labels map[string]string) []HostnameExtraction
 			slog.String("rule", value),
 		)
 
-		// Extract all Host() patterns from the rule
 		hosts := extractHostsFromRule(value)
+		entryPoints := routerEntryPoints[router] // nil/empty == wildcard
+
 		for _, hostname := range hosts {
-			// Deduplicate by hostname (first occurrence wins)
-			if _, exists := seen[hostname]; !exists {
-				seen[hostname] = struct{}{}
+			if len(entryPoints) == 0 {
+				// Wildcard router — single extraction with empty entrypoint.
+				k := seenKey{hostname: hostname, entrypoint: ""}
+				if _, exists := seen[k]; exists {
+					continue
+				}
+				seen[k] = struct{}{}
 				extractions = append(extractions, HostnameExtraction{
 					Hostname: hostname,
 					Router:   router,
@@ -81,6 +124,24 @@ func (p *Parser) ExtractHostnames(labels map[string]string) []HostnameExtraction
 				p.logger.Debug("extracted hostname",
 					slog.String("hostname", hostname),
 					slog.String("router", router),
+				)
+				continue
+			}
+			for _, ep := range entryPoints {
+				k := seenKey{hostname: hostname, entrypoint: ep}
+				if _, exists := seen[k]; exists {
+					continue
+				}
+				seen[k] = struct{}{}
+				extractions = append(extractions, HostnameExtraction{
+					Hostname:   hostname,
+					Router:     router,
+					EntryPoint: ep,
+				})
+				p.logger.Debug("extracted hostname",
+					slog.String("hostname", hostname),
+					slog.String("router", router),
+					slog.String("entrypoint", ep),
 				)
 			}
 		}
@@ -105,7 +166,7 @@ func (p *Parser) ExtractHosts(labels map[string]string) []string {
 	return hosts
 }
 
-// extractRouterName extracts the router name from a Traefik label key.
+// extractRouterName extracts the router name from a Traefik *.rule label.
 // Returns empty string if this is not a router rule label.
 //
 // Examples:
@@ -113,25 +174,48 @@ func (p *Parser) ExtractHosts(labels map[string]string) []string {
 //   - "traefik.http.routers.myapp.entrypoints" -> ""
 //   - "traefik.enable" -> ""
 func extractRouterName(key string) string {
-	// Must start with prefix and end with suffix
+	return extractRouterWithSuffix(key, routerRuleSuffix)
+}
+
+// extractRouterFromEntryPointsLabel extracts the router name from a Traefik
+// *.entrypoints label. Returns empty string for any other label.
+func extractRouterFromEntryPointsLabel(key string) string {
+	return extractRouterWithSuffix(key, routerEntryPointsSuffix)
+}
+
+func extractRouterWithSuffix(key, suffix string) string {
 	if !strings.HasPrefix(key, routerLabelPrefix) {
 		return ""
 	}
-	if !strings.HasSuffix(key, routerRuleSuffix) {
+	if !strings.HasSuffix(key, suffix) {
 		return ""
 	}
-
-	// Extract the router name between prefix and suffix
-	// traefik.http.routers.<name>.rule
 	withoutPrefix := strings.TrimPrefix(key, routerLabelPrefix)
-	withoutSuffix := strings.TrimSuffix(withoutPrefix, routerRuleSuffix)
-
-	// Handle edge case: traefik.http.routers..rule (empty name)
+	withoutSuffix := strings.TrimSuffix(withoutPrefix, suffix)
 	if withoutSuffix == "" {
 		return ""
 	}
-
+	// Reject keys that look like sub-properties: e.g.
+	// `traefik.http.routers.myapp.tls.entrypoints` is not a router-level
+	// entrypoints label.
+	if strings.Contains(withoutSuffix, ".") {
+		return ""
+	}
 	return withoutSuffix
+}
+
+// splitAndTrim splits a comma-separated label value, trimming whitespace
+// from each entry and discarding empties.
+func splitAndTrim(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // extractHostsFromRule extracts all hostnames from a Traefik rule string.
