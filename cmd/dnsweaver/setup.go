@@ -150,6 +150,7 @@ func registerSources(registry *source.Registry, cfg *config.Config, logger *slog
 		case "proxmox":
 			src := proxmoxsource.New(
 				proxmoxsource.WithDomain(cfg.ProxmoxDomainSuffix()),
+				proxmoxsource.WithTargetMode(proxmoxTargetMode(cfg)),
 				proxmoxsource.WithLogger(logger),
 			)
 			if err := registry.Register(src); err != nil {
@@ -183,6 +184,7 @@ func registerSources(registry *source.Registry, cfg *config.Config, logger *slog
 		if registry.Get("proxmox") == nil {
 			src := proxmoxsource.New(
 				proxmoxsource.WithDomain(cfg.ProxmoxDomainSuffix()),
+				proxmoxsource.WithTargetMode(proxmoxTargetMode(cfg)),
 				proxmoxsource.WithLogger(logger),
 			)
 			if err := registry.Register(src); err != nil {
@@ -193,6 +195,17 @@ func registerSources(registry *source.Registry, cfg *config.Config, logger *slog
 	}
 
 	return nil
+}
+
+// proxmoxTargetMode resolves the Proxmox target mode from config. Validation
+// happens during config load — this returns the default for any unrecognized
+// value to keep the source constructor strict-typed.
+func proxmoxTargetMode(cfg *config.Config) proxmoxsource.TargetMode {
+	mode, err := proxmoxsource.ParseTargetMode(cfg.ProxmoxTargetMode())
+	if err != nil {
+		return proxmoxsource.TargetModeGuestIP
+	}
+	return mode
 }
 
 // createTraefikSource creates a Traefik label parser with optional file discovery.

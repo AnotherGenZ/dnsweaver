@@ -11,7 +11,11 @@
 //     as the hostname without appending a domain suffix.
 //
 // The resolved IP (populated in w.Metadata["ip"] by the adapter) is used as
-// the A record target. Resources with no resolved IP are skipped.
+// the A record target by default. When WithTargetMode(TargetModeInstance) is
+// set, the source emits the hostname only and defers record type and target
+// to the matching provider instance — useful for pointing all VMs at a
+// reverse proxy via CNAME. Resources with no resolved IP are skipped in both
+// modes (the IP acts as a liveness gate).
 //
 // Supported workload platforms: [PlatformProxmox]
 package proxmox
@@ -28,10 +32,40 @@ import (
 
 const sourceName = "proxmox"
 
+// TargetMode controls how the Proxmox source builds DNS record targets.
+type TargetMode string
+
+const (
+	// TargetModeGuestIP emits an A record per workload pointing at the VM's
+	// resolved IP. This is the default and preserves historical behavior.
+	TargetModeGuestIP TargetMode = "guest-ip"
+
+	// TargetModeInstance defers record type and target to the matching
+	// provider instance. The source emits the hostname only (no RecordHints),
+	// so DNSWEAVER_{INSTANCE}_RECORD_TYPE and DNSWEAVER_{INSTANCE}_TARGET
+	// drive the resulting record. This enables pointing all Proxmox-discovered
+	// hostnames at a reverse proxy via CNAME or A records.
+	TargetModeInstance TargetMode = "instance"
+)
+
+// ParseTargetMode parses a string into a TargetMode value. Empty input maps to
+// the default (TargetModeGuestIP). Returns an error for unrecognized values.
+func ParseTargetMode(s string) (TargetMode, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", string(TargetModeGuestIP):
+		return TargetModeGuestIP, nil
+	case string(TargetModeInstance):
+		return TargetModeInstance, nil
+	default:
+		return "", fmt.Errorf("invalid proxmox target mode %q (must be one of: guest-ip, instance)", s)
+	}
+}
+
 // Proxmox implements the source.Source interface for Proxmox VE workloads.
 type Proxmox struct {
-	domain string
-	logger *slog.Logger
+	domain     string
+	targetMode TargetMode
+	logger     *slog.Logger
 }
 
 // Option is a functional option for configuring Proxmox.
@@ -56,13 +90,25 @@ func WithDomain(domain string) Option {
 	}
 }
 
+// WithTargetMode sets the target resolution strategy. See TargetMode for
+// supported values. Defaults to TargetModeGuestIP.
+func WithTargetMode(mode TargetMode) Option {
+	return func(p *Proxmox) {
+		p.targetMode = mode
+	}
+}
+
 // New creates a new Proxmox source.
 func New(opts ...Option) *Proxmox {
 	p := &Proxmox{
-		logger: slog.Default(),
+		logger:     slog.Default(),
+		targetMode: TargetModeGuestIP,
 	}
 	for _, opt := range opts {
 		opt(p)
+	}
+	if p.targetMode == "" {
+		p.targetMode = TargetModeGuestIP
 	}
 	return p
 }
@@ -129,10 +175,18 @@ func (p *Proxmox) Extract(_ context.Context, w workload.Workload) ([]source.Host
 		Name:   hostname,
 		Source: sourceName,
 		Router: fmt.Sprintf("%s/%s", w.Metadata["node"], w.Metadata["vmid"]),
-		RecordHints: &source.RecordHints{
+	}
+
+	// In guest-ip mode (default) emit an A record hint targeting the VM's IP.
+	// In instance mode, leave RecordHints nil so the matching provider
+	// instance's RECORD_TYPE and TARGET drive the resulting record. The IP
+	// lookup above still acts as a liveness gate — workloads with no
+	// resolved IP are skipped in both modes.
+	if p.targetMode == TargetModeGuestIP {
+		h.RecordHints = &source.RecordHints{
 			Type:   "A",
 			Target: ip,
-		},
+		}
 	}
 
 	return []source.Hostname{h}, nil
