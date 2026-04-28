@@ -407,3 +407,45 @@ func TestLoadInstanceConfig_InsecureSkipVerify(t *testing.T) {
 		t.Errorf("INSECURE_SKIP_VERIFY = %q, want %q", skipVerify, "true")
 	}
 }
+
+func TestLoadInstanceConfig_AutoHTTPSRecords(t *testing.T) {
+	// Regression test for #83: AUTO_HTTPS_RECORDS env var must be passed
+	// through to ProviderConfig so Technitium provider can read it.
+	os.Setenv("DNSWEAVER_INSTANCES", "https-test")
+	os.Setenv("DNSWEAVER_HTTPS_TEST_TYPE", "technitium")
+	os.Setenv("DNSWEAVER_HTTPS_TEST_TARGET", "10.0.0.1")
+	os.Setenv("DNSWEAVER_HTTPS_TEST_DOMAINS", "*.example.com")
+	os.Setenv("DNSWEAVER_HTTPS_TEST_URL", "https://dns.example.com:5380")
+	os.Setenv("DNSWEAVER_HTTPS_TEST_TOKEN", "secret-token")
+	os.Setenv("DNSWEAVER_HTTPS_TEST_ZONE", "example.com")
+	os.Setenv("DNSWEAVER_HTTPS_TEST_AUTO_HTTPS_RECORDS", "false")
+	os.Setenv("DNSWEAVER_HTTPS_TEST_AUTO_HTTPS_ALPN", "h2,h3")
+	defer func() {
+		os.Unsetenv("DNSWEAVER_INSTANCES")
+		os.Unsetenv("DNSWEAVER_HTTPS_TEST_TYPE")
+		os.Unsetenv("DNSWEAVER_HTTPS_TEST_TARGET")
+		os.Unsetenv("DNSWEAVER_HTTPS_TEST_DOMAINS")
+		os.Unsetenv("DNSWEAVER_HTTPS_TEST_URL")
+		os.Unsetenv("DNSWEAVER_HTTPS_TEST_TOKEN")
+		os.Unsetenv("DNSWEAVER_HTTPS_TEST_ZONE")
+		os.Unsetenv("DNSWEAVER_HTTPS_TEST_AUTO_HTTPS_RECORDS")
+		os.Unsetenv("DNSWEAVER_HTTPS_TEST_AUTO_HTTPS_ALPN")
+	}()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	inst, ok := cfg.GetProviderInstance("https-test")
+	if !ok {
+		t.Fatal("expected provider instance 'https-test' to exist")
+	}
+
+	if got := inst.ProviderConfig["AUTO_HTTPS_RECORDS"]; got != "false" {
+		t.Errorf("AUTO_HTTPS_RECORDS = %q, want %q", got, "false")
+	}
+	if got := inst.ProviderConfig["AUTO_HTTPS_ALPN"]; got != "h2,h3" {
+		t.Errorf("AUTO_HTTPS_ALPN = %q, want %q", got, "h2,h3")
+	}
+}
