@@ -237,6 +237,8 @@ var providerConfigFields = []struct {
 	{"ACCESS_MODE", false},          // Pi-hole specific (api/file) — renamed from MODE in v0.10.0
 	{"PASSWORD", true},              // Pi-hole specific
 	{"INSECURE_SKIP_VERIFY", false}, // TLS certificate verification skip
+	{"AUTO_HTTPS_RECORDS", false},   // Technitium-specific: companion HTTPS record creation
+	{"AUTO_HTTPS_ALPN", false},      // Technitium-specific: ALPN value for companion HTTPS records
 	// RFC 2136 specific fields
 	{"SERVER", false},         // RFC 2136: DNS server address (host:port)
 	{"TSIG_KEY_NAME", false},  // RFC 2136: TSIG key name
