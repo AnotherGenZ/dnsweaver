@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-04-27
+
+### Fixed
+- **Technitium: `AUTO_HTTPS_RECORDS` and `AUTO_HTTPS_ALPN` env vars are now
+  respected.** Previously these settings were silently ignored because they
+  were never wired through `internal/config`'s provider-config field list, so
+  the Technitium provider always saw the default (`AUTO_HTTPS_RECORDS=true`)
+  regardless of what the user set. Setting
+  `DNSWEAVER_{INSTANCE}_AUTO_HTTPS_RECORDS=false` now correctly disables
+  companion HTTPS record creation. Fixes
+  [#83](https://github.com/maxfield-allison/dnsweaver/issues/83).
+
 ## [1.4.0] - 2026-04-27
 
 ### Added
