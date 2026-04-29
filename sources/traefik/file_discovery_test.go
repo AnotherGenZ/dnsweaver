@@ -735,4 +735,3 @@ func TestParser_DiscoverFromFiles_DefaultEntryPoints_ExplicitWins(t *testing.T) 
 		t.Errorf("expected webB, got %q", extractions[0].EntryPoint)
 	}
 }
-

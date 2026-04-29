@@ -353,8 +353,8 @@ func TestLoadSourceConfig_DefaultEntryPoints(t *testing.T) {
 		{
 			name: "single value",
 			envVars: map[string]string{
-				"DNSWEAVER_SOURCES":                                "traefik",
-				"DNSWEAVER_SOURCE_TRAEFIK_DEFAULT_ENTRYPOINTS":     "webA",
+				"DNSWEAVER_SOURCES":                            "traefik",
+				"DNSWEAVER_SOURCE_TRAEFIK_DEFAULT_ENTRYPOINTS": "webA",
 			},
 			want: []string{"webA"},
 		},
@@ -407,4 +407,3 @@ func TestLoadSourceConfig_DefaultEntryPoints(t *testing.T) {
 		})
 	}
 }
-

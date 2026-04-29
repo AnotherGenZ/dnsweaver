@@ -565,4 +565,3 @@ func TestParser_ExtractHostnames_DefaultEntryPoints_UnsetPreservesWildcard(t *te
 		t.Errorf("expected empty (wildcard) entrypoint, got %q", extractions[0].EntryPoint)
 	}
 }
-
