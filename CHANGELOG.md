@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Technitium: CNAME updates were silently a no-op.** `UpdateCNAMERecord` sent
+  the new target as `newCname`, which is not a valid Technitium API parameter.
+  The request matched the existing record by `cname=<old>` and applied no
+  change, while the dnsweaver log claimed success. The fix sends `cname=<new>`
+  (CNAME records are unique per name, so the API identifies the record by
+  `domain`+`type` alone). Regression test added that asserts `newCname` is
+  never sent. Closes upstream
+  [#84](https://github.com/maxfield-allison/dnsweaver/issues/84). Thanks to
+  [@Dampfwalze](https://github.com/Dampfwalze) for the detailed bug report
+  including the Technitium server log proving the no-op.
+
 ### Added
 - **Traefik: `DNSWEAVER_SOURCE_TRAEFIK_DEFAULT_ENTRYPOINTS`** — source-level
   setting that mirrors Traefik's
