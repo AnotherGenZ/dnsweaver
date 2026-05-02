@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.4] - 2026-05-02
+
 ### Fixed
 - **AdGuard Home: `USERNAME` env var was silently dropped during config load.**
   `USERNAME` was missing from `providerConfigFields`, so
