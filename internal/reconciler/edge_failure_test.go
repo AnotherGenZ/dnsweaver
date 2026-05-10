@@ -335,8 +335,11 @@ func TestReconcile_PartialListerFailure(t *testing.T) {
 // --- Partial Failure Recovery ---
 
 func TestReconcile_CreateFailsButOtherProvidersSucceed(t *testing.T) {
-	// When hostname matches multiple providers and one fails, the other
-	// should still succeed.
+	// Under first-match-wins (issue #86), only the first declared matching
+	// provider writes — there is no automatic failover to a second provider.
+	// This test verifies the failure of the winning provider is reported
+	// (and the loser is left untouched) rather than silently masking the
+	// failure by writing to the second instance.
 	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("app", map[string]string{
 		"traefik.http.routers.app.rule": "Host(`app.example.com`)",
@@ -346,33 +349,34 @@ func TestReconcile_CreateFailsButOtherProvidersSucceed(t *testing.T) {
 	sources := source.NewRegistry(logger)
 	sources.Register(traefik.New(traefik.WithLogger(logger)))
 
-	goodProvider := newTestMockProvider("good-dns")
+	// Declare the failing provider first so it is the winner.
 	badProvider := newTestMockProvider("bad-dns")
 	badProvider.createFn = func(_ context.Context, _ provider.Record) error {
 		return errors.New("provider API error")
 	}
+	goodProvider := newTestMockProvider("good-dns")
 
 	providers := provider.NewRegistry(logger)
 	providers.RegisterFactory("mock", func(cfg provider.FactoryConfig) (provider.Provider, error) {
-		if cfg.Name == "good-dns" {
-			return goodProvider, nil
+		if cfg.Name == "bad-dns" {
+			return badProvider, nil
 		}
-		return badProvider, nil
+		return goodProvider, nil
 	})
-	// Both providers match *.example.com
-	_ = providers.CreateInstance(provider.ProviderInstanceConfig{
-		Name:       "good-dns",
-		TypeName:   "mock",
-		RecordType: provider.RecordTypeA,
-		Target:     "10.0.0.1",
-		TTL:        300,
-		Domains:    []string{"*.example.com"},
-	})
+	// Both providers match *.example.com — bad-dns is declared first.
 	_ = providers.CreateInstance(provider.ProviderInstanceConfig{
 		Name:       "bad-dns",
 		TypeName:   "mock",
 		RecordType: provider.RecordTypeA,
 		Target:     "10.0.0.2",
+		TTL:        300,
+		Domains:    []string{"*.example.com"},
+	})
+	_ = providers.CreateInstance(provider.ProviderInstanceConfig{
+		Name:       "good-dns",
+		TypeName:   "mock",
+		RecordType: provider.RecordTypeA,
+		Target:     "10.0.0.1",
 		TTL:        300,
 		Domains:    []string{"*.example.com"},
 	})
@@ -387,12 +391,13 @@ func TestReconcile_CreateFailsButOtherProvidersSucceed(t *testing.T) {
 		t.Fatalf("Reconcile returned hard error: %v", err)
 	}
 
-	// One provider should succeed, one should fail
-	if result.CreatedCount() < 1 {
-		t.Errorf("expected at least 1 created record, got %d", result.CreatedCount())
-	}
+	// The winning provider's failure must be reported.
 	if result.FailedCount() < 1 {
-		t.Errorf("expected at least 1 failed record, got %d", result.FailedCount())
+		t.Errorf("expected at least 1 failed record from bad-dns, got %d", result.FailedCount())
+	}
+	// The losing provider must NOT have been called as a fallback.
+	if got := len(goodProvider.GetCreatedDNSRecords()); got != 0 {
+		t.Errorf("good-dns (loser) should not be called as a fallback, got %d created records", got)
 	}
 }
 

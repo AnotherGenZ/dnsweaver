@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.5] - 2026-05-10
+
 ### Fixed
+- **Multiple instances fighting over the same record (race condition).** When
+  more than one provider instance matched the same hostname — typically because
+  `DNSWEAVER_{NAME}_ENTRYPOINTS` filters did not disambiguate them (a hostname
+  missing the filtered metadata key is treated as a wildcard) — every matching
+  instance wrote the record on every reconciliation. Each provider's cached
+  view of the zone was stale relative to the others' writes, so the apparent
+  owner alternated each cycle and the record's target flapped between targets.
+  `ensureRecord` now respects first-match-wins per the documented contract:
+  only the first instance in `DNSWEAVER_INSTANCES` declaration order writes,
+  and a `WARN` is logged when overlap is detected so users can narrow scopes
+  with `DNSWEAVER_{NAME}_ENTRYPOINTS` (or other metadata filters). Closes
+  upstream [#86](https://github.com/maxfield-allison/dnsweaver/issues/86).
+  Thanks to [@Dampfwalze](https://github.com/Dampfwalze) for the reproducer
+  and detailed log analysis.
 - **Reconciler: stopped re-issuing ownership TXT creates every cycle.** Once a
   hostname's `_dnsweaver.<host>` TXT record existed, dnsweaver still POSTed a
   duplicate-create on every reconciliation. dnsweaver swallowed the resulting
