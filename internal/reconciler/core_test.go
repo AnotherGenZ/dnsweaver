@@ -872,7 +872,7 @@ func TestEnsureOwnershipRecord_CreatesWhenEnabled(t *testing.T) {
 	r.syncAtomics()
 
 	inst, _ := providers.Get("test-dns")
-	r.ensureOwnershipRecord(context.Background(), "app.example.com", inst, nil)
+	r.ensureOwnershipRecord(context.Background(), "app.example.com", inst, nil, nil)
 
 	created := mock.GetCreated()
 	var foundOwnership bool
@@ -915,7 +915,7 @@ func TestEnsureOwnershipRecord_SkipsWhenDisabled(t *testing.T) {
 	r.syncAtomics()
 
 	inst, _ := providers.Get("test-dns")
-	r.ensureOwnershipRecord(context.Background(), "app.example.com", inst, nil)
+	r.ensureOwnershipRecord(context.Background(), "app.example.com", inst, nil, nil)
 
 	created := mock.GetCreated()
 	for _, c := range created {
@@ -925,10 +925,64 @@ func TestEnsureOwnershipRecord_SkipsWhenDisabled(t *testing.T) {
 	}
 }
 
+// TestEnsureOwnershipRecord_SkipsWhenCacheHasIt is a regression test for
+// https://github.com/maxfield-allison/dnsweaver/issues/87 — the steady-state
+// reconcile loop must not re-issue an ownership Create when the cache already
+// shows the record exists, because upstream DNS servers (e.g. Technitium) log
+// every duplicate-create as an error.
+func TestEnsureOwnershipRecord_SkipsWhenCacheHasIt(t *testing.T) {
+	mock := newTestMockProvider("test-dns")
+	// Pre-seed an existing ownership TXT record (legacy format, no instance ID).
+	mock.AddRecord(provider.Record{
+		Hostname: "_dnsweaver.app.example.com",
+		Type:     provider.RecordTypeTXT,
+		Target:   "heritage=dnsweaver",
+		TTL:      300,
+	})
+
+	logger := quietLogger()
+	providers := provider.NewRegistry(logger)
+	providers.RegisterFactory("mock", func(cfg provider.FactoryConfig) (provider.Provider, error) {
+		return mock, nil
+	})
+	_ = providers.CreateInstance(provider.ProviderInstanceConfig{
+		Name:       "test-dns",
+		TypeName:   "mock",
+		RecordType: provider.RecordTypeA,
+		Target:     "10.0.0.1",
+		TTL:        300,
+		Domains:    []string{"*.example.com"},
+	})
+
+	cache := newRecordCache(context.Background(), providers, logger)
+
+	r := &Reconciler{
+		providers:      providers,
+		config:         Config{OwnershipTracking: true, Enabled: true},
+		logger:         logger,
+		knownHostnames: make(map[string]struct{}),
+	}
+	r.syncAtomics()
+
+	inst, _ := providers.Get("test-dns")
+	r.ensureOwnershipRecord(context.Background(), "app.example.com", inst, nil, cache)
+
+	for _, c := range mock.GetCreated() {
+		if c.Type == provider.RecordTypeTXT {
+			t.Errorf("expected no ownership Create when cache shows record exists, got Create for %q", c.Hostname)
+		}
+	}
+}
+
 // =============================================================================
 // Multiple Provider Tests
 // =============================================================================
 
+// TestEnsureRecord_MultipleMatchingProviders verifies first-match-wins
+// precedence (issue #86): when multiple instances match the same hostname,
+// only the first one in DNSWEAVER_INSTANCES declaration order writes the
+// record. The other matching instances are skipped to prevent the two
+// providers from overwriting each other's targets every reconciliation.
 func TestEnsureRecord_MultipleMatchingProviders(t *testing.T) {
 	mock1 := newTestMockProvider("internal-dns")
 	mock2 := newTestMockProvider("external-dns")
@@ -958,7 +1012,7 @@ func TestEnsureRecord_MultipleMatchingProviders(t *testing.T) {
 		return mock2, nil
 	})
 
-	// Both match *.example.com
+	// Both match *.example.com — internal-dns is declared first and should win.
 	_ = providers.CreateInstance(provider.ProviderInstanceConfig{
 		Name:       "internal-dns",
 		TypeName:   "mock-internal",
@@ -987,16 +1041,19 @@ func TestEnsureRecord_MultipleMatchingProviders(t *testing.T) {
 	hostname := &source.Hostname{Name: "app.example.com", Source: "test"}
 	actions := r.ensureRecord(context.Background(), hostname, nil)
 
-	if len(actions) != 2 {
-		t.Errorf("expected 2 actions (one per provider), got %d", len(actions))
+	if len(actions) != 1 {
+		t.Fatalf("expected 1 action (first-match-wins), got %d", len(actions))
+	}
+	if actions[0].Provider != "internal-dns" {
+		t.Errorf("expected winner=internal-dns (first declared), got %q", actions[0].Provider)
 	}
 
-	// Verify both providers were called
+	// Only the winning provider should have been called.
 	if createdMock1 != 1 {
 		t.Errorf("internal-dns should be called once, got %d", createdMock1)
 	}
-	if createdMock2 != 1 {
-		t.Errorf("external-dns should be called once, got %d", createdMock2)
+	if createdMock2 != 0 {
+		t.Errorf("external-dns should NOT be called (loser), got %d", createdMock2)
 	}
 }
 

@@ -22,9 +22,11 @@ import (
 // --- Hostname Migration Between Providers ---
 
 func TestReconcile_HostnameMovesToDifferentProvider(t *testing.T) {
-	// Cycle 1: hostname routes to provider A (matches *.internal.example.com)
-	// Cycle 2: hostname routes to provider B (matches *.example.com) after A is removed
-	// Orphan cleanup should delete from A, new record should be created on B.
+	// Two providers both match the hostname (more-specific + wildcard).
+	// Per first-match-wins (issue #86), only the first declared instance
+	// (dns-internal) should write the record. The second instance must
+	// not also write — that would produce the record-flapping race where
+	// the two providers overwrite each other's targets every reconciliation.
 	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("app", map[string]string{
 		"traefik.http.routers.app.rule": "Host(`app.internal.example.com`)",
@@ -70,25 +72,24 @@ func TestReconcile_HostnameMovesToDifferentProvider(t *testing.T) {
 		WithLogger(logger),
 	)
 
-	// Cycle 1: hostname matches both providers (more specific + wildcard)
-	result1, err := r.Reconcile(context.Background())
+	result, err := r.Reconcile(context.Background())
 	if err != nil {
-		t.Fatalf("Cycle 1: Reconcile error: %v", err)
+		t.Fatalf("Reconcile error: %v", err)
 	}
-	if result1.HostnamesDiscovered != 1 {
-		t.Errorf("Cycle 1: HostnamesDiscovered = %d, want 1", result1.HostnamesDiscovered)
+	if result.HostnamesDiscovered != 1 {
+		t.Errorf("HostnamesDiscovered = %d, want 1", result.HostnamesDiscovered)
 	}
 
-	// Verify provider A got a record
+	// Provider A wins (declared first, also more specific).
 	createdA := providerA.GetCreatedDNSRecords()
 	if len(createdA) == 0 {
-		t.Error("Cycle 1: expected provider A to have created records")
+		t.Error("expected provider A (winner) to have created records")
 	}
 
-	// Provider B should also have created records (both match wildcard)
+	// Provider B must NOT have written — first-match-wins precedence.
 	createdB := providerB.GetCreatedDNSRecords()
-	if len(createdB) == 0 {
-		t.Error("Cycle 1: expected provider B to also have created records")
+	if len(createdB) != 0 {
+		t.Errorf("expected provider B (loser) to skip, but it created %d records", len(createdB))
 	}
 }
 
