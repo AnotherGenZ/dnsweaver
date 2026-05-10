@@ -63,11 +63,28 @@ func (r *Reconciler) ensureRecord(ctx context.Context, hostname *source.Hostname
 		return actions
 	}
 
-	for _, inst := range matchingProviders {
-		action := r.ensureRecordForProvider(ctx, hostname, inst, cache)
-		actions = append(actions, action)
+	// First-match-wins: when multiple instances match the same hostname,
+	// the one declared earliest in DNSWEAVER_INSTANCES owns the record.
+	// Writing from every matching provider produces a record-flapping race
+	// (issue #86) because each instance overwrites the previous one's target
+	// on every reconciliation. Use ENTRYPOINTS or other metadata filters to
+	// make instance scopes mutually exclusive when both should be active.
+	winner := matchingProviders[0]
+	if len(matchingProviders) > 1 {
+		losers := make([]string, 0, len(matchingProviders)-1)
+		for _, inst := range matchingProviders[1:] {
+			losers = append(losers, inst.Name())
+		}
+		r.logger.Warn("multiple providers match hostname; using first by declaration order",
+			slog.String("hostname", hostname.Name),
+			slog.String("winner", winner.Name()),
+			slog.Any("skipped", losers),
+			slog.String("hint", "narrow scopes with DNSWEAVER_{NAME}_ENTRYPOINTS or other metadata filters"),
+		)
 	}
 
+	action := r.ensureRecordForProvider(ctx, hostname, winner, cache)
+	actions = append(actions, action)
 	return actions
 }
 
