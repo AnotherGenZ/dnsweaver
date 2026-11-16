@@ -40,6 +40,7 @@ const (
 	FieldWeight   = "weight"
 	FieldEnabled  = "enabled"
 	FieldProxied  = "proxied"
+	FieldAdopt    = "adopt"
 )
 
 const (
@@ -55,6 +56,12 @@ const (
 	// boolTrue and boolFalse are canonical boolean strings for metadata values.
 	boolTrue  = "true"
 	boolFalse = "false"
+
+	// recordTypeSRV is the named-record Type value that triggers SRV field parsing.
+	recordTypeSRV = "SRV"
+
+	// recordTypeMX is the named-record Type value that triggers MX field parsing.
+	recordTypeMX = "MX"
 )
 
 // namedRecordRegex matches dnsweaver.records.<name>.<field> labels.
@@ -68,6 +75,14 @@ type SRVData struct {
 	Weight   uint16
 }
 
+// MXData contains MX record-specific fields.
+// The mail exchanger hostname is carried in Extraction.Target.
+type MXData struct {
+	// Preference is the RFC 1035 MX preference, taken from the "priority"
+	// label field. Lower values are tried first.
+	Preference uint16
+}
+
 // Extraction represents a hostname extracted from dnsweaver labels.
 type Extraction struct {
 	// Hostname is the FQDN extracted from labels.
@@ -76,7 +91,7 @@ type Extraction struct {
 	// RecordName is the identifier for named records (empty for simple hostname).
 	RecordName string
 
-	// Type is the record type override (A, AAAA, CNAME, SRV, PTR, TXT).
+	// Type is the record type override (A, AAAA, CNAME, SRV, MX, NS, PTR, TXT).
 	// Empty means use provider default.
 	Type string
 
@@ -92,8 +107,14 @@ type Extraction struct {
 	// Zero means use provider default.
 	TTL int
 
+	// AdoptExisting overrides existing-record adoption for this record.
+	AdoptExisting *bool
+
 	// SRV contains SRV-specific fields when Type is "SRV".
 	SRV *SRVData
+
+	// MX contains MX-specific fields when Type is "MX".
+	MX *MXData
 
 	// Metadata carries arbitrary key-value pairs for providers.
 	// Populated from "proxied" field and "meta.*" labels.
@@ -103,7 +124,7 @@ type Extraction struct {
 
 // HasHints returns true if any hint fields are set.
 func (e Extraction) HasHints() bool {
-	return e.Type != "" || e.Target != "" || e.Provider != "" || e.TTL > 0 || e.SRV != nil || len(e.Metadata) > 0
+	return e.Type != "" || e.Target != "" || e.Provider != "" || e.TTL > 0 || e.AdoptExisting != nil || e.SRV != nil || e.MX != nil || len(e.Metadata) > 0
 }
 
 // Parser extracts hostnames from dnsweaver labels.
@@ -150,9 +171,7 @@ func (p *Parser) ExtractHostnames(labels map[string]string) []Extraction {
 	if hostname, ok := labels[SimpleHostnameLabel]; ok {
 		hostname = strings.TrimSpace(hostname)
 		if hostname != "" {
-			extraction := Extraction{
-				Hostname: hostname,
-			}
+			extraction := Extraction{Hostname: hostname}
 
 			// Parse TTL for simple hostname
 			if ttlStr, ok := labels[TTLLabel]; ok && ttlStr != "" {
@@ -170,7 +189,7 @@ func (p *Parser) ExtractHostnames(labels map[string]string) []Extraction {
 			if proxied, ok := labels[ProxiedLabel]; ok && proxied != "" {
 				proxied = strings.TrimSpace(strings.ToLower(proxied))
 				if proxied == boolTrue || proxied == boolFalse {
-					extraction.Metadata = map[string]string{"proxied": proxied}
+					extraction.Metadata = map[string]string{FieldProxied: proxied}
 				} else {
 					p.logger.Warn("invalid proxied value for simple hostname (must be true/false)",
 						slog.String("hostname", hostname),
@@ -202,7 +221,7 @@ func (p *Parser) ExtractHostnames(labels map[string]string) []Extraction {
 		if proxied, ok := labels[ProxiedLabel]; ok && proxied != "" {
 			proxied = strings.TrimSpace(strings.ToLower(proxied))
 			if proxied == boolTrue || proxied == boolFalse {
-				sharedMeta = map[string]string{"proxied": proxied}
+				sharedMeta = map[string]string{FieldProxied: proxied}
 			}
 		}
 
@@ -278,6 +297,13 @@ func (p *Parser) ExtractHostnames(labels map[string]string) []Extraction {
 			Provider:   fields[FieldProvider],
 		}
 
+		// A named-record adoption hint overrides the workload-wide hint later in
+		// reconciliation. The workload hint is applied source-independently by
+		// the source registry.
+		if value, ok := fields[FieldAdopt]; ok {
+			extraction.AdoptExisting = p.parseAdoptExisting(value, "record "+name)
+		}
+
 		// Parse TTL
 		if ttlStr, ok := fields[FieldTTL]; ok && ttlStr != "" {
 			if ttl, err := strconv.Atoi(ttlStr); err == nil && ttl > 0 {
@@ -291,7 +317,7 @@ func (p *Parser) ExtractHostnames(labels map[string]string) []Extraction {
 		}
 
 		// Parse SRV fields if type is SRV or if port is specified
-		if extraction.Type == "SRV" || fields[FieldPort] != "" {
+		if extraction.Type == recordTypeSRV || fields[FieldPort] != "" {
 			srv := &SRVData{}
 			hasSRVData := false
 
@@ -336,6 +362,25 @@ func (p *Parser) ExtractHostnames(labels map[string]string) []Extraction {
 			}
 		}
 
+		// Parse the MX preference from the shared "priority" field. An MX record
+		// always carries a preference, so the struct is populated even when the
+		// label is absent; 0 is a valid preference and the only sensible default
+		// for the single mail exchanger a record set declares here.
+		if extraction.Type == recordTypeMX {
+			mx := &MXData{}
+			if priorityStr, ok := fields[FieldPriority]; ok && priorityStr != "" {
+				if preference, err := strconv.ParseUint(priorityStr, 10, 16); err == nil {
+					mx.Preference = uint16(preference)
+				} else {
+					p.logger.Warn("invalid priority value for MX record",
+						slog.String("record", name),
+						slog.String("priority", priorityStr),
+					)
+				}
+			}
+			extraction.MX = mx
+		}
+
 		// Handle proxied field → Metadata["proxied"]
 		if proxied, ok := fields[FieldProxied]; ok && proxied != "" {
 			proxied = strings.TrimSpace(strings.ToLower(proxied))
@@ -343,7 +388,7 @@ func (p *Parser) ExtractHostnames(labels map[string]string) []Extraction {
 				if extraction.Metadata == nil {
 					extraction.Metadata = make(map[string]string)
 				}
-				extraction.Metadata["proxied"] = proxied
+				extraction.Metadata[FieldProxied] = proxied
 			} else {
 				p.logger.Warn("invalid proxied value (must be true/false)",
 					slog.String("record", name),
@@ -382,4 +427,25 @@ func (p *Parser) ExtractHostnames(labels map[string]string) []Extraction {
 	}
 
 	return extractions
+}
+
+func (p *Parser) parseAdoptExisting(value, scope string) *bool {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case boolTrue:
+		parsed := true
+		return &parsed
+	case boolFalse:
+		parsed := false
+		return &parsed
+	default:
+		p.logger.Warn("invalid adopt value (must be true/false)",
+			slog.String("scope", scope),
+			slog.String("adopt", value),
+		)
+		return nil
+	}
 }

@@ -239,16 +239,18 @@ func TestHostname_Validate_SRV(t *testing.T) {
 		t.Error("IsValid() for SRV hostname returned false")
 	}
 
-	// Same hostname WITHOUT SRV hints should fail RFC 1123 validation
+	// The same name without SRV hints is equally valid: an underscored label
+	// scopes an attribute (RFC 8552) and is not tied to one record type, as
+	// _dmarc and _domainkey show.
 	nonSRVHostname := Hostname{
 		Name:   "_minecraft._tcp.mc.example.com",
 		Source: "dnsweaver",
 	}
-	if err := nonSRVHostname.Validate(); err == nil {
-		t.Error("Validate() for underscore hostname without SRV hints expected error, got nil")
+	if err := nonSRVHostname.Validate(); err != nil {
+		t.Errorf("Validate() for an underscored hostname without SRV hints returned error: %v", err)
 	}
-	if nonSRVHostname.IsValid() {
-		t.Error("IsValid() for underscore hostname without SRV hints returned true")
+	if !nonSRVHostname.IsValid() {
+		t.Error("IsValid() for an underscored hostname without SRV hints returned false")
 	}
 }
 
@@ -517,5 +519,35 @@ func TestHostnames_Deduplicate_CaseInsensitive(t *testing.T) {
 
 	if deduped[1].Name != "different.example.com" {
 		t.Errorf("deduped[1].Name = %q, want %q", deduped[1].Name, "different.example.com")
+	}
+}
+
+func TestValidateHostname_UnderscoredLabels(t *testing.T) {
+	valid := []string{
+		"_dmarc.example.com",
+		"protonmail._domainkey.example.com",
+		"_acme-challenge.example.com",
+		"_matrix._tcp.example.com",
+		"_sip._tls.example.com",
+	}
+	for _, h := range valid {
+		t.Run(h, func(t *testing.T) {
+			if err := ValidateHostname(h); err != nil {
+				t.Errorf("ValidateHostname(%q) = %v, want nil", h, err)
+			}
+		})
+	}
+
+	invalid := []string{
+		"_.example.com",
+		"_-bad.example.com",
+		"__.example.com",
+	}
+	for _, h := range invalid {
+		t.Run("invalid/"+h, func(t *testing.T) {
+			if err := ValidateHostname(h); err == nil {
+				t.Errorf("ValidateHostname(%q) = nil, want an error", h)
+			}
+		})
 	}
 }

@@ -7,35 +7,1113 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.3.0] - 2026-04-15
+<!-- towncrier release notes start -->
 
-### Added
-- **Configurable detached cleanup circuit breaker**: Added configurable detached
-  cleanup thresholds and mass-delete override controls via environment variables
-  and YAML config (`DNSWEAVER_DETACHED_CLEANUP_*`)
+## [3.3.2] - 2026-11-12
 
 ### Fixed
-- **Detached-provider reconciliation after routing changes**: Reconciler now
-  deletes records from providers that no longer match a discovered hostname
-  after routing filter changes (for example, enabling
-  `DNSWEAVER_INTERNAL_MATCH_LABELED_ONLY=true` while external routing remains)
-- **Delete-on-failed-move protection**: Detached cleanup is deferred when a
-  hostname still has current routed providers but reconciliation to those
-  providers is unhealthy, preventing accidental deletions during provider
-  failures
 
-## [1.2.0] - 2026-04-15
+- Caddy snippet and named-route labels no longer produce invalid hostname warnings. Site hostnames declared alongside them are still discovered.
+- Technitium companion HTTPS records now follow ALPN and TTL configuration changes even when the parent address is unchanged, and missing companions are repaired. A single enabled priority-1 HTTPS record with target `.` and only a nonempty ALPN parameter is managed with its owned parent, including an existing manual record with that shape. Customized or ambiguous HTTPS records are preserved. Cleanup uses the companion's observed ALPN rather than the current setting.
+
+### Security
+
+- Builds now use Go 1.26.11, which fixes the net/http race reported as GO-2026-6859 (CVE-2026-97054).
+
+
+## [3.3.1] - 2026-11-06
 
 ### Added
-- **Instance-targeted provider routing controls**: Added configuration and routing
-  logic so instances can target specific providers more precisely in multi-instance
-  deployments
+
+- Declare MX and NS records with native labels. `priority` sets the MX preference, a name can carry several MX records, including one exchanger at several preferences, and the Cloudflare provider supports both types. Existing MX and NS records are only taken over through explicit adoption or an exact member ownership marker. ([#248](https://github.com/maxfield-allison/dnsweaver/issues/248))
 
 ### Fixed
-- **Cloudflare token verification**: Added support for user/account-scoped token
-  verification flows
-- **Technitium list parsing**: Added support for object-shaped `svcParams` values
-  in record list responses
+
+- Stop rewriting Cloudflare data TXT records on every cycle. Decode DNS decimal escapes and preserve empty, quoted and Unicode payloads. Keep exact-member ownership through legacy/compact migration, reversal and restart, including markers written by earlier releases. Other providers keep storing and matching declared TXT values verbatim. ([#250](https://github.com/maxfield-allison/dnsweaver/issues/250))
+- Accept Cloudflare account API tokens in the provider connectivity check, which now reads the configured zone instead of calling the user token verify endpoint. Tokens need no permission beyond DNS Read or DNS Write on the zone. ([#252](https://github.com/maxfield-allison/dnsweaver/issues/252))
+- Accept underscored labels such as `_dmarc` and `_domainkey` in record hostnames without SRV hints. ([#254](https://github.com/maxfield-allison/dnsweaver/issues/254))
+- Keep DNS records for Docker containers through pauses and restart loops, and honor removal-only cleanup for every container state. Reconcile on additional lifecycle events. Preserve existing records when Proxmox guest lookup, Kubernetes discovery/cache initialization, or Traefik file discovery is incomplete instead of treating unavailable data as removal. ([#256](https://github.com/maxfield-allison/dnsweaver/issues/256))
+- Honour `DOCKER_HOST` (including `tcp://` and TLS via `DOCKER_CERT_PATH` / `DOCKER_TLS_VERIFY`): `DNSWEAVER_DOCKER_HOST` wins, then an explicit YAML `docker.host`, then `DOCKER_HOST`, then the default socket. An explicit YAML default socket is preserved. Previously the default socket was always passed explicitly and overrode `DOCKER_HOST`. In `standalone` mode dnsweaver now pings the daemon at startup instead of calling `/info`, so a locked-down docker-socket-proxy (`INFO=0`) works.
+
+### Changed
+
+- Refresh the locked Alpine package inventories for current repository updates, including timezone data 2026f. Release builds still verify the complete installed package sets.
+
+## [3.3.0] - 2026-11-06
+
+No release artifacts were published for this tag. Its changes are included in 3.3.1.
+
+## [3.2.3] - 2026-10-28
+
+### Changed
+
+- Add website and documentation analytics with approved campaign labels, bounded link and search events, and published privacy details.
+
+### Fixed
+
+- When sources ask for a CNAME and another record type for the same name on the same provider, dnsweaver now skips that name and reports `CNAME cannot share a name with other desired record types`. Earlier releases could delete the existing address record and its ownership marker before creating the CNAME. Resolve the conflicting declarations and the name reconciles again on a later cycle.
+
+### Security
+
+- Update `github.com/pkg/sftp` to 1.13.12. The SFTP client now rejects malformed server replies, and the release fixes GHSA-xgcg-wgmj-5rw3, GHSA-47hq-m6q9-3rm6 and GHSA-h959-g3h6-w76c. dnsweaver uses only the SFTP client and never calls `Client.RemoveAll`, so earlier releases were not affected by those advisories.
+- Update `golang.org/x/net` to 0.62.0 for GO-2026-6866 (CVE-2026-97045). dnsweaver does not build the affected `golang.org/x/net/html` package. The update restores the vulnerability gate without adding an exception.
+
+
+## [3.2.2] - 2026-10-26
+
+### Fixed
+
+- Stop listing a CNAME repeatedly when an RFC2136 server returns it in answers to multiple record-type queries. Managed orphan cleanup can remove the record again, and CNAME target records are not duplicated into the managed listing. ([#228](https://github.com/maxfield-allison/dnsweaver/issues/228))
+- Honor Docker's `user: UID:GID` setting and preserve supplementary groups supplied through `group_add`. Default startup still drops to 1000:1000 and configures Docker socket access automatically. With an explicit non-root user, supply the socket's group through `group_add` and ensure mounted files have the required permissions. ([#230](https://github.com/maxfield-allison/dnsweaver/issues/230))
+
+### Security
+
+- Build with Go 1.26.10 to reject compromised intermediate certificates covered by GO-2026-6809 (CVE-2026-111943). Refresh the pinned container inputs and package inventories used for release qualification.
+
+
+## [3.2.1] - 2026-10-15
+
+### Changed
+
+- Document the compact ownership production canary, verified reversal in a 200-record Cloudflare zone, and remaining provider qualification limits. ([#223](https://github.com/maxfield-allison/dnsweaver/issues/223))
+- Update the Prometheus Go client to 1.25.0 and `golang.org/x/crypto` to 0.58.0.
+
+### Fixed
+
+- The Pi-hole v5 API client now authenticates to password-protected servers and reads existing A and AAAA records. Earlier releases sent a hash that Pi-hole v5 does not accept, and read custom DNS entries in the wrong field order. If you use Pi-hole v5 in API mode, check after upgrading that dnsweaver lists the records you expect.
+
+### Security
+
+- The Pi-hole v5 client now redacts the configured password and its hash from returned error text. Applications that unwrap and log the original error must apply their own redaction. In v0.4.1 through v3.2.0, failed requests and some error responses carried the request URL, and with it the `auth` parameter, into returned errors and logs. Pi-hole v5 did not accept the exposed hash for API calls, but anyone who could read it could test password guesses offline. A recovered password gives full access to the Pi-hole admin interface and API. Weak or reused passwords are most at risk. The Pi-hole v6 API client and Pi-hole file mode are not affected by this issue. If affected logs may have been read by someone else, upgrade or stop every affected instance. Then change the Pi-hole web interface password and update it in dnsweaver before restarting affected instances. Change the password anywhere else it was reused. Earlier log entries remain sensitive after upgrading; review access to application logs, exported logs and backups, and handle retained entries as sensitive data. If an immediate upgrade is unavailable, restrict access to error output and log stores. This does not prevent further exposure while an affected instance keeps making requests.
+
+
+## [3.2.0] - 2026-10-14
+
+### Changed
+
+- Compact ownership is available through `DNSWEAVER_OWNERSHIP_STORAGE=compact` for TXT-capable providers with zone discovery. It stores claims in compressed pages and per-owner manifests, with no volume or database requirement. Legacy TXT storage remains the default for this release. Upgrade every shared-zone writer before opting in. Selecting `legacy` on the new binary verifies restored per-member markers and any required discovery catalog before removing compact claims. Distinct active owners retain each other's compatible claims; incomplete or conflicting state prevents destructive reconciliation. The running process retries failed claim publication after a confirmed answer write, using disposable proof of that write. Cloudflare uses a qualified smaller TXT value bound. Same-owner replicas and simultaneous writes to provider APIs that replace whole RRsets still require provider-specific coordination. See the ownership storage guide for migration headroom and recovery limits.
+
+
+## [3.1.1] - 2026-10-12
+
+### Security
+
+- The dnsmasq provider now validates record hostnames and type-specific targets immediately before formatting its managed configuration. Invalid A, AAAA and CNAME values are rejected without changing the file, preventing workload-controlled record hints from adding dnsmasq directives. Upgrade every dnsmasq-backed instance, inspect its managed file for unexpected directives and reload dnsmasq after removing them. Updating prevents new injection; it does not remove directives already written. Until then, restrict who can set labels or annotations on watched workloads.
+
+
+## [3.1.0] - 2026-10-12
+
+### Added
+
+- **UniFi Network provider.** A new `unifi` provider type manages DNS records on UniFi OS consoles (Dream Machine, Cloud Gateway, Cloud Key) and UniFi OS Server through the official Integration API, using only an API key. Supports A, AAAA, CNAME, TXT and SRV records with standard TXT ownership tracking and native in-place updates. Only user-defined DNS policies are managed, so console-derived entries are never touched. Requires UniFi Network 10.6 or later, and clients receive answers only through a UniFi gateway; the legacy standalone Network Application does not expose the Integration API and is not supported. See [docs/providers/unifi.md](docs/providers/unifi.md). ([#200](https://github.com/maxfield-allison/dnsweaver/issues/200))
+
+### Fixed
+
+- Caddy hostname extraction now ignores indexed directive labels such as `caddy_0.reverse_proxy` and `caddy_0.tls`. Only site labels declare hostnames, so upstream addresses and directive arguments no longer become DNS records. ([#211](https://github.com/maxfield-allison/dnsweaver/issues/211))
+- Release SBOMs omit staging repository tags, and qualification checks the original image config by digest for known staging metadata. Runtime packages refresh for every release build. Public evidence retains image digests, package versions and license information.
+
+### Security
+
+- Includes the security fixes from 3.0.1: Technitium API token redaction, mirror credential hardening, Go 1.26.9 and `golang.org/x/net` 0.60.0. Upgrade every affected instance before rotating tokens exposed in retained logs. Earlier log entries remain sensitive after upgrading.
+
+
+## [3.0.2] - 2026-10-11
+
+### Fixed
+
+- Release SBOMs omit staging repository tags and reject leftover staging metadata before qualification. Image digests, package versions and license information remain in the public evidence.
+
+### Security
+
+- Includes the security fixes from 3.0.1: Technitium API token redaction, mirror credential hardening, Go 1.26.9 and `golang.org/x/net` 0.60.0. Upgrade every affected instance before rotating tokens exposed in retained logs. Earlier log entries remain sensitive after upgrading.
+
+
+## [3.0.1] - 2026-10-11
+
+### Security
+
+- Technitium request errors now redact the configured API token before logging or returning an error, including transport failures and error responses that echo it. Query authentication remains compatible with older supported servers. After upgrading every affected instance, rotate any token captured in retained logs and review access to those logs. Upgrading does not remove credentials from earlier log entries.
+- The GitHub-to-GitLab mirror passes credentials through temporary HTTP authentication headers, refuses branch divergence and keeps existing tags immutable. Credentials are no longer stored in Git remotes or passed on command lines. Mirror secrets belong in the `gitlab-mirror` environment, limited to `main` and `v*` tags, with the repository-level token copy removed.
+- Update the supported Go 1.26 toolchain to 1.26.9 and `golang.org/x/net` to 0.60.0 for the October security fixes. CI and container builds use the patched toolchain.
+
+
+## [3.0.0] - 2026-09-17
+
+This major release changes the management listener to loopback by default. Before upgrading, review remote health probes and Prometheus scrapers. Prefer the bundled local probes. If remote access is required, set `DNSWEAVER_HEALTH_ADDRESS=0.0.0.0` and `DNSWEAVER_HEALTH_ALLOW_NETWORK=true`, then restrict access with a NetworkPolicy, firewall or equivalent control. The opt-in does not provide authentication.
+
+### Added
+
+- **Workloads can select provider instances across all hostname sources.** `dnsweaver.instances` and the Kubernetes annotation `dnsweaver.dev/instances` narrow routing within the operator's configured scope. Named-record provider overrides take precedence. Route changes retire exact owned members live and after restart on TXT-capable providers; malformed selections, incomplete discovery and failed destinations preserve previous routes. ([GitHub #183](https://github.com/maxfield-allison/dnsweaver/issues/183))
+
+- **Provider-scoped record sets preserve every distinct A and AAAA member.** Claims are deduplicated only after provider routing and target resolution, so repeated claims for one target create one record while distinct Proxmox, Incus, or named-record targets remain separate members. Ownership markers, replacement, orphan cleanup, provider-route changes, restart recovery, and the deletion circuit breaker now operate on exact members without removing unrelated siblings. Built-in providers either delete an exact member or retain their documented safe limitation. ([GitHub #177](https://github.com/maxfield-allison/dnsweaver/issues/177))
+- **Existing-record adoption can now be scoped to a provider, workload, or named record.** `DNSWEAVER_{NAME}_ADOPT_EXISTING` overrides the global policy for one provider. `dnsweaver.adopt` and `dnsweaver.dev/adopt` apply to every hostname found on a workload, including hostnames discovered through Traefik, while `dnsweaver.records.<name>.adopt` can narrow one named record. Workloads may always disable adoption. Enabling it from a workload requires `DNSWEAVER_{NAME}_ADOPT_EXISTING_ALLOW_OVERRIDES=true` on each provider that permits the takeover, so one label cannot grant itself access to every DNS backend. ([GitHub #178](https://github.com/maxfield-allison/dnsweaver/issues/178))
+
+### Changed
+
+- **Breaking: management endpoints now bind to loopback by default.** Remote health probes and Prometheus scrapers need an explicit listener address and network opt-in, with separate access restrictions. Bundled container and Kubernetes probes use local checks. See the [migration guide](https://github.com/maxfield-allison/dnsweaver/blob/v3.0.0/docs/observability.md#migrating-from-earlier-releases) before upgrading.
+
+### Fixed
+
+- **Technitium instances on different servers remain distinct backends.** The normal provider factory discarded the configured API URL from its backend identity, so instances serving the same zone on separate servers could be grouped together and leave the previous route stale when selection changed.
+- **Kubernetes namespace filters now scope informer API requests.** Configured namespaces previously filtered the local cache only, so dnsweaver still required cluster-wide list/watch permissions. Each configured namespace now gets its own informer and can be authorized with namespace-scoped RBAC.
+- **Managed mode now leaves unowned same-type records untouched when adoption is disabled.** A pre-existing A, AAAA, CNAME, or SRV record with a different target could previously be updated even though `ADOPT_EXISTING=false`. Adoption policy now guards ownership creation, provider-state updates, target changes, type-conflict replacement, and create-race conflicts through one decision path.
+- **TXT reconciliation now converges without deleting unrelated values.** Ownership applies to exact TXT members, including quoted provider forms, so a second identical reconciliation is a no-op and authoritative mode does not widen a managed TXT change to other values at the same owner name.
+- **Failed cross-type replacement attempts to restore the previous answer and ownership.** Replacing A/AAAA/CNAME records now compensates after a failed create instead of leaving the old answer deleted. The compensation is best effort and is reported if restoration itself fails.
+- **Cloudflare update logs reflect the state accepted by the API.** The update response is parsed and compared with the request; normalized type, name, content, TTL, or proxy state is reported rather than silently logging only the requested values.
+
+### Security
+
+- Provider hints can narrow routing only to a provider that also matches the configured domain and workload-metadata scope; workload input cannot use an explicit provider name to widen operator policy.
+- Provider HTTP clients reject redirects that change scheme, host, or effective port before copying custom credential headers. Same-origin redirects remain supported.
+- Explicit TLS and secret-file configuration now fails closed. Invalid trust, client-certificate, minimum-version, or unreadable `*_FILE` settings stop provider construction or requests instead of falling back to a different credential or trust policy.
+- dnsmasq managed files are replaced atomically and symlink targets are rejected for both local and SFTP writes. Remote atomic updates require the OpenSSH POSIX rename extension and fail closed when it is unavailable.
+- Six dependency findings have narrowly scoped, time-bounded exceptions for the exact Docker client and `x/crypto` module/package reachability observed by the pinned scanner. They are due for review on 2026-10-16 and expire on 2026-12-16. Changed scope or a due review fails the gate; an available supported fix requires immediate maintainer review. GO-2026-5158 was fixed by the OpenTelemetry update and is not excepted.
+- Readiness checks run on a bounded background interval and expose only an aggregate cached state, avoiding request-triggered provider calls and raw upstream error disclosure. A non-loopback listener requires a separate NetworkPolicy, firewall, or equivalent access restriction; the network opt-in does not provide authentication.
+
+### Dependencies
+
+- The supported Go 1.26 line is patched to Go 1.26.8, OpenTelemetry core is updated to 1.44.0, and `golang.org/x/crypto` is updated to 0.57.0 with its compatible transitive modules.
+
+### CI
+
+- Container publication now promotes the same amd64 and arm64 digests that passed runtime checks and vulnerability scanning. SBOMs, checksums and declared unsigned provenance accompany the release. Publication is manual, verifies the public tag, resumes matching drafts and refuses conflicting version tags; failed `latest` updates attempt rollback. See the [release procedure](https://github.com/maxfield-allison/dnsweaver/blob/v3.0.0/docs/contributing/releases.md).
+- GitLab Go jobs use project-scoped dependency and compiler caches with bounded parallelism. Blocking lint retains package-loading timings and resource evidence without increasing its five-minute timeout.
+
+- Vulnerability checks now run pinned `govulncheck` structured output through one fail-closed policy gate. Missing tools, timeouts, malformed or truncated output, scanner failure, unknown findings, and undecided exceptions all fail while retaining raw and normalized evidence.
+- GitLab merge-request admission now covers Go, module, gate, workflow, Dockerfile, and entrypoint changes. Lint is blocking, tool and image versions are pinned, raw Go coverage is no longer mislabeled as Cobertura, and obsolete success-masking Swarm deployment jobs are removed.
+- CodeQL is updated from 4.37.9 to 4.38.0.
+
+## [2.8.2] - 2026-09-03
+
+`v2.8.1` was tagged, but its image pipeline stopped before the public release
+or multi-architecture images were published. `v2.8.2` contains the same
+application fixes and dependency updates, plus the release-pipeline correction
+below.
+
+### CI
+
+- **Release image jobs now complete on GitLab runners.** The internal image
+  path follows `CI_REGISTRY_IMAGE`, and the built-image healthcheck test copies
+  its fixture through the Docker API so host-socket runners do not need to
+  resolve the job container's filesystem.
+  ([GitHub #190](https://github.com/maxfield-allison/dnsweaver/pull/190))
+
+## [2.8.1] - 2026-09-02
+
+### Fixed
+
+- **Container image defaults no longer override YAML logging and dry-run
+  settings.** The official image no longer sets
+  `DNSWEAVER_DRY_RUN=false`, `DNSWEAVER_LOG_LEVEL=info`, or
+  `DNSWEAVER_LOG_FORMAT=json`. Those image defaults were treated as explicit
+  environment overrides, making `reconciler.dry_run`, `logging.level`, and
+  `logging.format` in configuration files unreachable. The compiled defaults
+  remain `false`, `info`, and `json`, while values set by the operator still
+  take precedence.
+  ([GitHub #184](https://github.com/maxfield-allison/dnsweaver/pull/184))
+- **Container health checks now follow the configured server port.** The
+  official image no longer forces `DNSWEAVER_HEALTH_PORT=8080`, so
+  `server.port` in YAML works inside the container. Its built-in healthcheck
+  resolves the same YAML and environment precedence as the server, including
+  configs passed with `--config`, and probes the effective port without adding
+  `wget` or `curl` to the runtime image.
+  ([GitHub #187](https://github.com/maxfield-allison/dnsweaver/issues/187),
+  [#188](https://github.com/maxfield-allison/dnsweaver/pull/188))
+
+### Security
+
+- **`golang.org/x/crypto` bumped from 0.55.0 to 0.56.0** for
+  GO-2026-6354 and GO-2026-6355, which `govulncheck` found reachable through
+  dnsweaver's SSH call paths.
+  ([GitHub #186](https://github.com/maxfield-allison/dnsweaver/pull/186))
+
+### Dependencies
+
+- **DNS and Kubernetes modules updated.** `github.com/miekg/dns` moved from
+  1.1.72 to 1.1.73, while `k8s.io/api`, `k8s.io/apimachinery`, and
+  `k8s.io/client-go` moved from 0.36.3 to 0.37.0 along with their
+  transitive dependency graph.
+  ([GitHub #181](https://github.com/maxfield-allison/dnsweaver/pull/181))
+
+### CI
+
+- **CodeQL action bumped from 4.37.6 to 4.37.9.**
+  ([GitHub #169](https://github.com/maxfield-allison/dnsweaver/pull/169),
+  [#182](https://github.com/maxfield-allison/dnsweaver/pull/182))
+- **Built-image healthcheck coverage now runs in both CI systems.** The GitHub
+  Build job and GitLab amd64 image build start real images with YAML and
+  environment-selected non-default ports, then verify that the container
+  becomes healthy on the expected port.
+  ([GitHub #188](https://github.com/maxfield-allison/dnsweaver/pull/188))
+
+## [2.8.0] - 2026-08-23
+
+### Fixed
+- **Changing the Cloudflare proxied state did not reach existing records.** A
+  `dnsweaver.proxied` label (or `dnsweaver.dev/proxied` annotation) was honored
+  on creation and on a target change only; once a record existed with the
+  right target it was skipped, so flipping the label on a proxied record left
+  it proxied and no update was logged. The same was true of changing an
+  instance's `PROXIED` default. The reconciler now asks the provider whether it
+  would write different state for a record that already matches on hostname,
+  type and target, and updates it in place when so. For Cloudflare that is the
+  proxied flag, resolved exactly as a write resolves it (per-record override,
+  then instance default, then the non-routable-target demotion), so a changed
+  default is picked up as well as a changed label, and a record whose state
+  already matches is never rewritten. Cloudflare's TTL 1 ("automatic") on
+  proxied records is deliberately not compared, so steady state stays a no-op.
+  Only records dnsweaver manages are updated this way (its own records, or any
+  matching record with `ADOPT_EXISTING=true`); unmanaged records are left as
+  found. A target change now also carries the per-record metadata, so updating
+  a record that had `proxied=false` no longer re-proxies it. Providers other
+  than Cloudflare are unaffected.
+  ([GitHub #170](https://github.com/maxfield-allison/dnsweaver/issues/170))
+- **DHCP-configured LXC containers were skipped entirely.** IP resolution read
+  the container's `net0` config and gave up when it found `ip=dhcp`, because a
+  DHCP container's address exists only inside the running container. dnsweaver
+  now falls back to `/nodes/{node}/lxc/{vmid}/interfaces`, which reports the
+  live address from the container's network namespace, so DHCP containers get
+  DNS records like every other workload. The endpoint requires only `VM.Audit`
+  — already part of the documented role — and is queried only when the config
+  comes up short, so statically addressed containers make the same number of
+  API calls as before. On PVE releases that predate the endpoint the lookup
+  fails softly and config-derived resolution is unchanged.
+- **Only the first LXC network interface was considered.** A container with
+  `net1`, `net2`, and so on had those interfaces ignored, so a container whose
+  address lived on anything but `net0` resolved to nothing. Every `netN` entry
+  is now read, in numeric order, and `DNSWEAVER_PROXMOX_INTERFACE_TAG_PREFIX`
+  and `DNSWEAVER_PROXMOX_ALLOWED_INTERFACES` apply to containers the same way
+  they already applied to VMs.
+- **A pre-existing record of a conflicting type blocked the configured record
+  forever.** When a hostname already held a CNAME at the time dnsweaver started
+  managing it (created by hand, or left over from an earlier configuration) and
+  the instance was configured for an A record, or the reverse, the conflict was
+  reported as `skipping due to record type conflict` on every interval and
+  nothing ever changed: the CNAME stayed and the A record was never created.
+  Orphan cleanup could not help because the hostname was still desired, and
+  `DNSWEAVER_ADOPT_EXISTING` was never consulted. The conflicting record is now
+  deleted and replaced when the instance is allowed to delete it: authoritative
+  mode, `DNSWEAVER_ADOPT_EXISTING=true`, or an ownership record showing the
+  stale record is dnsweaver's own. Additive mode never deletes, so it still
+  skips. When the record cannot be replaced the warning is logged once rather
+  than every interval, and names the setting that would let dnsweaver resolve
+  it. Dry-run reports what would be replaced; a failed delete marks the action
+  failed and nothing is created on top of the leftover record.
+  ([GitHub #171](https://github.com/maxfield-allison/dnsweaver/issues/171))
+
+### Added
+- **Dual-stack support for the Proxmox source.** `DNSWEAVER_PROXMOX_IP_VERSION`
+  selects which address families to resolve: `ipv4` (default, A records),
+  `ipv6` (AAAA records), or `dual` (both, for guests that have both). Providers
+  have supported AAAA for some time; the Proxmox source was discarding IPv6
+  addresses before they ever reached one. Address family is now determined by
+  parsing each address rather than by trusting the API's family label, because
+  the QEMU guest agent reports `ipv4`/`ipv6` while the LXC interfaces endpoint
+  passes through the kernel's `inet`/`inet6`. IPv6 unique local addresses
+  (`fc00::/7`) are treated as valid targets for the same reason RFC 1918 space
+  is: they are what homelab guests use. Link-local, documentation, and
+  discard-prefix addresses are filtered.
+- **PVE resource pools are exposed as workload labels.** Each pooled guest gets
+  a `proxmox.pool/<pool>=true` label and a `pool` metadata key, so records can
+  be routed by pool — the closest thing PVE has to a tenant boundary. Requires
+  no new privilege; `Pool.Audit` was already required.
+
+### Security
+- **Go toolchain bumped to 1.26.6** (from 1.26.5) for five standard-library
+  advisories that `govulncheck` had started flagging on every pull request:
+  [GO-2026-6218](https://pkg.go.dev/vuln/GO-2026-6218) (`net/url`),
+  [GO-2026-6090](https://pkg.go.dev/vuln/GO-2026-6090) (`crypto/tls`),
+  [GO-2026-6089](https://pkg.go.dev/vuln/GO-2026-6089) (`net/http`),
+  [GO-2026-5972](https://pkg.go.dev/vuln/GO-2026-5972) (`encoding/asn1`) and
+  [GO-2026-5026](https://pkg.go.dev/vuln/GO-2026-5026) (`golang.org/x/net/idna`
+  via `net/http`). The `golang:1.26.6-alpine` pins in `.gitlab-ci.yml` and the
+  `Dockerfile` move with it, since neither reads `go.mod`.
+- **`golang.org/x/mod` bumped to 0.40.0** for CVE-2026-56864 and CVE-2026-56865
+  (a malicious GOSUMDB or GOPROXY could serve forged module data), which Trivy
+  flagged on the release pipeline. The same tidy moved `x/net`, `x/text`,
+  `x/tools` and `x/crypto` to their current releases.
+
+## [2.7.3] - 2026-08-12
+
+### Fixed
+- **Coexisting record types were rejected as conflicts, stalling reconciliation.**
+  Any existing record whose type differed from the desired one was treated as a
+  conflict, so dnsweaver logged `skipping due to record type conflict` and made
+  no changes. DNS only forbids one combination — a CNAME cannot share a name
+  with any other record (RFC 1034 §3.6.2, RFC 2181 §10.1) — and that is now the
+  only case that skips. A + AAAA dual-stack instances, SRV records, and HTTPS
+  records may coexist as they do in real zones. This most often hit single
+  Technitium instances on default settings: the companion HTTPS record dnsweaver
+  creates itself was seen as a conflict on the next pass, so target changes
+  stopped being applied after the first successful create, and deleting one
+  record never restored it.
+  ([GitHub #165](https://github.com/maxfield-allison/dnsweaver/issues/165))
+- **Technitium no longer attempts a companion HTTPS record for CNAME instances.**
+  A CNAME is exclusive, so Technitium rejected the companion and dnsweaver
+  logged a warning on every reconcile. Companions are now created for A and AAAA
+  records only; hostnames fronted by a CNAME inherit the HTTPS record of the
+  name they point at. Companions written by earlier releases are still deleted
+  when their CNAME is removed.
+  ([GitHub #165](https://github.com/maxfield-allison/dnsweaver/issues/165))
+- **Self-referential CNAMEs are skipped instead of retried.** When the configured
+  target is itself a discovered hostname — a reverse proxy with a router rule of
+  its own — dnsweaver tried to create a CNAME pointing at its own name once per
+  interval. It is now skipped with a single warning naming the hostname.
+  ([GitHub #165](https://github.com/maxfield-allison/dnsweaver/issues/165))
+
+## [2.7.2] - 2026-08-07
+
+### Changed
+- **Cloudflare auto-disables proxying for non-routable targets.** An A/AAAA
+  record whose target is a private or otherwise non-routable IP (RFC1918,
+  loopback, link-local, IPv4 CGNAT `100.64.0.0/10`, IPv6 ULA `fc00::/7`, the
+  unspecified address) can never be proxied by Cloudflare — it rejects such
+  records with error `9003`. dnsweaver now detects this and creates the record
+  unproxied instead of failing, logging a warning that names the target. An
+  explicit per-record `proxied=true` on such a target is still demoted (it could
+  only ever error), with a louder warning noting the override. CNAME targets are
+  left untouched, since their routability can't be determined without a runtime
+  lookup. This makes the `proxied` label unnecessary for internal records.
+  ([GitHub #161](https://github.com/maxfield-allison/dnsweaver/issues/161))
+
+### Fixed
+- **Source collision could drop a per-record `proxied` override.** When one
+  workload exposed the same hostname via both a Traefik router rule and a native
+  `dnsweaver.records.<name>.*` label, deduplication kept whichever source was
+  listed first in `DNSWEAVER_SOURCES` rather than the more specific declaration.
+  Because the Traefik source carries no per-record hints, a native
+  `proxied=false` override (and its target) was silently discarded whenever
+  Traefik was registered first, causing the provider default to apply — e.g. a
+  Cloudflare `9003` error for a proxied record pointing at a private IP.
+  Hostname collisions on a single workload are now resolved by explicit hint
+  precedence: a candidate carrying record hints wins over one without,
+  regardless of source ordering, and instance-selection metadata from the losing
+  candidate is preserved. Same-workload multi-source declarations are no longer
+  counted or warned as cross-workload duplicates.
+  ([GitHub #159](https://github.com/maxfield-allison/dnsweaver/issues/159))
+
+## [2.7.1] - 2026-07-28
+
+### Fixed
+- **Dynamic target modes were rejected at startup.** A provider instance
+  configured with `DNSWEAVER_{NAME}_TARGET_MODE` (`public` or `interface:<name>`)
+  but no static `DNSWEAVER_{NAME}_TARGET` failed provider initialization with
+  `target: required but not set`. Config loading accepted the mode, but the
+  target mode was dropped before provider validation, which still required a
+  literal target, so the feature's primary use case (resolve the target
+  dynamically, no static IP) never started. The target mode now flows through to
+  provider validation, which treats `TARGET` as an optional fallback whenever a
+  mode is set. A static fallback, when provided, is still checked against the
+  record type. ([GitHub #130](https://github.com/maxfield-allison/dnsweaver/issues/130))
+
+## [2.7.0] - 2026-07-28
+
+### Added
+- **Proxmox interface selection improvements.** `DNSWEAVER_PROXMOX_ALLOWED_INTERFACES`
+  now matches interface-name prefixes (so `eth` matches `eth0`), per-VM interface
+  tags from `DNSWEAVER_PROXMOX_INTERFACE_TAG_PREFIX` override the allow-list,
+  and if no allowed or tagged interface resolves, dnsweaver falls back to the
+  first non-loopback IPv4 address rather than skipping the VM.
+- **Misspelled environment-prefix detection.** On startup dnsweaver scans the
+  environment for variables whose prefix closely resembles `DNSWEAVER_` but is
+  misspelled (for example `DNSWEVAER_CLOUDFLARE_TARGET_MODE`, with the `V` and
+  `A` transposed) and logs a warning naming the corrected variable. Such
+  variables were previously ignored silently and typically surfaced later as a
+  confusing "required but not set" error for the value the user believed they
+  had set. Only close misspellings of the prefix are flagged, so unrelated
+  environment variables and correctly prefixed keys are never reported.
+  ([GitHub #154](https://github.com/maxfield-allison/dnsweaver/issues/154))
+
+### Fixed
+- **Log injection via URLs in debug logs.** `sanitizeURL`, used when the HTTP
+  transport logs request and response URLs at debug level, redacted sensitive
+  query parameters but passed the rest of the URL through unchanged. A URL
+  carrying CR/LF or other control characters could forge or split a log entry.
+  The sanitizer now strips ASCII control characters from its output, resolving
+  the CodeQL `go/log-injection` alerts.
+  ([GitHub #155](https://github.com/maxfield-allison/dnsweaver/pull/155))
+
+### Changed
+- **Dependencies.** Bumped `prometheus/client_golang` to 1.24.1, `k8s.io/api`
+  and `k8s.io/client-go` to 0.36.3, and the `actions/setup-go` and
+  `actions/setup-python` CI actions to v7.
+  ([GitHub #153](https://github.com/maxfield-allison/dnsweaver/pull/153),
+  [#150](https://github.com/maxfield-allison/dnsweaver/pull/150),
+  [#151](https://github.com/maxfield-allison/dnsweaver/pull/151))
+
+## [2.6.0] - 2026-07-15
+
+### Added
+- **Incus server certificate pinning** (`DNSWEAVER_INCUS_TLS_PIN_SHA256`). Pin
+  the Incus server's leaf certificate to a SHA-256 fingerprint to verify a
+  self-signed server without a CA file and without disabling verification. This
+  fixes remote HTTPS connections against Incus's default certificate, which
+  carries only loopback SANs (`127.0.0.1`, `::1`) and so fails hostname
+  verification against a LAN address. Trust-token enrollment now sets this pin
+  automatically from the fingerprint embedded in the token (persisted as
+  `server.fingerprint` in the cert store) so token onboarding over a remote
+  address works out of the box. The pin is also usable standalone with a
+  pre-provisioned certificate for a fully stateless setup. Thanks to
+  [@jochumdev](https://github.com/jochumdev) for the report and repro.
+  ([GitHub #148](https://github.com/maxfield-allison/dnsweaver/pull/148))
+- **Incus trust-token authentication.** dnsweaver can enroll its own client
+  certificate against the Incus API using a one-time trust token instead of a
+  pre-provisioned certificate. Set `DNSWEAVER_INCUS_TRUST_TOKEN` and a writable
+  `DNSWEAVER_INCUS_CERT_STORE`: on first start dnsweaver generates an ECDSA
+  keypair + self-signed client certificate, registers it via `POST
+  /1.0/certificates`, and persists it (mode `0600`) for reuse. Because trust
+  tokens are single-use, subsequent starts reuse the persisted certificate and
+  ignore the token (idempotent). When `DNSWEAVER_INCUS_PROJECTS` is set the
+  certificate is registered restricted to those projects. Falls back to the
+  existing `DNSWEAVER_INCUS_TLS_CERT_FILE` / `_KEY_FILE` when no token is set.
+  Thanks to [@jochumdev](https://github.com/jochumdev) for the request and the
+  reference flow. ([GitHub #134](https://github.com/maxfield-allison/dnsweaver/issues/134))
+- **Automatic target IP detection** for provider instances. Set
+  `DNSWEAVER_{NAME}_TARGET_MODE` to resolve a record's target at runtime instead
+  of hardcoding it: `public` discovers the host's public IP via HTTP echo
+  endpoints (with fallback and a configurable endpoint list), and
+  `interface:<name>` reads the primary IP of a named network interface. The
+  resolver is family-aware (A→IPv4, AAAA→IPv6; CNAME is rejected), keeps the last
+  known-good value on failure (no DNS churn), and re-resolves every
+  `DNSWEAVER_{NAME}_TARGET_REFRESH_INTERVAL` (default 5m), triggering a reconcile
+  when the value changes. `DNSWEAVER_{NAME}_TARGET` becomes an optional fallback
+  when a mode is set. Both modes work in-container with no extra mounts.
+  ([GitHub #130](https://github.com/maxfield-allison/dnsweaver/issues/130))
+- **incus-compose label support** for the Incus source. [incus-compose](https://github.com/lxc/incus-compose)
+  stores Compose `labels:` entries as `user.label.<key>` instance config keys.
+  The Incus adapter now surfaces each such key under its stripped `<key>` form
+  (in addition to the verbatim key), so the existing `traefik`, `caddy`,
+  `nginx-proxy`, and `dnsweaver` sources consume incus-compose labels with no
+  extra configuration. The Incus source's own hostname override also honors the
+  de-prefixed `dnsweaver.hostname` label. The raw `user.label.*` key is always
+  retained, and a stripped alias never overwrites an existing label.
+  ([GitHub #131](https://github.com/maxfield-allison/dnsweaver/issues/131))
+- **Event-driven Incus source** for near-instant DNS updates. A new watcher
+  subscribes to the Incus event stream (`/1.0/events`, lifecycle events) and
+  triggers reconciliation the moment an instance changes, instead of waiting for
+  the next poll tick. It mirrors the Docker watcher: debounced triggering (bursts
+  such as `incus-compose up` collapse into a single reconcile), automatic
+  reconnect with backoff, and graceful shutdown. The instance lister remains the
+  source of truth and the periodic poll stays as a safety net. Uses the minimal
+  `github.com/coder/websocket` dependency rather than the full Incus SDK.
+  Thanks to [@jochumdev](https://github.com/jochumdev) for the request and
+  guidance. ([GitHub #132](https://github.com/maxfield-allison/dnsweaver/issues/132))
+- **Multi-project support for the Incus source.** A single dnsweaver instance can
+  now watch many Incus projects, so one deployment can serve an entire cluster
+  instead of running one dnsweaver per project. Set
+  `DNSWEAVER_INCUS_ALL_PROJECTS=true` to watch every project (including ones
+  created later) via the API's all-projects mode, or
+  `DNSWEAVER_INCUS_PROJECTS=a,b,c` for an explicit list (projects that do not
+  exist yet are still watched and picked up when they appear). The existing
+  `DNSWEAVER_INCUS_PROJECT` single-project behavior is unchanged. All-projects
+  mode requires server-wide credentials. Both the lister and the event watcher
+  honor the selected scope. Thanks to
+  [@jochumdev](https://github.com/jochumdev) for the request.
+  ([GitHub #137](https://github.com/maxfield-allison/dnsweaver/issues/137))
+- **Proxmox hostname override tags.** The Proxmox source now supports an
+  optional `DNSWEAVER_PROXMOX_HOSTNAME_TAG_PREFIX` value to derive hostnames from
+  tags using `<prefix>+<hostname>` syntax. Explicit FQDN overrides are accepted
+  directly, and plain hostnames are combined with `DNSWEAVER_PROXMOX_DOMAIN_SUFFIX` when present.
+  ([GitHub #144](https://github.com/maxfield-allison/dnsweaver/pull/144))
+
+## [2.5.0] - 2026-07-09
+
+### Added
+- **pfSense provider** (`DNSWEAVER_{NAME}_TYPE=pfsense`) managing host overrides on
+  pfSense's DNS Resolver (Unbound, default) or DNS Forwarder (Dnsmasq), selected with
+  `ENGINE`. pfSense ships no REST API in its base system and Netgate offers no official
+  one, so the provider targets the community
+  [pfSense-pkg-RESTAPI](https://pfrest.org) v2 package (the de facto standard, CE and
+  Plus). Ownership is tracked via a `dnsweaver:{instance}` marker in the host override
+  description (host overrides carry no TXT), so operator-managed rows are never touched.
+  A/AAAA in v1; dual-stack names merge into a single Unbound override (the DNS
+  Forwarder's one-IP-per-override limit is surfaced as a clear error). REST-only
+  transport keeps `config.xml`, HA (CARP/XMLRPC) sync, and backups consistent.
+  ([GitHub #114](https://github.com/maxfield-allison/dnsweaver/issues/114))
+
+## [2.4.0] - 2026-07-08
+
+Minor release focused on Docker connectivity robustness: an opt-in for reading
+root-owned sockets (Synology), a bounded startup connection retry for label-driven
+socket proxies, and a Go toolchain security bump.
+
+### Added
+- **`DNSWEAVER_DOCKER_GID` escape hatch** for reading a Docker socket whose group
+  can't be auto-detected. The container entrypoint auto-detects a bind-mounted
+  socket's GID and adds the unprivileged `dnsweaver` user to it, but deliberately
+  skips GID 0 (root-owned sockets) rather than silently granting root-group
+  access. Platforms that force a root-owned socket and won't let you change it
+  (e.g. Synology Container Manager) can now set `DNSWEAVER_DOCKER_GID=0` to opt
+  in explicitly — the process still drops to `uid 1000` via `su-exec`, only a
+  supplementary group is added, so the application never runs as root. A loud
+  startup warning is emitted for the GID-0 case.
+  ([GitHub #79](https://github.com/maxfield-allison/dnsweaver/issues/79))
+- **Bounded Docker startup connection retry** (`DNSWEAVER_DOCKER_CONNECT_TIMEOUT`,
+  default `30s`). dnsweaver now retries the initial Docker connection with capped
+  backoff before failing hard, instead of exiting on the first error. This fixes
+  a startup race with label-driven socket proxies (e.g. `wollomatic/socket-proxy`)
+  that only authorize dnsweaver's container a few seconds after it starts — the
+  first `Info`/`ping` call would hit `403`/`405` and the process would exit. It
+  logs `waiting for docker endpoint to become available` at INFO until connected.
+  Set `DNSWEAVER_DOCKER_CONNECT_TIMEOUT=0` for strict fail-fast. Deterministic
+  misconfiguration (Swarm forced but node is not a manager) still fails
+  immediately. ([GitHub #125](https://github.com/maxfield-allison/dnsweaver/issues/125))
+
+### Changed
+- Deprecation notices for the legacy TLS aliases (`INSECURE_SKIP_VERIFY`,
+  `DNSWEAVER_PROXMOX_VERIFY_TLS`) no longer claim removal "in v2.0" — the
+  project is already past v2.0 and the aliases still ship. The operator-facing
+  log warnings now say "a future major release."
+
+### Security
+- Bumped the Go toolchain to **1.26.5** to pick up the `crypto/tls` fix for
+  [GO-2026-5856](https://pkg.go.dev/vuln/GO-2026-5856) (Encrypted Client Hello
+  privacy leak). `go.mod`, the Dockerfile `GO_VERSION`, and the GitLab CI base
+  image are bumped in lock-step.
+
+### Documentation
+- Made the **Docker socket proxy** the recommended standalone deployment path,
+  with a full runnable example
+  ([`docs/examples/docker-compose.socket-proxy.example.yml`](docs/examples/docker-compose.socket-proxy.example.yml))
+  and a Synology-specific section covering the root-owned socket case. Documented
+  socket permissions, the non-root privilege drop, and `DNSWEAVER_DOCKER_GID`.
+  ([GitHub #79](https://github.com/maxfield-allison/dnsweaver/issues/79))
+- Documented the Cloudflare per-host **`proxied` override** in the native Label
+  Reference (`dnsweaver.proxied` and `dnsweaver.records.<name>.proxied`, plus
+  `dnsweaver.records.<name>.meta.<key>`), with a worked example on the native
+  labels and Cloudflare provider pages. Previously the override was usable but
+  undocumented. ([discussion #113](https://github.com/maxfield-allison/dnsweaver/discussions/113))
+- Added the `incus` source to the `DNSWEAVER_SOURCES` enumeration and refreshed
+  stale "will be removed in v2.0" deprecation notes across the provider,
+  environment, FAQ, and Proxmox source pages.
+
+## [2.3.0] - 2026-07-04
+
+Minor release adding the OPNsense DNS provider and a standalone platform mode for
+running dnsweaver without Docker or Kubernetes.
+
+### Added
+- **Standalone platform mode** (`DNSWEAVER_PLATFORM=none`, alias `standalone`).
+  dnsweaver can now run as a bare binary on a host, VM, or LXC with no Docker or
+  Kubernetes runtime — previously it always created a Docker (or Kubernetes)
+  client at startup and exited fatally with `Cannot connect to the Docker
+  daemon` even when only non-container sources were configured. With `none`, no
+  container-runtime client is created; configure at least one non-container
+  source instead — a Proxmox VE source (`DNSWEAVER_PROXMOX_URL`), an Incus
+  source (`DNSWEAVER_INCUS_URL`/`DNSWEAVER_INCUS_SOCKET_PATH`), or a
+  file-discovery source (e.g. `DNSWEAVER_SOURCE_TRAEFIK_FILE_PATHS`). Startup
+  fails with an actionable error if `none` is set without any such source.
+  ([GitHub #116](https://github.com/maxfield-allison/dnsweaver/issues/116))
+- **OPNsense provider** with pluggable engine backend for **Unbound** and
+  **Dnsmasq** (OPNsense 24.7+), driven by the OPNsense REST API
+  ([GitHub #114](https://github.com/maxfield-allison/dnsweaver/issues/114),
+  GitLab #188). One provider covers both DNS engines OPNsense ships with;
+  pick with `DNSWEAVER_{NAME}_ENGINE=unbound|dnsmasq` (default `unbound`).
+  Ownership is tracked via a `dnsweaver:{instance}` prefix on the host
+  override's description field, since neither engine's host overrides support
+  TXT records — dnsweaver only lists and mutates rows it owns, so
+  operator-managed host overrides in the OPNsense GUI are always safe.
+  Post-write reload behavior is controlled by
+  `DNSWEAVER_{NAME}_RECONFIGURE_MODE` (`per_write` default, or `never`).
+  Supports A/AAAA in v1; see
+  [docs/providers/opnsense.md](docs/providers/opnsense.md).
+
+## [2.2.1] - 2026-07-03
+
+Patch release rolling up TLS diagnostics, RFC 2136 TTL hardening, a Go toolchain
++ dependency bump for CVE coverage, docs/SEO polish, and the sync-workflow tag
+idempotency fix. No new features and no breaking changes.
+
+### Changed
+- **TLS file permission errors now name the runtime uid/gid.** The container
+  drops privileges to the unprivileged `dnsweaver` user (uid/gid `1000`) via
+  `su-exec`, so a CA bundle, client certificate, or private key mounted
+  `root:root 0600` fails with `permission denied` even when the container is
+  started as root. The error message now reports the uid/gid the process
+  actually runs as and points at the fix, so operators no longer burn time
+  thinking "but I AM root."
+  ([#90](https://github.com/maxfield-allison/dnsweaver/issues/90),
+  [#98](https://github.com/maxfield-allison/dnsweaver/pull/98))
+- **Go toolchain pinned to 1.26.4** (from 1.25.11). `k8s.io/{apimachinery,
+  client-go}` 0.36 requires Go 1.26; pinning the patch release pulls in the
+  standard-library fixes for 13 CVEs present in 1.26.0 (`crypto/x509`,
+  `crypto/tls`, `net/http`, `net/url`, `os`, `mime`, `net/textproto`), keeping
+  `govulncheck` green.
+  ([#109](https://github.com/maxfield-allison/dnsweaver/pull/109))
+
+### Fixed
+- **RFC 2136 record TTL conversion is now clamped on both bounds.**
+  `record.TTL` is a platform `int` that can exceed `uint32` or be negative;
+  the existing conversion clamped the upper bound only, so a negative TTL
+  would wrap to a large `uint32`. TTLs are now clamped through an explicit
+  `clampTTL` helper (`v<0 → 0`, `v>MaxUint32 → MaxUint32`) that CodeQL
+  recognizes as a bounds check, closing the
+  `go/incorrect-integer-conversion` alert without relying on Go's `min`/`max`
+  builtins.
+  ([#108](https://github.com/maxfield-allison/dnsweaver/pull/108),
+  [#110](https://github.com/maxfield-allison/dnsweaver/pull/110))
+- **GitHub→GitLab tag sync no longer creates spurious "tag differs" pipelines.**
+  The sync workflow now compares peeled commit SHAs when checking whether an
+  existing tag matches, so annotated tags (which point at a tag object, not a
+  commit) are treated as equivalent to their commit-pointing counterparts.
+  ([#97](https://github.com/maxfield-allison/dnsweaver/pull/97))
+
+### Dependencies
+- Bumped the `go-dependencies` group:
+  `golang.org/x/crypto` 0.52.0 → 0.53.0, `k8s.io/apimachinery` and
+  `k8s.io/client-go` 0.35.2 → 0.36.2.
+  ([#109](https://github.com/maxfield-allison/dnsweaver/pull/109))
+- Bumped GitHub Actions to current majors:
+  `actions/setup-go` 5→6 ([#101](https://github.com/maxfield-allison/dnsweaver/pull/101)),
+  `actions/configure-pages` 4→6 ([#102](https://github.com/maxfield-allison/dnsweaver/pull/102)),
+  `github/codeql-action` 3→4 ([#103](https://github.com/maxfield-allison/dnsweaver/pull/103)),
+  `actions/setup-python` 5→6 ([#104](https://github.com/maxfield-allison/dnsweaver/pull/104)),
+  `actions/checkout` 4→7 ([#105](https://github.com/maxfield-allison/dnsweaver/pull/105)),
+  `actions/upload-pages-artifact` 3→5 ([#111](https://github.com/maxfield-allison/dnsweaver/pull/111)),
+  `actions/deploy-pages` 4→5 ([#112](https://github.com/maxfield-allison/dnsweaver/pull/112)).
+
+### Documentation
+- Added a **TLS Certificate File Permissions** section to the environment
+  reference (chown / group-readable / Docker secrets recipes), linked from the
+  README TLS section and every provider's mTLS example (Technitium, AdGuard,
+  Cloudflare, Pi-hole, Webhook) plus the Proxmox source.
+  ([#90](https://github.com/maxfield-allison/dnsweaver/issues/90))
+- **Discoverability & SEO pass:** added a "Why dnsweaver?" positioning section
+  and a Star History chart to the README, published a Docker Hub overview
+  (`docker/DOCKERHUB.md`) with a CI job that pushes it to Docker Hub's
+  `full_description` on release, and added SEO meta descriptions to provider,
+  source, deployment, and getting-started pages (coverage went from 10/46 to
+  every high-intent page).
+  ([#107](https://github.com/maxfield-allison/dnsweaver/pull/107))
+
+### Repository
+- Community-health scaffolding: `CODE_OF_CONDUCT.md`, issue and PR templates,
+  Dependabot config for Go / GitHub Actions / Docker, CodeQL analysis workflow,
+  and a CI status badge in the README.
+  ([#100](https://github.com/maxfield-allison/dnsweaver/pull/100))
+
+### CI
+- **GitLab CI runner image and Dockerfile builder image bumped to
+  `golang:1.26.4-alpine`** to match the `go.mod` toolchain pin from #109. The
+  initial `v2.2.1` tag pipeline failed with
+  `go.mod requires go >= 1.26.4 (running go 1.25.11)`; this bumps both build
+  surfaces in lock-step.
+
+## [2.2.0] - 2026-06-22
+
+### Added
+- **Incus platform source** (`DNSWEAVER_SOURCES=incus`). Discovers running Incus
+  system containers and virtual machines and creates DNS `A` records mapping
+  each instance to its resolved IP address. Connects either to a local Unix
+  socket (`DNSWEAVER_INCUS_SOCKET_PATH`) or a remote HTTPS endpoint
+  (`DNSWEAVER_INCUS_URL`) secured with a client certificate — the two are
+  mutually exclusive. Per-source configuration:
+  - `DNSWEAVER_INCUS_PROJECT` — restrict discovery to a single Incus project.
+  - `DNSWEAVER_INCUS_STATE_FILTER` — instance status filter (default `running`).
+  - `DNSWEAVER_INCUS_DOMAIN_SUFFIX` — domain appended to instance names
+    (e.g. `webserver` → `webserver.home.example.com`).
+  - `DNSWEAVER_INCUS_TARGET_MODE` — `guest-ip` (default, A record per instance
+    IP) or `instance` (defer record type/target to the matching provider, for
+    CNAME-to-reverse-proxy setups).
+  - `DNSWEAVER_INCUS_TLS_*` — unified TLS surface (custom CA, mTLS client cert,
+    SNI override, configurable minimum version) for remote HTTPS access.
+
+  Hostname precedence: a `user.dnsweaver.hostname` instance config key (verbatim
+  override) > an instance name that is already an FQDN > `<name>.<domain>`.
+  Instances with no resolvable IP are skipped as a liveness gate. The source is
+  auto-registered when an Incus endpoint is configured.
+
+### Fixed
+- **Documentation:** the landing-page "Supported Providers" table and the
+  testing record-type support matrix were missing the OVHcloud and PowerDNS
+  providers added in 2.1.0 (the matrix also omitted AdGuard Home). Both now
+  list all nine providers, matching the provider reference and `mkdocs` nav.
+
+## [2.1.0] - 2026-06-21
+
+### Added
+- **OVHcloud DNS provider** (`TYPE=ovh`). Manages `A`, `AAAA`, `CNAME`, `SRV`,
+  and `TXT` records in OVH DNS zones via the OVH API. Authenticates with an
+  application key, application secret, and consumer key (all support the `_FILE`
+  suffix for Docker/Kubernetes secrets) and signs requests against OVH server
+  time. Per-instance configuration:
+  - `DNSWEAVER_{NAME}_APPLICATION_KEY` / `_APPLICATION_SECRET` / `_CONSUMER_KEY`
+    — OVH API credentials (required).
+  - `DNSWEAVER_{NAME}_ENDPOINT` — API region (`ovh-eu` default, plus `ovh-ca`,
+    `ovh-us`, `kimsufi-*`, `soyoustart-*`).
+  - `DNSWEAVER_{NAME}_ZONE` — DNS zone name (required).
+  - `DNSWEAVER_{NAME}_TTL` — record TTL (default `3600`, minimum `60`, or `0`
+    for the zone default).
+  Hostnames are converted to zone-relative subdomains automatically and the zone
+  is refreshed after every change so updates propagate without manual steps. The
+  provider supports native in-place updates and shares the unified TLS
+  configuration surface (`DNSWEAVER_{NAME}_TLS_*`).
+- **PowerDNS provider via the native Authoritative HTTP API** (`TYPE=powerdns`).
+  Manages A/AAAA/CNAME/SRV/TXT records in a pre-existing zone using the PowerDNS
+  `/api/v1` REST API with `X-API-Key` authentication, including native in-place
+  updates and TXT ownership tracking. This complements the existing
+  [RFC 2136](https://maxfield-allison.github.io/dnsweaver/providers/rfc2136/)
+  path (which drives PowerDNS over DNS UPDATE/TSIG). New per-instance variable
+  `DNSWEAVER_{NAME}_SERVER_ID` (default `localhost`).
+
+## [2.0.0] - 2026-06-21
+
+This release contains no runtime behavior changes. It is a breaking release
+solely because the Go module path changed, which requires a major version bump
+under Semantic Versioning. It also re-architects the project's collaboration and
+release workflow.
+
+### Changed
+- **BREAKING: module path is now `github.com/maxfield-allison/dnsweaver`**
+  (previously a private GitLab path). Public consumers can now `go get` the
+  module by its declared path, and `pkg.go.dev` can resolve it. Anyone importing
+  the previous path must update their imports. No runtime behavior changed.
+
+### Infrastructure
+- **GitHub is now the source of truth and collaboration surface.** Issues, pull
+  requests, code review, and releases live on GitHub; the project follows GitHub
+  Flow with `main` as the always-releasable trunk. External contributions are
+  now possible — the previous GitLab→GitHub force-push mirror that clobbered
+  merges has been removed.
+- **Free PR validation on GitHub Actions** (`lint`, `test -race`, `build`,
+  `govulncheck`) runs on every pull request.
+- **GitLab remains the release engine**, building multi-arch images
+  (GHCR + Docker Hub) and publishing GitHub Releases on version tags. `main` and
+  tags are synced one-way GitHub→GitLab.
+- Removed the dead `advanced-git-sync` integration.
+## [1.6.0] - 2026-06-10
+
+### Added
+- **SSH remote management for the dnsmasq provider is now functional**
+  ([GitHub #91](https://github.com/maxfield-allison/dnsweaver/issues/91),
+  GitLab #186). SSH mode was documented and config-validated since v0.7.0 but
+  the transport was never wired into the provider, so every reload ran inside
+  the dnsweaver container instead of on the remote host (producing errors such
+  as `exec: "supervisorctl": executable file not found in $PATH`). The provider
+  now uses the shared `pkg/sshutil` package: SFTP writes the managed config file
+  on the remote host and SSH exec runs `RELOAD_COMMAND` there. No shared volumes
+  or local mounts are required.
+- **SSH host key verification via `known_hosts`** (GitLab #153). Two new
+  per-instance variables for the dnsmasq provider:
+  - `DNSWEAVER_{NAME}_SSH_KNOWN_HOSTS_FILE` — path to an OpenSSH `known_hosts`
+    file used to verify the remote host key. Supports the `_FILE` suffix for
+    Docker secrets.
+  - `DNSWEAVER_{NAME}_SSH_STRICT_HOST_KEY_CHECKING` — `true` (default) or
+    `false`. When enabled, a `known_hosts` file is required and a changed or
+    unknown host key fails the connection fast with a clear error.
+  Host-key verification lives in `pkg/sshutil`, so it is reusable by any future
+  SSH-based provider.
+- `Closer` interface in `pkg/provider`. Providers that hold long-lived
+  connections (such as the dnsmasq SSH transport) are now closed cleanly when
+  the registry shuts down.
+
+### Changed
+- **SSH host key verification is enabled by default** for the dnsmasq provider
+  (`SSH_STRICT_HOST_KEY_CHECKING=true`). Because SSH mode never actually
+  connected before this release, there is no practical behavior change for
+  existing deployments. Operators who want the previous unverified behavior can
+  set `SSH_STRICT_HOST_KEY_CHECKING=false` (insecure; a warning is logged on
+  every connection).
+- SSH-configured dnsmasq instances now **fail fast at startup** if the remote
+  host is unreachable or the host key cannot be verified, instead of silently
+  falling back to local execution.
+
+### Fixed
+- dnsmasq reload commands configured for SSH mode now execute on the remote host
+  via SSH exec rather than inside the dnsweaver container
+  ([GitHub #91](https://github.com/maxfield-allison/dnsweaver/issues/91)).
+
+### Security
+- **Go toolchain updated from 1.25.10 to 1.25.11**, resolving three standard
+  library advisories surfaced by `govulncheck`: `GO-2026-5037` (`crypto/x509`),
+  `GO-2026-5038` (`mime`), and `GO-2026-5039` (`net/textproto`).
+- **`go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp` updated
+  from v1.39.0 to v1.43.0** (transitive via the Docker SDK), resolving
+  `CVE-2026-39882`.
+
+## [1.5.0] - 2026-05-28
+
+### Added
+- **Unified TLS configuration across every HTTP provider and the Proxmox
+  source** ([GitHub #89](https://github.com/maxfield-allison/dnsweaver/issues/89),
+  GitLab #183). A single `httputil.TLSConfig` now drives TLS for `technitium`,
+  `adguard`, `cloudflare`, `pihole`, `webhook`, and the Proxmox VE client.
+  New per-instance environment variables (also accepted as
+  `DNSWEAVER_PROXMOX_TLS_*`):
+  - `DNSWEAVER_{NAME}_TLS_CA_FILE` — PEM CA bundle **appended** to the system
+    trust pool (private/internal CAs no longer require disabling verification).
+  - `DNSWEAVER_{NAME}_TLS_CERT_FILE` / `_TLS_KEY_FILE` — client certificate
+    for **mutual TLS** authentication (resolves the original ask in #89).
+  - `DNSWEAVER_{NAME}_TLS_SERVER_NAME` — SNI / verification hostname override
+    for IP-addressed connections or split-horizon names.
+  - `DNSWEAVER_{NAME}_TLS_MIN_VERSION` — `1.2` (default) or `1.3`.
+  - `DNSWEAVER_{NAME}_TLS_SKIP_VERIFY` — canonical name for the legacy
+    `INSECURE_SKIP_VERIFY` flag.
+- TLS minimum version pinned explicitly to **TLS 1.2** by default. See
+  `SECURITY.md`.
+
+### Changed
+- **Proxmox HTTP client now uses a transport cloned from
+  `http.DefaultTransport`** instead of a bare `&http.Transport{}`. This enables
+  HTTP/2 negotiation, proxy environment variables, dial/idle timeouts, and
+  shared connection pooling for PVE API traffic — previously all of these were
+  silently disabled.
+- The shared `httputil` client preserves the same cloned-transport behavior
+  whenever a custom TLS configuration is supplied (including skip-verify),
+  fixing a long-standing transport-loss bug.
+- `technitium.Client.WithInsecureSkipVerify(bool)` now **composes** with any
+  pre-existing HTTP client options instead of replacing the entire
+  `httpClient`, preventing accidental loss of user-supplied timeouts or
+  transports.
+
+### Deprecated
+- `DNSWEAVER_{NAME}_INSECURE_SKIP_VERIFY` — use `DNSWEAVER_{NAME}_TLS_SKIP_VERIFY`.
+  The legacy variable is auto-migrated at load time with a `WARN` log; it will
+  be removed in v2.0.
+- `DNSWEAVER_PROXMOX_VERIFY_TLS` (note the inverted polarity) — use
+  `DNSWEAVER_PROXMOX_TLS_SKIP_VERIFY`. Auto-migrated at load time with a
+  `WARN` log; will be removed in v2.0.
+
+### Fixed
+- `httputil.NewClient` no longer discards `http.DefaultTransport` when
+  configured with `TLSSkipVerify=true`. HTTP/2 and the shared connection pool
+  are now preserved in every TLS configuration. Regression test added.
+- Registry HTTP-level `TLSSkipVerify` is now actually consumed by provider
+  factories (previously it was set but the per-provider TLS path always took
+  precedence, making the registry-level toggle dead code).
+
+### Security
+- Bump `golang.org/x/crypto` to `v0.52.0` and `golang.org/x/net` to `v0.55.0`
+  to patch govulncheck advisories GO-2026-5013, GO-2026-5017, GO-2026-5018,
+  GO-2026-5019, GO-2026-5020 (x/crypto) and GO-2026-5026 (x/net). Closes #184.
+
+## [1.4.6] - 2026-05-12
+
+### Fixed
+- **Regression from #86: legitimate fan-out to distinct backends was being
+  collapsed.** The first-match-wins fix in
+  [#86](https://github.com/maxfield-allison/dnsweaver/issues/86) treated *every*
+  pair of overlapping instances as a conflict, including the supported case of
+  intentionally writing the same hostname to two different DNS backends (e.g.
+  internal Technitium + external Cloudflare for a split-horizon setup). Only
+  the first instance in declaration order would write; the rest were silently
+  dropped. Precedence is now scoped to a *backend identity* tuple
+  `(provider type, endpoint, zone) × record type`. Distinct backends each get
+  their write; only instances pointing at the same physical zone collapse to
+  the first declared. A startup-time `WARN` enumerates colliding instances so
+  misconfigurations remain visible. Backward-compatible: out-of-tree providers
+  that don't implement the new optional `provider.Identifiable` interface fall
+  back to type-only identity, preserving #86's behavior for them. Closes
+  upstream [#88](https://github.com/maxfield-allison/dnsweaver/issues/88).
+  Thanks to [@Dampfwalze](https://github.com/Dampfwalze) for the regression
+  report and clear reproducer.
+
+## [1.4.5] - 2026-05-10
+
+### Security
+- **Bumped Go toolchain to 1.25.10** (CI image, Dockerfile, `go` directive) to
+  pick up stdlib fixes for [GO-2026-4971](https://pkg.go.dev/vuln/GO-2026-4971)
+  and the `net/http` portion of
+  [GO-2026-4918](https://pkg.go.dev/vuln/GO-2026-4918).
+- **Bumped `golang.org/x/net` to v0.53.0** for the module portion of
+  [GO-2026-4918](https://pkg.go.dev/vuln/GO-2026-4918).
+- **Bumped `go.opentelemetry.io/otel` to v1.41.0** to address
+  [CVE-2026-29181](https://avd.aquasec.com/nvd/cve-2026-29181) (HIGH):
+  multi-value `baggage` header extraction caused excessive allocations,
+  enabling a remote DoS amplification. Pulled in transitively via the Docker
+  client SDK; no dnsweaver code changes required.
+
+### Fixed
+- **Multiple instances fighting over the same record (race condition).** When
+  more than one provider instance matched the same hostname — typically because
+  `DNSWEAVER_{NAME}_ENTRYPOINTS` filters did not disambiguate them (a hostname
+  missing the filtered metadata key is treated as a wildcard) — every matching
+  instance wrote the record on every reconciliation. Each provider's cached
+  view of the zone was stale relative to the others' writes, so the apparent
+  owner alternated each cycle and the record's target flapped between targets.
+  `ensureRecord` now respects first-match-wins per the documented contract:
+  only the first instance in `DNSWEAVER_INSTANCES` declaration order writes,
+  and a `WARN` is logged when overlap is detected so users can narrow scopes
+  with `DNSWEAVER_{NAME}_ENTRYPOINTS` (or other metadata filters). Closes
+  upstream [#86](https://github.com/maxfield-allison/dnsweaver/issues/86).
+  Thanks to [@Dampfwalze](https://github.com/Dampfwalze) for the reproducer
+  and detailed log analysis.
+- **Reconciler: stopped re-issuing ownership TXT creates every cycle.** Once a
+  hostname's `_dnsweaver.<host>` TXT record existed, dnsweaver still POSTed a
+  duplicate-create on every reconciliation. dnsweaver swallowed the resulting
+  conflict, but upstream DNS servers logged each one as an error — Technitium
+  in particular wrote a full `DnsWebServiceException: Cannot add record: record
+  already exists` stack trace per managed hostname per cycle. `ensureOwnership
+  Record` now consults the per-cycle record cache and short-circuits when it
+  already shows our ownership TXT, eliminating the redundant API call across
+  all providers. Closes upstream
+  [#87](https://github.com/maxfield-allison/dnsweaver/issues/87). Thanks to
+  [@Dampfwalze](https://github.com/Dampfwalze) for the report and Technitium
+  log evidence.
+
+## [1.4.4] - 2026-05-02
+
+### Fixed
+- **AdGuard Home: `USERNAME` env var was silently dropped during config load.**
+  `USERNAME` was missing from `providerConfigFields`, so
+  `DNSWEAVER_<INSTANCE>_USERNAME` never reached the provider's `LoadConfigFromMap`.
+  The AdGuard provider then failed validation with `USERNAME is required` even
+  when the variable was clearly set, making the provider impossible to configure
+  via environment variables. Added `USERNAME` (and clarified `PASSWORD` shared
+  use) to the field list, plus regression tests for both direct and `_FILE`
+  secret loading. Closes upstream
+  [#85](https://github.com/maxfield-allison/dnsweaver/issues/85). Thanks to
+  [@XayneCast](https://github.com/XayneCast) for the report.
+
+## [1.4.3] - 2026-04-30
+
+### Fixed
+- **Technitium: CNAME updates were silently a no-op.** `UpdateCNAMERecord` sent
+  the new target as `newCname`, which is not a valid Technitium API parameter.
+  The request matched the existing record by `cname=<old>` and applied no
+  change, while the dnsweaver log claimed success. The fix sends `cname=<new>`
+  (CNAME records are unique per name, so the API identifies the record by
+  `domain`+`type` alone). Regression test added that asserts `newCname` is
+  never sent. Closes upstream
+  [#84](https://github.com/maxfield-allison/dnsweaver/issues/84). Thanks to
+  [@Dampfwalze](https://github.com/Dampfwalze) for the detailed bug report
+  including the Technitium server log proving the no-op.
+
+## [1.4.2] - 2026-04-29
+
+### Added
+- **Traefik: `DNSWEAVER_SOURCE_TRAEFIK_DEFAULT_ENTRYPOINTS`** — source-level
+  setting that mirrors Traefik's
+  [`entryPoints.<name>.asDefault = true`](https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#opt-asdefault)
+  configuration. When set, Traefik routers without an explicit `entryPoints`
+  declaration (label or static config) fan out one extraction per default
+  entrypoint instead of being treated as wildcard. Required for users with
+  `asDefault` flagged in Traefik so unlabeled routers don't silently
+  over-publish records to all dnsweaver instances. Unset preserves prior
+  wildcard behavior. Closes #180. Refs upstream
+  https://github.com/maxfield-allison/dnsweaver/issues/82.
+
+## [1.4.1] - 2026-04-27
+
+### Fixed
+- **Technitium: `AUTO_HTTPS_RECORDS` and `AUTO_HTTPS_ALPN` env vars are now
+  respected.** Previously these settings were silently ignored because they
+  were never wired through `internal/config`'s provider-config field list, so
+  the Technitium provider always saw the default (`AUTO_HTTPS_RECORDS=true`)
+  regardless of what the user set. Setting
+  `DNSWEAVER_{INSTANCE}_AUTO_HTTPS_RECORDS=false` now correctly disables
+  companion HTTPS record creation. Fixes
+  [#83](https://github.com/maxfield-allison/dnsweaver/issues/83).
+
+## [1.4.0] - 2026-04-27
+
+### Added
+- **Proxmox: opt-in `DNSWEAVER_PROXMOX_TARGET_MODE`**. Adds a new env var
+  controlling how the Proxmox source resolves DNS targets. Default `guest-ip`
+  preserves today's behavior (A record per VM IP). New `instance` mode emits
+  the hostname only and defers `RECORD_TYPE` and `TARGET` to the matching
+  provider instance — enabling, for example, CNAMEs from every Proxmox
+  workload to a reverse proxy. Closes #81.
+- **Traefik per-entrypoint routing**: Routers bound to multiple Traefik
+  entrypoints now produce one extraction per `(host, entrypoint)` pair,
+  and provider instances can opt in to entrypoint-scoped matching via
+  `DNSWEAVER_{NAME}_ENTRYPOINTS`. Hostnames carry generic
+  `Metadata` (currently `traefik.entrypoint`); instances filter on it
+  with AND-of-OR semantics, treating missing keys as wildcards so
+  pre-1.4 configs are unchanged. Enables split LAN/VPN DNS targets from
+  a single Traefik router. Closes #178. Refs upstream
+  https://github.com/maxfield-allison/dnsweaver/issues/82.
+
+### Fixed
+- **Proxmox: instance `TARGET` was silently ignored**. Previously the source
+  unconditionally set `RecordHints.Target` to the VM's IP, overriding any
+  configured `DNSWEAVER_{INSTANCE}_TARGET` and forcing `RECORD_TYPE=A`. Users
+  who wanted to point Proxmox-discovered hostnames at a reverse proxy could
+  not do so. Now opt-in via `DNSWEAVER_PROXMOX_TARGET_MODE=instance` (see
+  Added). Default behavior is unchanged. Closes #81.
+
+## [1.3.0] - 2026-04-23
+
+### Added
+- **Caddy source**: Extract hostnames from Docker containers that use
+  [caddy-docker-proxy](https://github.com/lucaslorentz/caddy-docker-proxy)
+  style labels (`caddy=app.example.com` or indexed `caddy_0`, `caddy_1`).
+  Enable with `DNSWEAVER_SOURCES=caddy` (combinable with other sources).
+  Caddyfile discovery is not included — only Docker labels are parsed.
+  Closes #175.
+- **nginx-proxy source**: Extract hostnames from Docker containers that
+  declare a `VIRTUAL_HOST` in the jwilder/nginx-proxy convention.
+  Recognizes both the literal `VIRTUAL_HOST` label and the canonical
+  `com.nginx-proxy.virtual_host` label; comma-separated hostnames are
+  supported. Env-var extraction (upstream jwilder reads from container
+  environment) is not yet supported and is tracked separately.
+  Enable with `DNSWEAVER_SOURCES=nginx-proxy`.
+  Closes #174.
+
+### Fixed
+- **Proxmox: filter non-routable IPs from guest-agent and LXC responses**.
+  The guest-agent and LXC `net0` parsers were returning loopback, link-local,
+  and other non-routable addresses alongside real LAN IPs, producing
+  unusable A records. All RFC 5735 / RFC 4291 non-routable ranges are now
+  filtered out at the source (loopback, link-local, multicast, broadcast,
+  unspecified, documentation, benchmarking, IPv6 ULA non-fc00::/7 edges,
+  etc.).
+- **Proxmox: allow CGNAT range (100.64.0.0/10) for Tailscale IPs**.
+  The non-routable filter was too aggressive: it dropped 100.64.0.0/10
+  addresses, which Tailscale uses for its mesh (`100.x.y.z`). CGNAT is
+  now treated as routable so Proxmox VMs/LXCs on a Tailscale network
+  resolve correctly.
+
+### Changed
+- **Documentation accuracy pass**: Removed stale references to AdGuard
+  as a primary provider example, deleted unused Proxmox role-creation
+  copy that referenced internal hostnames, corrected provider capability
+  tables to reflect actual code (Pi-hole and dnsmasq are A/CNAME only;
+  Cloudflare adds SRV), simplified the architecture mermaid, and removed
+  inaccurate claims of Caddy/nginx-proxy support that have now been
+  properly implemented in this release.
+
+## [1.2.0] - 2026-04-22
+
+### Added
+- **Proxmox VE source**: Auto-create A records for VMs and LXC containers on a
+  Proxmox cluster. VMs resolve via the QEMU guest agent
+  (`/agent/network-get-interfaces`); LXC containers resolve via the `net0`
+  config field. Supports node, tag, and state filtering, and exposes PVE tags
+  as workload labels (`proxmox.tag/*`). Configure via `DNSWEAVER_PROXMOX_*`
+  environment variables. See `docs/sources/proxmox.md` for the required PVE
+  role privileges (`VM.Audit`, `VM.Monitor`, `Pool.Audit`).
+  Closes maxfield-allison/dnsweaver#78. Thanks @jaykumar2001 for the request.
+
+### Fixed
+- **Technitium `svcParams` unmarshal failure on newer versions**: The
+  `zones/records/get` endpoint in newer Technitium DNS Server releases
+  returns `svcParams` as a JSON object (`{"alpn":"h2"}`) instead of the
+  documented pipe-delimited string (`"alpn|h2"`). This caused
+  `failed to recover ownership state` warnings and prevented the reconciler
+  from recognising its own existing HTTPS records, triggering spurious
+  recreate cycles. Added a `svcParamsValue` named type with a custom
+  `UnmarshalJSON` that accepts both representations and normalises to the
+  pipe-delimited form internally.
+
+## [1.1.4] - 2026-04-21
+
+### Fixed
+- **Docker socket permission denied on first run**: The image runs as a non-root
+  user (UID/GID 1000), but the host's `docker` group GID is almost never 1000
+  (typically 999 on Debian/Ubuntu, varies on other distros), so mounting
+  `/var/run/docker.sock` failed with `permission denied` out of the box.
+  Added a small entrypoint script (`docker/entrypoint.sh`) that detects the
+  socket's GID at runtime, adds the `dnsweaver` user to a group with that GID,
+  then drops privileges via `su-exec` before exec'ing the binary. The standard
+  compose example now works without `group_add`. K8s-only deployments and
+  socket-proxy setups skip the logic entirely (no socket mounted = no-op).
+  Closes maxfield-allison/dnsweaver#79.
+
+### Changed
+- **Runtime image now includes `su-exec`** (~20KB) for the entrypoint privilege
+  drop. Container briefly starts as root to perform GID detection, then exec's
+  the binary as the unprivileged `dnsweaver` user.
 
 ## [1.1.3] - 2026-04-10
 
@@ -248,7 +1326,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (K8s) now opt out of ALL sources at the registry level, not just the dnsweaver native
   source. Previously the traefik source still extracted hostnames from disabled workloads.
   Fixes [#75](https://github.com/maxfield-allison/dnsweaver/issues/75),
-  [#152](https://gitlab.bluewillows.net/root/dnsweaver/-/issues/152).
+  [#152](https://github.com/maxfield-allison/dnsweaver/-/issues/152).
 - **Helm Chart**: Bumped appVersion to 0.9.3
 
 ## [0.9.2] - 2026-03-11
@@ -567,7 +1645,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Package Structure Refactor** (#61): Moved source implementations to root-level `sources/` directory
   - `pkg/source/traefik/` → `sources/traefik/` for consistency with `providers/` structure
-  - Import path changed: `gitlab.bluewillows.net/root/dnsweaver/sources/traefik`
+  - Import path changed: `github.com/maxfield-allison/dnsweaver/sources/traefik`
   - Internal interfaces remain in `pkg/source/` (no breaking changes for external consumers)
 
 ### Fixed
@@ -705,14 +1783,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Multi-arch Images**: linux/amd64 and linux/arm64 Docker images
 
 ### Infrastructure
-- Go module: `gitlab.bluewillows.net/root/dnsweaver`
+- Go module: `github.com/maxfield-allison/dnsweaver`
 - Minimum Go version: 1.23
 - GitLab CI/CD pipeline with GitHub release automation
 - Docker Hub and GitHub Container Registry publishing
 
-[Unreleased]: https://github.com/maxfield-allison/dnsweaver/compare/v1.3.0...HEAD
-[1.3.0]: https://github.com/maxfield-allison/dnsweaver/compare/v1.2.0...v1.3.0
-[1.2.0]: https://github.com/maxfield-allison/dnsweaver/compare/v1.1.3...v1.2.0
+[Unreleased]: https://github.com/maxfield-allison/dnsweaver/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/maxfield-allison/dnsweaver/compare/v3.0.2...v3.1.0
+[3.0.2]: https://github.com/maxfield-allison/dnsweaver/compare/v3.0.1...v3.0.2
+[3.0.1]: https://github.com/maxfield-allison/dnsweaver/compare/v3.0.0...v3.0.1
+[3.0.0]: https://github.com/maxfield-allison/dnsweaver/compare/v2.8.2...v3.0.0
+[2.8.2]: https://github.com/maxfield-allison/dnsweaver/compare/v2.8.1...v2.8.2
+[2.8.1]: https://github.com/maxfield-allison/dnsweaver/compare/v2.8.0...v2.8.1
+[2.8.0]: https://github.com/maxfield-allison/dnsweaver/compare/v2.7.3...v2.8.0
+[2.7.3]: https://github.com/maxfield-allison/dnsweaver/compare/v2.7.2...v2.7.3
+[2.7.2]: https://github.com/maxfield-allison/dnsweaver/compare/v2.7.1...v2.7.2
+[2.7.1]: https://github.com/maxfield-allison/dnsweaver/compare/v2.7.0...v2.7.1
+[2.7.0]: https://github.com/maxfield-allison/dnsweaver/compare/v2.6.0...v2.7.0
+[2.6.0]: https://github.com/maxfield-allison/dnsweaver/compare/v2.5.0...v2.6.0
+[1.1.4]: https://github.com/maxfield-allison/dnsweaver/compare/v1.1.3...v1.1.4
 [1.1.3]: https://github.com/maxfield-allison/dnsweaver/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/maxfield-allison/dnsweaver/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/maxfield-allison/dnsweaver/compare/v1.1.0...v1.1.1

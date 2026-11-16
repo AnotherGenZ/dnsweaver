@@ -7,20 +7,23 @@ import (
 	"math"
 	"strings"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/dnsupdate"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/dnsupdate"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
 
 	"github.com/miekg/dns"
 )
 
 // Provider implements provider.Provider for RFC 2136 Dynamic DNS servers.
 type Provider struct {
-	name    string
-	zone    string
-	ttl     int
-	client  *dnsupdate.Client
-	catalog *dnsupdate.Catalog
-	logger  *slog.Logger
+	name         string
+	server       string // DNS server address (recorded for Identity reporting)
+	zone         string
+	ttl          int
+	client       *dnsupdate.Client
+	catalog      *dnsupdate.Catalog
+	logger       *slog.Logger
+	compact      bool
+	legacyWrites bool
 }
 
 // ProviderOption is a functional option for configuring the Provider.
@@ -47,6 +50,7 @@ func New(name string, config *Config, opts ...ProviderOption) (*Provider, error)
 
 	p := &Provider{
 		name:   name,
+		server: config.Server,
 		zone:   config.Zone,
 		ttl:    config.TTL,
 		logger: slog.Default(),
@@ -91,6 +95,17 @@ func (p *Provider) Type() string {
 	return "rfc2136"
 }
 
+// Identity returns the backend identity for this provider instance.
+// Two rfc2136 instances are considered the same backend when they target
+// the same DNS server and zone (see provider.ProviderIdentity, issue #88).
+func (p *Provider) Identity() provider.ProviderIdentity {
+	return provider.ProviderIdentity{
+		Type:     "rfc2136",
+		Endpoint: p.server,
+		Zone:     p.zone,
+	}
+}
+
 // Capabilities returns the provider's feature support.
 // RFC 2136 supports all features: TXT ownership, native update, and most record types.
 func (p *Provider) Capabilities() provider.Capabilities {
@@ -104,7 +119,7 @@ func (p *Provider) Capabilities() provider.Capabilities {
 			provider.RecordTypeTXT,
 			provider.RecordTypeSRV,
 			// Note: MX and PTR are supported by pkg/dnsupdate but not yet
-			// in the provider interface. See issue #133.
+			// wired into this provider. See issue #133.
 		},
 	}
 }
@@ -112,6 +127,136 @@ func (p *Provider) Capabilities() provider.Capabilities {
 // Zone returns the configured DNS zone.
 func (p *Provider) Zone() string {
 	return p.zone
+}
+
+// EnableCompactOwnership replaces the mutable catalog for new writes. Legacy
+// catalog names are still read while older owners migrate.
+func (p *Provider) EnableCompactOwnership() {
+	p.compact = true
+	if p.client != nil {
+		p.client.UseTCP()
+	}
+}
+
+// EnableLegacyOwnership retains compact discovery while writing legacy markers.
+func (p *Provider) EnableLegacyOwnership() { p.EnableCompactOwnership(); p.legacyWrites = true }
+
+// OwnershipDiscoveryName is queried directly on servers without zone enumeration.
+func (p *Provider) OwnershipDiscoveryName() string { return provider.OwnershipManifestName(p.zone) }
+
+// ReadOwnershipRecord verifies staged pages through an exact-name TXT query.
+func (p *Provider) ReadOwnershipRecord(ctx context.Context, name string) ([]provider.Record, error) {
+	if p.client == nil {
+		return nil, fmt.Errorf("RFC 2136 client is unavailable")
+	}
+	raw, err := p.client.Query(ctx, p.ensureFQDN(name), dns.TypeTXT)
+	if err != nil {
+		return nil, err
+	}
+	records := make([]provider.Record, 0, len(raw))
+	for _, r := range raw {
+		record, err := p.fromRFC2136Record(r)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, nil
+}
+
+// ListOwnershipState discovers manifests and immutable pages through known DNS
+// names. It queries the configured authoritative server, without AXFR or an index.
+func (p *Provider) ListOwnershipState(ctx context.Context) ([]provider.Record, error) {
+	if p.client == nil {
+		return nil, fmt.Errorf("RFC 2136 client is unavailable")
+	}
+	anchor := provider.OwnershipManifestName(p.zone)
+	manifests, err := p.client.Query(ctx, p.ensureFQDN(anchor), dns.TypeTXT)
+	if err != nil {
+		return nil, fmt.Errorf("querying ownership manifests: %w", err)
+	}
+	var records []provider.Record
+	names := make(map[string]bool)
+	for _, raw := range manifests {
+		record, err := p.fromRFC2136Record(raw)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+		manifest, err := provider.DecodeOwnershipManifest(record.Target)
+		if err != nil {
+			return nil, err
+		}
+		for _, digest := range manifest.Pages {
+			names[provider.OwnershipPageName(p.zone, manifest.Owner, digest)] = true
+		}
+	}
+	for name := range names {
+		pages, err := p.client.Query(ctx, p.ensureFQDN(name), dns.TypeTXT)
+		if err != nil {
+			return nil, fmt.Errorf("querying ownership page: %w", err)
+		}
+		for _, raw := range pages {
+			record, err := p.fromRFC2136Record(raw)
+			if err != nil {
+				return nil, err
+			}
+			records = append(records, record)
+		}
+	}
+	// Refresh legacy enumeration for mixed-version writers. New compact owners
+	// never update this catalog, but existing markers must remain visible.
+	if p.catalog != nil {
+		if err := p.catalog.Load(ctx); err != nil {
+			return nil, fmt.Errorf("loading legacy catalog: %w", err)
+		}
+		hosts, err := p.catalog.Hostnames(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, name := range hosts {
+			markers, err := p.ReadOwnershipRecord(ctx, provider.OwnershipRecordName(name))
+			if err != nil {
+				return nil, err
+			}
+			records = append(records, markers...)
+		}
+	}
+	return records, nil
+}
+
+// RestoreLegacyDiscovery restores and reads back the catalog used by old
+// binaries before compact claims are retired. It also repairs discovery when a
+// previous attempt wrote a marker but failed to publish its catalog entry.
+func (p *Provider) RestoreLegacyDiscovery(ctx context.Context, markers []provider.Record) error {
+	if p.catalog == nil {
+		return fmt.Errorf("%w: legacy hostname catalog unavailable", provider.ErrOwnershipState)
+	}
+	for _, marker := range markers {
+		name := provider.ExtractHostnameFromOwnership(marker.Hostname)
+		if name == "" {
+			return fmt.Errorf("%w: invalid legacy ownership name", provider.ErrOwnershipState)
+		}
+		if err := p.catalog.Add(ctx, name); err != nil {
+			return err
+		}
+	}
+	// Load reads authoritative DNS again rather than trusting the local cache
+	// populated by Add, including after an ambiguous update response.
+	if err := p.catalog.Load(ctx); err != nil {
+		return err
+	}
+	for _, marker := range markers {
+		name := provider.ExtractHostnameFromOwnership(marker.Hostname)
+		present, err := p.catalog.Contains(ctx, name)
+		if err != nil {
+			return err
+		}
+		if !present {
+			return fmt.Errorf("%w: legacy catalog readback missing %s", provider.ErrOwnershipState, name)
+		}
+	}
+	return nil
 }
 
 // Ping checks connectivity to the DNS server.
@@ -149,21 +294,46 @@ func (p *Provider) List(ctx context.Context) ([]provider.Record, error) {
 		return nil, fmt.Errorf("loading catalog: %w", err)
 	}
 
+	var records []provider.Record
+	if p.compact {
+		state, err := p.ListOwnershipState(ctx)
+		if err != nil {
+			return nil, err
+		}
+		logical, err := provider.ExpandOwnershipState(p.zone, state)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, state...)
+		seen := make(map[string]bool, len(hostnames))
+		for _, name := range hostnames {
+			seen[name] = true
+		}
+		for _, marker := range logical {
+			name := provider.ExtractHostnameFromOwnership(marker.Hostname)
+			if name != "" && !seen[name] {
+				hostnames = append(hostnames, name)
+				seen[name] = true
+			}
+		}
+	}
 	if len(hostnames) == 0 {
 		p.logger.Debug("catalog is empty",
 			slog.String("zone", p.zone),
 		)
-		return []provider.Record{}, nil
+		return records, nil
 	}
 
 	// Query each hostname for its records
-	var records []provider.Record
 	for _, hostname := range hostnames {
 		// Query ownership TXT record to verify we still own it
 		ownershipName := provider.OwnershipRecordName(hostname)
 		ownershipFQDN := p.ensureFQDN(ownershipName)
 		ownershipRecords, err := p.client.Query(ctx, ownershipFQDN, dns.TypeTXT)
 		if err != nil {
+			if p.compact {
+				return nil, fmt.Errorf("querying legacy ownership: %w", err)
+			}
 			p.logger.Warn("failed to query ownership record",
 				slog.String("hostname", hostname),
 				slog.String("error", err.Error()),
@@ -184,7 +354,6 @@ func (p *Provider) List(ctx context.Context) ([]provider.Record, error) {
 					TTL:        int(r.TTL),
 					ProviderID: fmt.Sprintf("%s:TXT:%s", ownershipFQDN, r.RData),
 				})
-				break
 			}
 		}
 
@@ -197,9 +366,14 @@ func (p *Provider) List(ctx context.Context) ([]provider.Record, error) {
 
 		// Query common record types for this hostname
 		hostnameFQDN := p.ensureFQDN(hostname)
-		for _, qtype := range []uint16{dns.TypeA, dns.TypeAAAA, dns.TypeCNAME, dns.TypeSRV} {
+
+	outer:
+		for _, qtype := range []uint16{dns.TypeA, dns.TypeAAAA, dns.TypeCNAME, dns.TypeTXT, dns.TypeSRV} {
 			dnsRecords, err := p.client.Query(ctx, hostnameFQDN, qtype)
 			if err != nil {
+				if p.compact {
+					return nil, fmt.Errorf("querying managed hostname %s: %w", hostname, err)
+				}
 				p.logger.Debug("query failed for hostname",
 					slog.String("hostname", hostname),
 					slog.String("type", dns.TypeToString[qtype]),
@@ -213,7 +387,14 @@ func (p *Provider) List(ctx context.Context) ([]provider.Record, error) {
 				if err != nil {
 					continue
 				}
+
 				records = append(records, record)
+
+				// break after adding CNAME record because it can only have CNAME
+				// https://www.rfc-editor.org/info/rfc1034/#section-3.6.2
+				if r.Type == dns.TypeCNAME {
+					break outer
+				}
 			}
 		}
 	}
@@ -251,8 +432,18 @@ func (p *Provider) Create(ctx context.Context, record provider.Record) error {
 	// Add to catalog if this is NOT an ownership TXT record
 	// Ownership records have format "_dnsweaver.<hostname>"
 	// We only catalog the actual data hostnames, not the ownership markers
-	if p.catalog != nil && !provider.IsOwnershipRecord(record.Hostname) {
-		if err := p.catalog.Add(ctx, record.Hostname); err != nil {
+	if (!p.compact || p.legacyWrites) && p.catalog != nil && !provider.IsOwnershipStateRecord(record.Hostname) {
+		catalogName := record.Hostname
+		if provider.IsOwnershipRecord(record.Hostname) {
+			if !p.legacyWrites {
+				return nil
+			}
+			catalogName = provider.ExtractHostnameFromOwnership(record.Hostname)
+		}
+		if err := p.catalog.Add(ctx, catalogName); err != nil {
+			if p.legacyWrites {
+				return fmt.Errorf("restoring legacy hostname enumeration: %w", err)
+			}
 			// Log but don't fail - the DNS record was created successfully
 			// Catalog can be repaired later
 			p.logger.Warn("failed to add hostname to catalog",
@@ -265,9 +456,9 @@ func (p *Provider) Create(ctx context.Context, record provider.Record) error {
 	return nil
 }
 
-// Delete removes a DNS record.
-// For non-TXT records (data records), the hostname is also removed from the catalog.
-// Ownership TXT records are not tracked in the catalog.
+// Delete removes one exact DNS record. A data hostname remains in the catalog
+// while any other supported member still exists at that name. Ownership TXT
+// records are not tracked in the catalog.
 func (p *Provider) Delete(ctx context.Context, record provider.Record) error {
 	dnsRecord, err := p.toRFC2136Record(record)
 	if err != nil {
@@ -278,15 +469,25 @@ func (p *Provider) Delete(ctx context.Context, record provider.Record) error {
 		return fmt.Errorf("deleting record %s: %w", record.Hostname, err)
 	}
 
-	// Remove from catalog if this is NOT an ownership TXT record
-	if p.catalog != nil && !provider.IsOwnershipRecord(record.Hostname) {
-		if err := p.catalog.Remove(ctx, record.Hostname); err != nil {
-			// Log but don't fail - the DNS record was deleted successfully
-			// Catalog can be repaired later
-			p.logger.Warn("failed to remove hostname from catalog",
+	// Remove the hostname from the catalog only after confirming that the exact
+	// deletion removed its final supported data member. Keeping the catalog
+	// entry is required for List to rediscover surviving siblings after restart.
+	if (!p.compact || p.legacyWrites) && p.catalog != nil && !provider.IsOwnershipRecord(record.Hostname) && !provider.IsOwnershipStateRecord(record.Hostname) {
+		hasSiblings, err := p.hasDataRecords(ctx, record.Hostname)
+		if err != nil {
+			p.logger.Warn("failed to verify whether hostname has surviving records; keeping catalog entry",
 				slog.String("hostname", record.Hostname),
 				slog.String("error", err.Error()),
 			)
+		} else if !hasSiblings {
+			if err := p.catalog.Remove(ctx, record.Hostname); err != nil {
+				// Log but don't fail - the DNS record was deleted successfully
+				// Catalog can be repaired later
+				p.logger.Warn("failed to remove hostname from catalog",
+					slog.String("hostname", record.Hostname),
+					slog.String("error", err.Error()),
+				)
+			}
 		}
 	}
 
@@ -297,6 +498,20 @@ func (p *Provider) Delete(ctx context.Context, record provider.Record) error {
 	)
 
 	return nil
+}
+
+func (p *Provider) hasDataRecords(ctx context.Context, hostname string) (bool, error) {
+	name := p.ensureFQDN(hostname)
+	for _, recordType := range []uint16{dns.TypeA, dns.TypeAAAA, dns.TypeCNAME, dns.TypeTXT, dns.TypeSRV} {
+		records, err := p.client.Query(ctx, name, recordType)
+		if err != nil {
+			return false, fmt.Errorf("querying %s records: %w", dns.TypeToString[recordType], err)
+		}
+		if len(records) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // Update modifies an existing DNS record in place.
@@ -344,10 +559,10 @@ func (p *Provider) toRFC2136Record(record provider.Record) (dnsupdate.Record, er
 		}
 	}
 
-	// Determine TTL (clamp to valid uint32 range for DNS wire format)
-	ttl := uint32(min(max(0, p.ttl), math.MaxUint32))
+	// Determine TTL (clamp to valid uint32 range for DNS wire format).
+	ttl := clampTTL(p.ttl)
 	if record.TTL > 0 {
-		ttl = uint32(min(record.TTL, math.MaxUint32))
+		ttl = clampTTL(record.TTL)
 	}
 
 	r := dnsupdate.Record{
@@ -395,6 +610,20 @@ func (p *Provider) toRFC2136Record(record provider.Record) (dnsupdate.Record, er
 }
 
 // recordTypeToUint16 converts provider.RecordType to dns.Type.
+// clampTTL converts a TTL expressed as a platform int into the uint32 used by
+// the DNS wire format, clamping out-of-range values. The explicit comparison
+// guards (rather than min/max) keep the bounds check legible to static
+// analyzers: negatives clamp to 0 and values above MaxUint32 clamp to the max.
+func clampTTL(v int) uint32 {
+	if v < 0 {
+		return 0
+	}
+	if v > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(v)
+}
+
 func recordTypeToUint16(rt provider.RecordType) uint16 {
 	switch rt {
 	case provider.RecordTypeA:

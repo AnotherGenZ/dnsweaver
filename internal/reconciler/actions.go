@@ -4,67 +4,68 @@ package reconciler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/source"
 )
 
 // ensureRecord creates DNS records for a hostname in all matching providers.
 // It uses a List+Compare approach to handle IP changes and type conflicts:
-// 1. Check if record exists for hostname
-// 2. If exists with same target → skip (idempotent)
-// 3. If exists with different target (same type) → delete old, create new
-// 4. If exists with different type → log warning, skip (don't delete manual records)
+//  1. Check if record exists for hostname
+//  2. If exists with same target → skip (idempotent), unless the provider
+//     reports it would write different state for it (provider.RecordComparer,
+//     e.g. Cloudflare proxied) → update in place
+//  3. If exists with different target (same type) → delete old, create new
+//  4. If exists with a type that cannot coexist (CNAME) → replace when allowed
+//     (see canReplaceConflicting), else warn once and skip
 //
 // When hostname has RecordHints, they override provider defaults:
-// - RecordHints.Provider: route directly to one or more named providers instead of domain matching
-// - RecordHints.Type/Target/TTL: override provider instance defaults
+// - RecordHints.Provider: select a named provider within its configured scope
+// - RecordHints.Type/Target/TTL/AdoptExisting: override provider instance defaults
 func (r *Reconciler) ensureRecord(ctx context.Context, hostname *source.Hostname, cache *recordCache) []Action {
 	var actions []Action
 
 	// Check for explicit provider targeting via RecordHints
 	if hostname.RecordHints != nil && hostname.RecordHints.Provider != "" {
-		targetProviders := parseExplicitProviders(hostname.RecordHints.Provider)
-		if len(targetProviders) == 0 {
+		targetProvider := hostname.RecordHints.Provider
+		inst, exists := r.providers.Get(targetProvider)
+		if !exists {
+			r.logger.Warn("explicit provider not found",
+				slog.String("hostname", hostname.Name),
+				slog.String("target_provider", targetProvider),
+			)
 			actions = append(actions, Action{
 				Type:     ActionSkip,
 				Status:   StatusSkipped,
 				Hostname: hostname.Name,
-				Error:    "explicit provider hint is empty after parsing",
+				Error:    fmt.Sprintf("explicit provider %q not found", targetProvider),
 			})
 			return actions
 		}
-
-		for _, targetProvider := range targetProviders {
-			inst, exists := r.providers.Get(targetProvider)
-			if !exists {
-				r.logger.Warn("explicit provider not found",
-					slog.String("hostname", hostname.Name),
-					slog.String("target_provider", targetProvider),
-				)
-				actions = append(actions, Action{
-					Type:     ActionSkip,
-					Status:   StatusSkipped,
-					Provider: targetProvider,
-					Hostname: hostname.Name,
-					Error:    fmt.Sprintf("explicit provider %q not found", targetProvider),
-				})
-				continue
-			}
-
-			// Route to explicit providers, bypassing domain matching.
-			action := r.ensureRecordForProvider(ctx, hostname, inst, cache)
-			actions = append(actions, action)
+		if !inst.MatchesWithMetadata(hostname.Name, hostname.Metadata) {
+			r.logger.Warn("explicit provider is outside its configured scope",
+				slog.String("hostname", hostname.Name),
+				slog.String("target_provider", targetProvider),
+			)
+			return append(actions, Action{
+				Type:     ActionSkip,
+				Status:   StatusSkipped,
+				Hostname: hostname.Name,
+				Error:    fmt.Sprintf("explicit provider %q is outside its configured scope", targetProvider),
+			})
 		}
-
-		return actions
+		// A workload hint may narrow routing to one provider, but cannot
+		// widen that provider's operator-configured domain or metadata scope.
+		return append(actions, r.ensureRecordForProvider(ctx, hostname, inst, cache)...)
 	}
 
-	// Standard domain-based matching
-	matchingProviders := r.providers.MatchingProviders(hostname.Name)
+	// Standard domain-based matching (with optional metadata-filter scoping
+	// — see ProviderInstance.MetadataFilters and DNSWEAVER_{NAME}_ENTRYPOINTS).
+	matchingProviders := r.providers.MatchingProvidersForHostname(hostname.Name, hostname.Metadata)
 
 	if len(matchingProviders) == 0 {
 		r.logger.Debug("no matching providers for hostname",
@@ -74,51 +75,240 @@ func (r *Reconciler) ensureRecord(ctx context.Context, hostname *source.Hostname
 			Type:     ActionSkip,
 			Status:   StatusSkipped,
 			Hostname: hostname.Name,
-			Error:    "no matching provider",
+			Error:    errNoMatchingProvider,
 		})
 		return actions
 	}
 
+	// Per-identity first-match-wins: when two instances share the same
+	// backend identity (Provider.Identity()) AND RecordType, they resolve
+	// to the same physical record store and would race if both wrote
+	// (issue #86 \u2014 each instance's cached view is stale relative to the
+	// other's writes, producing record flap). Within such a group, the
+	// instance declared earliest in DNSWEAVER_INSTANCES owns the record.
+	//
+	// Across distinct backends, every matching instance still writes \u2014
+	// publishing the same hostname into multiple actual DNS systems
+	// (e.g. Cloudflare + internal Technitium) is the supported use case
+	// dnsweaver was built for (issue #88).
+	//
+	// Identity collisions are also reported once at startup via
+	// Registry.WarnDuplicateIdentities; per-reconcile logging happens at
+	// DEBUG so we don't spam an already-reported config issue.
+	type writeKey struct {
+		Identity   provider.ProviderIdentity
+		RecordType provider.RecordType
+	}
+	writers := make([]*provider.ProviderInstance, 0, len(matchingProviders))
+	seen := make(map[writeKey]*provider.ProviderInstance, len(matchingProviders))
 	for _, inst := range matchingProviders {
-		action := r.ensureRecordForProvider(ctx, hostname, inst, cache)
-		actions = append(actions, action)
+		k := writeKey{Identity: inst.Identity, RecordType: inst.RecordType}
+		if winner, exists := seen[k]; exists {
+			r.logger.Debug("skipping provider with duplicate backend identity; earlier instance owns this record",
+				slog.String("hostname", hostname.Name),
+				slog.String("skipped", inst.Name()),
+				slog.String("winner", winner.Name()),
+				slog.String("provider_type", k.Identity.Type),
+				slog.String("endpoint", k.Identity.Endpoint),
+				slog.String("zone", k.Identity.Zone),
+				slog.String("record_type", string(k.RecordType)),
+			)
+			continue
+		}
+		seen[k] = inst
+		writers = append(writers, inst)
 	}
 
+	for _, inst := range writers {
+		actions = append(actions, r.ensureRecordForProvider(ctx, hostname, inst, cache)...)
+	}
 	return actions
 }
 
-// parseExplicitProviders parses a comma-separated provider hint list.
-// Empty entries are ignored, and duplicate names are removed while preserving order.
-func parseExplicitProviders(raw string) []string {
-	parts := strings.Split(raw, ",")
-	seen := make(map[string]struct{}, len(parts))
-	providers := make([]string, 0, len(parts))
+// typesConflict reports whether a record of type desired can be created at a
+// name that already holds a record of type existing.
+//
+// DNS only forbids one combination: a CNAME is exclusive and cannot share an
+// owner name with any other data (RFC 1034 §3.6.2, RFC 2181 §10.1). Every other
+// pairing is legal and common in practice — A + AAAA for dual-stack, either of
+// them alongside an HTTPS/SVCB record, SRV alongside address records. Treating
+// those as conflicts made dnsweaver skip its own hostnames forever once a second
+// record type appeared, including the companion HTTPS record the Technitium
+// provider creates itself (issue #165).
+//
+// Callers handle the same-type case before reaching here; TXT ownership markers
+// are filtered out upstream and never reach this comparison.
+func typesConflict(desired, existing provider.RecordType) bool {
+	return desired == provider.RecordTypeCNAME || existing == provider.RecordTypeCNAME
+}
 
-	for _, part := range parts {
-		name := strings.TrimSpace(part)
-		if name == "" {
-			continue
+// isSelfReferential reports whether target names the record's own hostname,
+// which would create a CNAME pointing at itself (a resolution loop). This
+// happens when the configured TARGET is itself a discovered hostname — e.g. a
+// reverse proxy that also has a router rule of its own.
+func isSelfReferential(hostname, target string, recordType provider.RecordType) bool {
+	if recordType != provider.RecordTypeCNAME {
+		return false
+	}
+	return source.NormalizeHostname(hostname) == source.NormalizeHostname(target)
+}
+
+// warnOnce logs msg at warn level the first time key is seen and at debug
+// level after that. It is for conditions that cannot resolve on their own, where
+// repeating the warning every interval is pure noise (issue #165).
+func (r *Reconciler) warnOnce(key, msg string, attrs ...any) {
+	r.mu.Lock()
+	_, seen := r.warnedOnce[key]
+	if !seen {
+		if r.warnedOnce == nil {
+			r.warnedOnce = make(map[string]struct{})
 		}
-		if _, exists := seen[name]; exists {
-			continue
-		}
-		seen[name] = struct{}{}
-		providers = append(providers, name)
+		r.warnedOnce[key] = struct{}{}
+	}
+	r.mu.Unlock()
+
+	if seen {
+		r.logger.Debug(msg, attrs...)
+		return
+	}
+	r.logger.Warn(msg, attrs...)
+}
+
+// warnSelfReferentialOnce reports a self-referential CNAME once per
+// provider/hostname pair.
+func (r *Reconciler) warnSelfReferentialOnce(hostname, providerName, target string) {
+	r.warnOnce("self-cname|"+providerName+"|"+hostname,
+		"skipping self-referential CNAME (target is the hostname itself)",
+		slog.String("hostname", hostname),
+		slog.String("provider", providerName),
+		slog.String("target", target),
+	)
+}
+
+// warnTypeConflictOnce reports a type conflict dnsweaver is not allowed to
+// resolve, once per provider/hostname pair, with the setting that would let it.
+func (r *Reconciler) warnTypeConflictOnce(hostname string, inst *provider.ProviderInstance, desiredType string, existingTypes []string) {
+	msg := "skipping due to record type conflict; enable existing-record adoption for this provider or use authoritative mode to let dnsweaver replace the existing record(s)"
+	if !inst.Mode.AllowsDelete() {
+		msg = "skipping due to record type conflict; additive mode never deletes, so the existing record(s) must be removed by hand"
+	}
+	r.warnOnce("type-conflict|"+inst.Name()+"|"+hostname, msg,
+		slog.String("hostname", hostname),
+		slog.String("provider", inst.Name()),
+		slog.String("mode", string(inst.Mode)),
+		slog.String("desired_type", desiredType),
+		slog.Any("existing_types", existingTypes),
+	)
+}
+
+// canReplaceConflicting reports whether inst may delete records of another
+// type that occupy hostname so the desired record can take their place.
+// Additive mode never deletes. Authoritative mode owns everything in scope and
+// ADOPT_EXISTING is the operator saying pre-existing records are dnsweaver's to
+// manage; otherwise only a record this instance already owns (left over from
+// an earlier configuration) is replaced (issue #171).
+func (r *Reconciler) canReplaceConflicting(inst *provider.ProviderInstance, hostname string, cache *recordCache, adoptExisting bool) bool {
+	switch {
+	case !inst.Mode.AllowsDelete():
+		return false
+	case !inst.Mode.RequiresOwnership(), adoptExisting:
+		return true
+	}
+	return cache != nil && cache.hasOwnershipRecord(inst.Name(), hostname, r.config.InstanceID)
+}
+
+// effectiveAdoptExisting resolves the adoption policy for one hostname/provider
+// pair. Provider configuration overrides the global default. Workload hints may
+// always narrow the policy to false, but may only elevate it to true when the
+// operator enabled the per-provider gate.
+func (r *Reconciler) effectiveAdoptExisting(hostname *source.Hostname, inst *provider.ProviderInstance) bool {
+	effective := r.config.AdoptExisting
+	if inst.AdoptExisting != nil {
+		effective = *inst.AdoptExisting
 	}
 
-	return providers
+	requested := hostname.AdoptExisting
+	if hostname.RecordHints != nil && hostname.RecordHints.AdoptExisting != nil {
+		requested = hostname.RecordHints.AdoptExisting
+	}
+	if requested == nil {
+		return effective
+	}
+	if !*requested || effective || inst.AdoptExistingAllowOverrides {
+		return *requested
+	}
+
+	r.warnOnce("adopt-override-blocked|"+inst.Name()+"|"+hostname.Name,
+		"ignoring workload request to enable existing-record adoption; provider does not allow adoption overrides",
+		slog.String("hostname", hostname.Name),
+		slog.String("provider", inst.Name()),
+		slog.String("setting", "DNSWEAVER_"+strings.ToUpper(strings.ReplaceAll(inst.Name(), "-", "_"))+"_ADOPT_EXISTING_ALLOW_OVERRIDES"),
+	)
+	return false
+}
+
+// replaceConflictingRecords deletes the records at hostname whose type cannot
+// coexist with the desired record, returning a delete action per record removed
+// (or that would be removed, in dry-run). It stops at the first failure and
+// returns the error, leaving the remaining records in place: creating on top of
+// a half-cleared name would fail anyway, and the caller must not try.
+func (r *Reconciler) replaceConflictingRecords(ctx context.Context, hostname string, inst *provider.ProviderInstance, conflicting []provider.Record) ([]Action, error) {
+	actions := make([]Action, 0, len(conflicting))
+	for _, rec := range conflicting {
+		action := Action{
+			Type:       ActionDelete,
+			Provider:   inst.Name(),
+			Hostname:   hostname,
+			RecordType: string(rec.Type),
+			Target:     rec.Target,
+		}
+		attrs := []any{
+			slog.String("hostname", hostname),
+			slog.String("provider", inst.Name()),
+			slog.String("type", string(rec.Type)),
+			slog.String("target", rec.Target),
+		}
+
+		if r.isDryRun() {
+			action.Status = StatusSuccess
+			r.logger.Info("would replace conflicting record (dry-run)", attrs...)
+			actions = append(actions, action)
+			continue
+		}
+
+		var err error
+		if rec.Type == provider.RecordTypeSRV {
+			err = inst.DeleteSRVRecord(ctx, hostname, rec.Target, rec.SRV)
+		} else {
+			err = inst.DeleteRecordByTarget(ctx, hostname, rec.Type, rec.Target)
+		}
+		// A record that vanished between List and Delete is the outcome we wanted.
+		if err != nil && !errors.Is(err, provider.ErrNotFound) {
+			r.logger.Error("failed to replace conflicting record", append(attrs, slog.String("error", err.Error()))...)
+			return actions, fmt.Errorf("replacing conflicting %s record %s: %w", rec.Type, rec.Target, err)
+		}
+
+		action.Status = StatusSuccess
+		r.logger.Info("replaced conflicting record", attrs...)
+		actions = append(actions, action)
+	}
+	return actions, nil
 }
 
 // ensureRecordForProvider handles record creation for a single provider with List+Compare logic.
 // When hostname has RecordHints, they override provider instance defaults.
-func (r *Reconciler) ensureRecordForProvider(ctx context.Context, hostname *source.Hostname, inst *provider.ProviderInstance, cache *recordCache) Action {
+// It returns a delete action for each conflicting record it replaced, followed
+// by the action for the desired record itself.
+func (r *Reconciler) ensureRecordForProvider(ctx context.Context, hostname *source.Hostname, inst *provider.ProviderInstance, cache *recordCache) []Action {
 	// Determine effective record type, target, and TTL
 	// RecordHints override provider defaults when present
 	recordType := inst.RecordType
-	target := inst.Target
+	target := inst.EffectiveTarget()
 	ttl := inst.TTL
 	var srvData *provider.SRVData
+	var mxData *provider.MXData
 	var metadata map[string]string
+	adoptExisting := r.effectiveAdoptExisting(hostname, inst)
 
 	if hints := hostname.RecordHints; hints != nil {
 		if hints.Type != "" {
@@ -138,15 +328,56 @@ func (r *Reconciler) ensureRecordForProvider(ctx context.Context, hostname *sour
 				Port:     hints.SRV.Port,
 			}
 		}
+		// Extract MX-specific data for MX records
+		if hints.MX != nil {
+			mxData = &provider.MXData{
+				Preference: hints.MX.Preference,
+			}
+		}
 		// Pass through metadata from source hints to provider
 		if len(hints.Metadata) > 0 {
 			metadata = hints.Metadata
 		}
 	}
 
+	// desired is what the sources declare right now plus the instance defaults.
+	// An existing record is compared against it and, when it differs, updated
+	// to it.
+	desired := provider.Record{
+		Hostname: hostname.Name,
+		Type:     recordType,
+		Target:   target,
+		TTL:      ttl,
+		SRV:      srvData,
+		MX:       mxData,
+		Metadata: metadata,
+	}
+
+	// TXT, MX and NS are multi-valued. Use the exact-member path even for
+	// single-host callers, with a complete snapshot for ownership and
+	// cache-miss parity.
+	if recordType == provider.RecordTypeTXT || recordType == provider.RecordTypeMX || recordType == provider.RecordTypeNS {
+		if recordType == provider.RecordTypeTXT {
+			desired.Target = provider.DeclaredTXT(inst.Provider, desired.Target)
+		}
+		if cache == nil || !cache.providerAvailable(inst.Name()) {
+			cache = newRecordCache(ctx, r.providers, r.logger)
+		}
+		set := &desiredRecordSet{Instance: inst,
+			Key:     desiredSetKey{Identity: inst.Identity, Hostname: source.NormalizeHostname(hostname.Name), RecordType: recordType},
+			Members: []desiredRecordMember{{Record: desired, Claim: hostname, ClaimCount: 1}},
+		}
+		actions, _ := r.reconcileDesiredSetWithState(ctx, set, cache, nil, false)
+		return actions
+	}
+
 	// If source didn't provide metadata, check for recovered metadata from
 	// ownership TXT records (populated on startup by RecoverOwnership).
 	// This bridges the gap between restart and the source re-asserting metadata.
+	// It informs creation and the ownership record only and is kept out of
+	// desired on purpose: the TXT copy is not refreshed when a label changes,
+	// so comparing an existing record against it would flip the record back to
+	// its original state on every restart.
 	if len(metadata) == 0 {
 		if recovered := r.getRecoveredMetadata(hostname.Name); len(recovered) > 0 {
 			metadata = recovered
@@ -165,17 +396,14 @@ func (r *Reconciler) ensureRecordForProvider(ctx context.Context, hostname *sour
 		Target:     target,
 	}
 
-	if r.isDryRun() {
-		action.Status = StatusSuccess
-		r.logger.Info("would create record (dry-run)",
-			slog.String("hostname", hostname.Name),
-			slog.String("provider", inst.Name()),
-			slog.String("type", string(recordType)),
-			slog.String("target", target),
-			slog.Bool("ownership_tracking", r.config.OwnershipTracking),
-			slog.Bool("has_hints", hostname.HasRecordHints()),
-		)
-		return action
+	// A CNAME pointing at its own name is a resolution loop; no provider will
+	// accept it and retrying every interval only produces noise.
+	if isSelfReferential(hostname.Name, target, recordType) {
+		action.Type = ActionSkip
+		action.Status = StatusSkipped
+		action.Error = errSelfReferentialCNAME
+		r.warnSelfReferentialOnce(hostname.Name, inst.Name(), target)
+		return []Action{action}
 	}
 
 	// Step 1: Get existing records from cache (or fetch if cache unavailable)
@@ -203,56 +431,98 @@ func (r *Reconciler) ensureRecordForProvider(ctx context.Context, hostname *sour
 	}
 
 	// Step 2: Analyze existing records
+	// Records of a different type only conflict when DNS itself forbids the
+	// coexistence — see typesConflict. Types that may legally share a name
+	// (A + AAAA + HTTPS + SRV) are ignored here: they belong to another
+	// instance, another address family, or to our own companion HTTPS record.
 	var sameTypeRecords []provider.Record
 	var conflictingTypeRecords []provider.Record
 
 	for _, existing := range existingRecords {
-		if existing.Type == recordType {
+		switch {
+		case existing.Type == recordType:
 			sameTypeRecords = append(sameTypeRecords, existing)
-		} else {
+		case typesConflict(recordType, existing.Type):
 			conflictingTypeRecords = append(conflictingTypeRecords, existing)
 		}
 	}
 
-	// Step 3: Handle type conflicts (A vs CNAME)
+	hasOwnership := cache != nil && cache.hasOwnershipRecord(inst.Name(), hostname.Name, r.config.InstanceID)
+	mayManageExisting := hasOwnership || adoptExisting || !r.config.OwnershipTracking || !inst.Mode.RequiresOwnership()
+
+	// Step 3: Handle type conflicts (CNAME vs everything else). A conflicting
+	// record is replaced when this instance may delete it; otherwise the desired
+	// record can never be created and the hostname is skipped (issue #171).
+	var replaced []Action
 	if len(conflictingTypeRecords) > 0 {
 		conflictTypes := make([]string, 0, len(conflictingTypeRecords))
 		for _, rec := range conflictingTypeRecords {
 			conflictTypes = append(conflictTypes, string(rec.Type))
 		}
-		action.Type = ActionSkip
-		action.Status = StatusSkipped
-		action.Error = fmt.Sprintf("type conflict: existing %v record(s) conflict with %s",
-			conflictTypes, recordType)
-		r.logger.Warn("skipping due to record type conflict",
+		if !r.canReplaceConflicting(inst, hostname.Name, cache, adoptExisting) {
+			action.Type = ActionSkip
+			action.Status = StatusSkipped
+			action.Error = fmt.Sprintf("type conflict: existing %v record(s) conflict with %s",
+				conflictTypes, recordType)
+			r.warnTypeConflictOnce(hostname.Name, inst, string(recordType), conflictTypes)
+			return []Action{action}
+		}
+
+		var err error
+		replaced, err = r.replaceConflictingRecords(ctx, hostname.Name, inst, conflictingTypeRecords)
+		if err != nil {
+			action.Status = StatusFailed
+			action.Error = err.Error()
+			return append(replaced, action)
+		}
+	}
+
+	if r.isDryRun() {
+		action.Status = StatusSuccess
+		r.logger.Info("would create record (dry-run)",
 			slog.String("hostname", hostname.Name),
 			slog.String("provider", inst.Name()),
-			slog.String("desired_type", string(recordType)),
-			slog.Any("existing_types", conflictTypes),
+			slog.String("type", string(recordType)),
+			slog.String("target", target),
+			slog.Bool("ownership_tracking", r.config.OwnershipTracking),
+			slog.Bool("has_hints", hostname.HasRecordHints()),
 		)
-		return action
+		return append(replaced, action)
 	}
 
 	// Step 4: Check if record with correct target already exists
 	// For SRV records, we need to handle multiple records with the same target but different SRV data
+	var exactMatch provider.Record
 	var exactMatchFound bool
 	var staleSrvRecords []provider.Record
 	for _, existing := range sameTypeRecords {
-		if existing.Target == target {
-			// For SRV records, check if SRV-specific data matches
-			if recordType == provider.RecordTypeSRV {
-				if srvDataEquals(existing.SRV, srvData) {
-					// Perfect match for SRV record
-					exactMatchFound = true
-				} else {
-					// Same target but different SRV data - this is a stale record
-					staleSrvRecords = append(staleSrvRecords, existing)
-				}
-			} else {
-				// Non-SRV record with matching target - exact match
-				exactMatchFound = true
-			}
+		if existing.Target != target {
+			continue
 		}
+		// Same target but different SRV data - this is a stale record
+		if recordType == provider.RecordTypeSRV && !srvDataEquals(existing.SRV, srvData) {
+			staleSrvRecords = append(staleSrvRecords, existing)
+			continue
+		}
+		if !exactMatchFound {
+			exactMatch = existing
+			exactMatchFound = true
+		}
+	}
+
+	// Managed mode must not update or delete a pre-existing same-type record
+	// unless it is owned or the effective adoption policy allows taking it over.
+	if len(sameTypeRecords) > 0 && !mayManageExisting {
+		action.Type = ActionSkip
+		action.Status = StatusSkipped
+		action.Error = errRecordAlreadyExists
+		r.logger.Info("existing unmanaged record found, skipping",
+			slog.String("hostname", hostname.Name),
+			slog.String("provider", inst.Name()),
+			slog.String("existing_target", sameTypeRecords[0].Target),
+			slog.String("desired_target", target),
+		)
+		return append(replaced, action)
 	}
 
 	// Step 4a: Delete stale SRV records (same target, different priority/weight/port)
@@ -274,63 +544,65 @@ func (r *Reconciler) ensureRecordForProvider(ctx context.Context, hostname *sour
 		}
 	}
 
-	// Step 4b: If exact match exists, skip creation
+	// Step 4b: If exact match exists, skip creation. The one exception is a
+	// record dnsweaver manages for which the provider would still write
+	// different state (Cloudflare proxied, issue #170); that falls through to
+	// the in-place update in Step 5. Records dnsweaver does not manage are left
+	// exactly as found.
 	if exactMatchFound {
-		action.Type = ActionSkip
-		action.Status = StatusSkipped
-		action.Error = errRecordAlreadyExists
+		if !inst.RecordNeedsUpdate(exactMatch, desired) {
+			action.Type = ActionSkip
+			action.Status = StatusSkipped
+			action.Error = errRecordAlreadyExists
 
-		// Check if we already own this record
-		hasOwnership := false
-		if cache != nil {
-			hasOwnership = cache.hasOwnershipRecord(inst.Name(), hostname.Name, r.config.InstanceID)
+			if hasOwnership {
+				r.logger.Debug("record already exists with correct target",
+					slog.String("hostname", hostname.Name),
+					slog.String("provider", inst.Name()),
+					slog.String("target", target),
+				)
+				r.ensureOwnershipRecord(ctx, hostname.Name, inst, metadata, cache)
+			} else if adoptExisting {
+				r.logger.Info("adopting existing record",
+					slog.String("hostname", hostname.Name),
+					slog.String("provider", inst.Name()),
+					slog.String("target", target),
+				)
+				r.ensureOwnershipRecord(ctx, hostname.Name, inst, metadata, cache)
+			} else {
+				r.logger.Info("existing record found, skipping adoption",
+					slog.String("hostname", hostname.Name),
+					slog.String("provider", inst.Name()),
+					slog.String("target", target),
+				)
+			}
+			return append(replaced, action)
 		}
-
-		if hasOwnership {
-			r.logger.Debug("record already exists with correct target",
-				slog.String("hostname", hostname.Name),
-				slog.String("provider", inst.Name()),
-				slog.String("target", target),
-			)
-			r.ensureOwnershipRecord(ctx, hostname.Name, inst, metadata)
-		} else if r.config.AdoptExisting {
-			r.logger.Info("adopting existing record",
-				slog.String("hostname", hostname.Name),
-				slog.String("provider", inst.Name()),
-				slog.String("target", target),
-			)
-			r.ensureOwnershipRecord(ctx, hostname.Name, inst, metadata)
-		} else {
-			r.logger.Info("existing record found, skipping adoption (set ADOPT_EXISTING=true to manage)",
-				slog.String("hostname", hostname.Name),
-				slog.String("provider", inst.Name()),
-				slog.String("target", target),
-			)
-		}
-		return action
 	}
 
 	// Step 5: Update or create records as needed
 	// If we have existing records with wrong targets, update the first one in place
 	// (duplicates with wrong targets should be cleaned up separately)
+	// If the exact match only differs in provider state, update that one in place
 	// If no existing records, create new ones
 
 	if len(sameTypeRecords) > 0 {
-		// Update the first existing record - use UpdateRecord which handles native update vs fallback
+		// Use UpdateRecord which handles native update vs fallback
 		existing := sameTypeRecords[0]
-		r.logger.Info("target changed, updating record",
-			slog.String("hostname", hostname.Name),
-			slog.String("provider", inst.Name()),
-			slog.String("old_target", existing.Target),
-			slog.String("new_target", target),
-		)
-
-		desired := provider.Record{
-			Hostname: hostname.Name,
-			Type:     recordType,
-			Target:   target,
-			TTL:      ttl,
-			SRV:      srvData,
+		if exactMatchFound {
+			existing = exactMatch
+			r.logger.Info("record state changed, updating record",
+				slog.String("hostname", hostname.Name),
+				slog.String("provider", inst.Name()),
+				slog.String("target", target),
+			)
+		} else {
+			r.logger.Info("target changed, updating record",
+				slog.String("hostname", hostname.Name),
+				slog.String("provider", inst.Name()),
+				slog.String("old_target", existing.Target),
+				slog.String("new_target", target),
+			)
 		}
 
 		if err := inst.UpdateRecord(ctx, existing, desired); err != nil {
@@ -341,7 +613,7 @@ func (r *Reconciler) ensureRecordForProvider(ctx context.Context, hostname *sour
 				slog.String("provider", inst.Name()),
 				slog.String("error", err.Error()),
 			)
-			return action
+			return append(replaced, action)
 		}
 
 		action.Type = ActionUpdate
@@ -352,13 +624,13 @@ func (r *Reconciler) ensureRecordForProvider(ctx context.Context, hostname *sour
 			slog.String("type", string(recordType)),
 			slog.String("target", target),
 		)
-		r.ensureOwnershipRecord(ctx, hostname.Name, inst, metadata)
-		return action
+		r.ensureOwnershipRecord(ctx, hostname.Name, inst, metadata, cache)
+		return append(replaced, action)
 	}
 
 	// Step 6: Create the record (no existing records)
 	// Use CreateRecordWithValues to respect RecordHints overrides
-	if err := inst.CreateRecordWithValues(ctx, hostname.Name, recordType, target, ttl, srvData, metadata); err != nil {
+	if err := inst.CreateRecordWithValues(ctx, hostname.Name, recordType, target, ttl, srvData, mxData, metadata); err != nil {
 		// Handle conflict error (shouldn't happen after our checks, but be safe)
 		if provider.IsConflict(err) {
 			action.Type = ActionSkip
@@ -368,7 +640,11 @@ func (r *Reconciler) ensureRecordForProvider(ctx context.Context, hostname *sour
 				slog.String("hostname", hostname.Name),
 				slog.String("provider", inst.Name()),
 			)
-			r.ensureOwnershipRecord(ctx, hostname.Name, inst, metadata)
+			// A create conflict may be a record another system added after our
+			// List call. Do not silently adopt it when the effective policy is off.
+			if adoptExisting || !r.config.OwnershipTracking || !inst.Mode.RequiresOwnership() {
+				r.ensureOwnershipRecord(ctx, hostname.Name, inst, metadata, cache)
+			}
 		} else if provider.IsTypeConflict(err) {
 			action.Type = ActionSkip
 			action.Status = StatusSkipped
@@ -396,15 +672,26 @@ func (r *Reconciler) ensureRecordForProvider(ctx context.Context, hostname *sour
 			slog.String("target", target),
 		)
 		action.Status = StatusSuccess
-		r.ensureOwnershipRecord(ctx, hostname.Name, inst, metadata)
+		r.ensureOwnershipRecord(ctx, hostname.Name, inst, metadata, cache)
 	}
 
-	return action
+	return append(replaced, action)
 }
 
 // ensureOwnershipRecord creates the ownership TXT record if tracking is enabled.
-func (r *Reconciler) ensureOwnershipRecord(ctx context.Context, hostname string, inst *provider.ProviderInstance, metadata map[string]string) {
+// If the cache already shows an ownership record for this instance, the create
+// call is skipped to avoid generating an exception/log entry on the upstream
+// DNS server (e.g. Technitium logs every "record already exists" as an error).
+// See issue #87.
+func (r *Reconciler) ensureOwnershipRecord(ctx context.Context, hostname string, inst *provider.ProviderInstance, metadata map[string]string, cache *recordCache) {
 	if !r.config.OwnershipTracking {
+		return
+	}
+
+	// Short-circuit when the cache confirms our ownership record already exists.
+	// Without this, every reconciliation cycle posts a duplicate-create that
+	// dnsweaver swallows but the DNS server logs as an error.
+	if cache != nil && cache.hasOwnershipRecord(inst.Name(), hostname, r.config.InstanceID) {
 		return
 	}
 
@@ -435,4 +722,16 @@ func srvDataEquals(a, b *provider.SRVData) bool {
 		return false
 	}
 	return a.Priority == b.Priority && a.Weight == b.Weight && a.Port == b.Port
+}
+
+// mxDataEquals compares two MXData structs for equality.
+// Returns true if both are nil or have identical preference.
+func mxDataEquals(a, b *provider.MXData) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.Preference == b.Preference
 }

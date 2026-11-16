@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
+	"github.com/maxfield-allison/dnsweaver/pkg/workload"
 )
 
 func TestDNSWeaver_Name(t *testing.T) {
@@ -184,6 +184,83 @@ func TestDNSWeaver_Extract_SRVRecord(t *testing.T) {
 	}
 	if srv.Weight != 5 {
 		t.Errorf("SRV.Weight = %d, want %d", srv.Weight, 5)
+	}
+}
+
+func TestDNSWeaver_Extract_MXAndNSRecords(t *testing.T) {
+	tests := []struct {
+		name           string
+		labels         map[string]string
+		wantType       string
+		wantTarget     string
+		wantMX         bool
+		wantPreference uint16
+	}{
+		{
+			name: "MX record carries its preference",
+			labels: map[string]string{
+				"dnsweaver.records.mail.hostname": "example.com",
+				"dnsweaver.records.mail.type":     "MX",
+				"dnsweaver.records.mail.target":   "mail.protonmail.ch",
+				"dnsweaver.records.mail.priority": "10",
+			},
+			wantType:       "MX",
+			wantTarget:     "mail.protonmail.ch",
+			wantMX:         true,
+			wantPreference: 10,
+		},
+		{
+			name: "NS record carries only its target",
+			labels: map[string]string{
+				"dnsweaver.records.deleg.hostname": "sub.example.com",
+				"dnsweaver.records.deleg.type":     "NS",
+				"dnsweaver.records.deleg.target":   "ns1.example.net",
+			},
+			wantType:   "NS",
+			wantTarget: "ns1.example.net",
+			wantMX:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := New(WithLogger(testLogger()))
+
+			hostnames, err := d.Extract(context.Background(), workload.Workload{
+				Labels:   tt.labels,
+				Platform: workload.PlatformDocker,
+				Kind:     workload.KindContainer,
+			})
+			if err != nil {
+				t.Fatalf("Extract() error = %v", err)
+			}
+			if len(hostnames) != 1 {
+				t.Fatalf("Extract() returned %d hostnames, want 1", len(hostnames))
+			}
+
+			h := hostnames[0]
+			if h.RecordHints == nil {
+				t.Fatal("RecordHints is nil")
+			}
+			if h.RecordHints.Type != tt.wantType {
+				t.Errorf("RecordHints.Type = %q, want %q", h.RecordHints.Type, tt.wantType)
+			}
+			if h.RecordHints.Target != tt.wantTarget {
+				t.Errorf("RecordHints.Target = %q, want %q", h.RecordHints.Target, tt.wantTarget)
+			}
+			if !tt.wantMX {
+				if h.RecordHints.MX != nil {
+					t.Errorf("RecordHints.MX = %+v, want nil", h.RecordHints.MX)
+				}
+				return
+			}
+			if h.RecordHints.MX == nil {
+				t.Fatal("RecordHints.MX is nil")
+			}
+			if h.RecordHints.MX.Preference != tt.wantPreference {
+				t.Errorf("MX.Preference = %d, want %d", h.RecordHints.MX.Preference, tt.wantPreference)
+			}
+		})
 	}
 }
 

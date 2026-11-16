@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/httputil"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/httputil"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
 )
 
 // apiRecord represents a DNS record from the Technitium API.
@@ -23,6 +23,49 @@ type apiRecord struct {
 	TTL      int      `json:"ttl"`
 	RData    apiRData `json:"rData"`
 	Disabled bool     `json:"disabled"`
+}
+
+// svcParamsValue handles Technitium's dual representation of svcParams.
+// Older API versions return a pipe-delimited string ("alpn|h2"),
+// while newer versions return a JSON object ({"alpn": "h2"}).
+type svcParamsValue string
+
+// UnmarshalJSON implements json.Unmarshaler to accept both string and object forms.
+func (v *svcParamsValue) UnmarshalJSON(data []byte) error {
+	// Try string form first (write-path format: "alpn|h2")
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*v = svcParamsValue(s)
+		return nil
+	}
+	// Try object form (read-path format: {"alpn": "h2"} or {"alpn": ["h2","h3"]})
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return fmt.Errorf("svcParams: cannot parse as string or object: %s", data)
+	}
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // deterministic ordering
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		var valStr string
+		if err := json.Unmarshal(obj[k], &valStr); err == nil {
+			parts = append(parts, k+"|"+valStr)
+			continue
+		}
+		var valArr []string
+		if err := json.Unmarshal(obj[k], &valArr); err == nil {
+			parts = append(parts, k+"|"+strings.Join(valArr, ","))
+			continue
+		}
+		// Preserve unfamiliar representations so a custom parameter cannot
+		// disappear and make a manual record look like a generated companion.
+		parts = append(parts, k+"|"+string(obj[k]))
+	}
+	*v = svcParamsValue(strings.Join(parts, " "))
+	return nil
 }
 
 // apiRData contains the record-specific data from Technitium.
@@ -36,122 +79,12 @@ type apiRData struct {
 	Port      int    `json:"port,omitempty"`     // For SRV records
 	SrvTarget string `json:"target,omitempty"`   // For SRV records
 	// HTTPS/SVCB record fields
-	SvcPriority   int    `json:"svcPriority,omitempty"`   // For HTTPS/SVCB records
-	SvcTargetName string `json:"svcTargetName,omitempty"` // For HTTPS/SVCB records ("." = self)
-	SvcParams     string `json:"svcParams,omitempty"`     // For HTTPS/SVCB records (e.g., "alpn|h2")
+	SvcPriority   int            `json:"svcPriority,omitempty"`   // For HTTPS/SVCB records
+	SvcTargetName string         `json:"svcTargetName,omitempty"` // For HTTPS/SVCB records ("." = self)
+	SvcParams     svcParamsValue `json:"svcParams,omitempty"`     // For HTTPS/SVCB records (e.g., "alpn|h2")
 }
 
-// UnmarshalJSON supports Technitium's multiple svcParams response formats.
-// Some versions return svcParams as a string ("alpn|h2"), while newer versions
-// may return an object ({"alpn":"h2"}).
-func (r *apiRData) UnmarshalJSON(data []byte) error {
-	var raw struct {
-		IPAddress     string          `json:"ipAddress,omitempty"`
-		CName         string          `json:"cname,omitempty"`
-		Text          string          `json:"text,omitempty"`
-		Priority      int             `json:"priority,omitempty"`
-		Weight        int             `json:"weight,omitempty"`
-		Port          int             `json:"port,omitempty"`
-		SrvTarget     string          `json:"target,omitempty"`
-		SvcPriority   int             `json:"svcPriority,omitempty"`
-		SvcTargetName string          `json:"svcTargetName,omitempty"`
-		SvcParams     json.RawMessage `json:"svcParams,omitempty"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-
-	svcParams, err := decodeSvcParams(raw.SvcParams)
-	if err != nil {
-		return fmt.Errorf("parsing svcParams: %w", err)
-	}
-
-	*r = apiRData{
-		IPAddress:     raw.IPAddress,
-		CName:         raw.CName,
-		Text:          raw.Text,
-		Priority:      raw.Priority,
-		Weight:        raw.Weight,
-		Port:          raw.Port,
-		SrvTarget:     raw.SrvTarget,
-		SvcPriority:   raw.SvcPriority,
-		SvcTargetName: raw.SvcTargetName,
-		SvcParams:     svcParams,
-	}
-
-	return nil
-}
-
-func decodeSvcParams(raw json.RawMessage) (string, error) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return "", nil
-	}
-
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
-		return s, nil
-	}
-
-	var obj map[string]any
-	if err := json.Unmarshal(raw, &obj); err == nil {
-		return normalizeSvcParamsObject(obj), nil
-	}
-
-	return "", fmt.Errorf("unsupported svcParams format: %s", string(raw))
-}
-
-func normalizeSvcParamsObject(obj map[string]any) string {
-	if len(obj) == 0 {
-		return ""
-	}
-
-	keys := make([]string, 0, len(obj))
-	for k := range obj {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	parts := make([]string, 0, len(keys))
-	for _, key := range keys {
-		value := normalizeSvcParamValue(obj[key])
-		if value == "" {
-			parts = append(parts, key)
-			continue
-		}
-		parts = append(parts, key+"|"+value)
-	}
-
-	return strings.Join(parts, " ")
-}
-
-func normalizeSvcParamValue(v any) string {
-	switch value := v.(type) {
-	case string:
-		return value
-	case bool:
-		return strconv.FormatBool(value)
-	case float64:
-		return strconv.FormatFloat(value, 'f', -1, 64)
-	case []any:
-		parts := make([]string, 0, len(value))
-		for _, item := range value {
-			part := normalizeSvcParamValue(item)
-			if part == "" {
-				continue
-			}
-			parts = append(parts, part)
-		}
-		return strings.Join(parts, ",")
-	case map[string]any:
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			return ""
-		}
-		return string(encoded)
-	default:
-		return fmt.Sprintf("%v", value)
-	}
-}
+// Note: older Technitium versions might represent svcParams differently; keep parsing flexible.
 
 // apiResponse is the standard Technitium API response wrapper.
 type apiResponse struct {
@@ -204,13 +137,26 @@ func WithLogger(logger *slog.Logger) ClientOption {
 // WithInsecureSkipVerify configures the client to skip TLS certificate verification.
 // WARNING: This should only be used for testing or when connecting to servers with
 // self-signed certificates. It is insecure and should not be used in production.
+//
+// Deprecated: TLS settings are now configured framework-wide via the unified
+// httputil.TLSConfig wired through FactoryConfig.HTTP.TLS. This option remains
+// for backward compatibility with callers that construct Client directly; when
+// used, it replaces only the transport's TLS config rather than the entire
+// http.Client, so it composes with prior WithHTTPClient(…) calls.
 func WithInsecureSkipVerify(skip bool) ClientOption {
 	return func(c *Client) {
-		if skip {
-			c.httpClient = httputil.NewClient(&httputil.ClientConfig{
-				TLSSkipVerify: true,
-			})
+		if !skip {
+			return
 		}
+		// Build a fresh client that inherits stdlib transport defaults
+		// (HTTP/2, proxy env, connection pool) and only flips the
+		// skip-verify bit. This intentionally REPLACES c.httpClient
+		// rather than mutating its transport in place because the
+		// previously-set client may share its transport with other
+		// callers — mutating it would leak the change globally.
+		c.httpClient = httputil.NewClient(&httputil.ClientConfig{
+			TLS: &httputil.TLSConfig{InsecureSkip: true},
+		})
 	}
 }
 
@@ -231,7 +177,11 @@ func NewClient(baseURL, token string, opts ...ClientOption) *Client {
 }
 
 // doRequest performs an HTTP request to the Technitium API.
-func (c *Client) doRequest(ctx context.Context, endpoint string, params url.Values) (*apiResponse, error) {
+func (c *Client) doRequest(ctx context.Context, endpoint string, params url.Values) (result *apiResponse, err error) {
+	// Older supported servers require query-string authentication. Keep that
+	// contract, but protect every returned error before callers can log it.
+	defer func() { err = httputil.RedactRequestError(err, c.token) }()
+
 	// Add token to params
 	if params == nil {
 		params = url.Values{}
@@ -574,8 +524,31 @@ func (c *Client) AddHTTPSRecord(ctx context.Context, zone, hostname string, svcP
 	return nil
 }
 
-// DeleteHTTPSRecord removes an HTTPS (SVCB Type 65) record from the specified zone.
-// Note: implemented earlier; duplicate guard to ensure compile stability when patching.
+// UpdateHTTPSRecord changes one exact HTTPS member through the native update
+// API, preserving availability if the request fails before applying the change.
+func (c *Client) UpdateHTTPSRecord(ctx context.Context, zone string, existing, desired apiRecord) error {
+	params := url.Values{}
+	params.Set("zone", zone)
+	params.Set("domain", existing.Name)
+	params.Set("newDomain", desired.Name)
+	params.Set("type", "HTTPS")
+	params.Set("ttl", strconv.Itoa(desired.TTL))
+	params.Set("svcPriority", strconv.Itoa(existing.RData.SvcPriority))
+	params.Set("newSvcPriority", strconv.Itoa(desired.RData.SvcPriority))
+	params.Set("svcTargetName", existing.RData.SvcTargetName)
+	params.Set("newSvcTargetName", desired.RData.SvcTargetName)
+	for key, value := range map[string]svcParamsValue{"svcParams": existing.RData.SvcParams, "newSvcParams": desired.RData.SvcParams} {
+		if value == "" {
+			params.Set(key, "false")
+		} else {
+			params.Set(key, string(value))
+		}
+	}
+	if _, err := c.doRequest(ctx, "/api/zones/records/update", params); err != nil {
+		return fmt.Errorf("updating HTTPS record for %s: %w", existing.Name, err)
+	}
+	return nil
+}
 
 // parseSvcParams splits svcParams into key/value pairs for future use.
 // Input: "alpn|h2" → map{"alpn":"h2"}
@@ -673,13 +646,22 @@ func (c *Client) UpdateAAAARecord(ctx context.Context, zone, hostname, oldIP, ne
 }
 
 // UpdateCNAMERecord updates a CNAME record's target in the specified zone.
+//
+// CNAME records are unique per domain name (only one CNAME may exist at a name),
+// so the Technitium API's record-update endpoint identifies the record by
+// (zone, domain, type) alone. The new target is sent as the `cname` parameter.
+// The Technitium API does not define a `newCname` parameter; the previous use of
+// `cname=oldTarget` + `newCname=newTarget` was a silent no-op (the API matched
+// the existing record by `cname` and saw no change to apply). See issue #84.
+//
+// The oldTarget argument is retained for logging and call-site symmetry with
+// UpdateARecord/UpdateAAAARecord; it is not sent to the Technitium API.
 func (c *Client) UpdateCNAMERecord(ctx context.Context, zone, hostname, oldTarget, newTarget string, ttl int) error {
 	params := url.Values{}
 	params.Set("zone", zone)
 	params.Set("domain", hostname)
 	params.Set("type", "CNAME")
-	params.Set("cname", oldTarget)
-	params.Set("newCname", newTarget)
+	params.Set("cname", newTarget)
 	params.Set("ttl", strconv.Itoa(ttl))
 
 	_, err := c.doRequest(ctx, "/api/zones/records/update", params)

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"sync"
 
-	"gitlab.bluewillows.net/root/dnsweaver/internal/metrics"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
+	"github.com/maxfield-allison/dnsweaver/internal/metrics"
+	"github.com/maxfield-allison/dnsweaver/pkg/workload"
 )
 
 // Registry manages source implementations and coordinates hostname extraction.
@@ -22,16 +22,6 @@ type Registry struct {
 	byName  map[string]Source
 	logger  *slog.Logger
 }
-
-const (
-	// WorkloadProviderLabel routes all hostnames from a workload to one or more
-	// provider instances by name (Docker label form, comma-separated).
-	WorkloadProviderLabel = "dnsweaver.provider"
-
-	// WorkloadProviderAnnotation routes all hostnames from a workload to one or
-	// more provider instances by name (Kubernetes annotation form, comma-separated).
-	WorkloadProviderAnnotation = "dnsweaver.dev/provider"
-)
 
 // NewRegistry creates a new source registry.
 func NewRegistry(logger *slog.Logger) *Registry {
@@ -108,13 +98,35 @@ func (r *Registry) Count() int {
 // If a source returns an error, extraction continues with remaining sources.
 // Errors are logged but not returned to allow partial results.
 func (r *Registry) ExtractAll(ctx context.Context, w workload.Workload) Hostnames {
+	hostnames, _ := r.ExtractAllWithStatus(ctx, w)
+	return hostnames
+}
+
+// ExtractAllWithStatus is ExtractAll plus a completeness signal. complete is
+// false when any applicable source failed, even when other sources returned
+// usable claims. Reconciliation uses this to suppress removals from a partial
+// desired-state snapshot.
+func (r *Registry) ExtractAllWithStatus(ctx context.Context, w workload.Workload) (hostnames Hostnames, complete bool) {
 	// Global opt-out: dnsweaver.enabled=false skips ALL sources.
 	// Check Docker labels first, then K8s annotations.
 	if isWorkloadDisabled(w) {
 		r.logger.Debug("workload disabled via dnsweaver.enabled=false, skipping all sources",
 			slog.String("workload", w.Name),
 		)
-		return nil
+		return nil, true
+	}
+	instances, err := workloadInstances(w)
+	if err != nil {
+		r.logger.Warn("invalid workload provider selection; preserving existing records", slog.String("workload", w.Name), slog.String("error", err.Error()))
+		return nil, false
+	}
+
+	workloadAdopt, adoptKey, adoptValid := workloadAdoptExistingHint(w)
+	if !adoptValid {
+		r.logger.Warn("invalid workload adoption hint (must be true/false); ignoring",
+			slog.String("workload", w.Name),
+			slog.String("key", adoptKey),
+		)
 	}
 
 	r.mu.RLock()
@@ -123,7 +135,7 @@ func (r *Registry) ExtractAll(ctx context.Context, w workload.Workload) Hostname
 	r.mu.RUnlock()
 
 	var allHostnames Hostnames
-	workloadProvider := getWorkloadProviderHint(w)
+	complete = true
 
 	for _, src := range sources {
 		// Skip sources that don't support this workload's platform
@@ -133,6 +145,7 @@ func (r *Registry) ExtractAll(ctx context.Context, w workload.Workload) Hostname
 
 		hostnames, err := src.Extract(ctx, w)
 		if err != nil {
+			complete = false
 			r.logger.Warn("source extraction failed",
 				slog.String("source", src.Name()),
 				slog.String("error", err.Error()),
@@ -141,8 +154,9 @@ func (r *Registry) ExtractAll(ctx context.Context, w workload.Workload) Hostname
 		}
 
 		if len(hostnames) > 0 {
-			applyWorkloadProviderHint(hostnames, workloadProvider)
-
+			hostnames = append(Hostnames(nil), hostnames...)
+			applyWorkloadInstances(hostnames, instances)
+			applyWorkloadAdoptionHint(hostnames, workloadAdopt)
 			r.logger.Debug("source extracted hostnames",
 				slog.String("source", src.Name()),
 				slog.Int("count", len(hostnames)),
@@ -152,38 +166,7 @@ func (r *Registry) ExtractAll(ctx context.Context, w workload.Workload) Hostname
 		}
 	}
 
-	return allHostnames
-}
-
-// getWorkloadProviderHint returns a workload-level provider instance hint from
-// Docker labels or Kubernetes annotations. Empty means no hint.
-// The value may contain a comma-separated provider list.
-func getWorkloadProviderHint(w workload.Workload) string {
-	if v, ok := w.Labels[WorkloadProviderLabel]; ok {
-		return strings.TrimSpace(v)
-	}
-	if v, ok := w.Annotations[WorkloadProviderAnnotation]; ok {
-		return strings.TrimSpace(v)
-	}
-	return ""
-}
-
-// applyWorkloadProviderHint sets RecordHints.Provider for hostnames that don't
-// already have an explicit provider hint. The provider hint may be a
-// comma-separated provider list.
-func applyWorkloadProviderHint(hostnames []Hostname, providerName string) {
-	if providerName == "" {
-		return
-	}
-	for i := range hostnames {
-		if hostnames[i].RecordHints == nil {
-			hostnames[i].RecordHints = &RecordHints{Provider: providerName}
-			continue
-		}
-		if hostnames[i].RecordHints.Provider == "" {
-			hostnames[i].RecordHints.Provider = providerName
-		}
-	}
+	return allHostnames, complete
 }
 
 // sourceSupports returns true if the source supports the given platform.
@@ -234,12 +217,20 @@ func isWorkloadDisabled(w workload.Workload) bool {
 // If a source returns an error, discovery continues with remaining sources.
 // Errors are logged but not returned to allow partial results.
 func (r *Registry) DiscoverAll(ctx context.Context) Hostnames {
+	hostnames, _ := r.DiscoverAllWithStatus(ctx)
+	return hostnames
+}
+
+// DiscoverAllWithStatus is DiscoverAll plus a completeness signal. complete
+// is false when any discoverable source failed.
+func (r *Registry) DiscoverAllWithStatus(ctx context.Context) (hostnames Hostnames, complete bool) {
 	r.mu.RLock()
 	sources := make([]Source, len(r.sources))
 	copy(sources, r.sources)
 	r.mu.RUnlock()
 
 	var allHostnames Hostnames
+	complete = true
 
 	for _, src := range sources {
 		if !src.SupportsDiscovery() {
@@ -248,6 +239,7 @@ func (r *Registry) DiscoverAll(ctx context.Context) Hostnames {
 
 		hostnames, err := src.Discover(ctx)
 		if err != nil {
+			complete = false
 			r.logger.Warn("source file discovery failed",
 				slog.String("source", src.Name()),
 				slog.String("error", err.Error()),
@@ -265,7 +257,7 @@ func (r *Registry) DiscoverAll(ctx context.Context) Hostnames {
 		}
 	}
 
-	return allHostnames
+	return allHostnames, complete
 }
 
 // DiscoverableSources returns sources that have file discovery configured.
@@ -285,6 +277,10 @@ func (r *Registry) DiscoverableSources() []Source {
 // ExtractFrom queries a specific source by name.
 // Returns an error if the source is not found.
 func (r *Registry) ExtractFrom(ctx context.Context, sourceName string, w workload.Workload) (Hostnames, error) {
+	instances, err := workloadInstances(w)
+	if err != nil {
+		return nil, err
+	}
 	r.mu.RLock()
 	src, exists := r.byName[sourceName]
 	r.mu.RUnlock()
@@ -293,7 +289,69 @@ func (r *Registry) ExtractFrom(ctx context.Context, sourceName string, w workloa
 		return nil, ErrSourceNotFound(sourceName)
 	}
 
-	return src.Extract(ctx, w)
+	hostnames, err := src.Extract(ctx, w)
+	if err != nil {
+		return nil, err
+	}
+	hostnames = append(Hostnames(nil), hostnames...)
+	applyWorkloadInstances(hostnames, instances)
+	workloadAdopt, adoptKey, valid := workloadAdoptExistingHint(w)
+	if !valid {
+		r.logger.Warn("invalid workload adoption hint (must be true/false); ignoring",
+			slog.String("workload", w.Name),
+			slog.String("key", adoptKey),
+		)
+	} else {
+		applyWorkloadAdoptionHint(hostnames, workloadAdopt)
+	}
+	return hostnames, nil
+}
+
+// workloadAdoptExistingHint reads the workload-wide adoption hint. Docker
+// labels take precedence over Kubernetes annotations, matching native-label
+// conversion behavior. The third return value reports whether a present value
+// was valid; absence is valid and returns nil.
+func workloadAdoptExistingHint(w workload.Workload) (*bool, string, bool) {
+	const (
+		dockerKey = "dnsweaver.adopt"
+		k8sKey    = "dnsweaver.dev/adopt"
+	)
+
+	value, ok := w.Labels[dockerKey]
+	key := dockerKey
+	if !ok {
+		value, ok = w.Annotations[k8sKey]
+		key = k8sKey
+	}
+	if !ok {
+		return nil, "", true
+	}
+
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true":
+		parsed := true
+		return &parsed, key, true
+	case "false":
+		parsed := false
+		return &parsed, key, true
+	default:
+		return nil, key, false
+	}
+}
+
+// applyWorkloadAdoptionHint applies a workload-wide hint to hostnames found by
+// every source, including Traefik. A record-specific hint already attached by
+// the native source takes precedence.
+func applyWorkloadAdoptionHint(hostnames Hostnames, adopt *bool) {
+	if adopt == nil {
+		return
+	}
+	for i := range hostnames {
+		if hostnames[i].AdoptExisting == nil {
+			value := *adopt
+			hostnames[i].AdoptExisting = &value
+		}
+	}
 }
 
 // DiscoverFrom queries a specific source by name for file-based discovery.

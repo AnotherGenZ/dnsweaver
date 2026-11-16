@@ -1,11 +1,23 @@
 # Trivy CVE Ignore List for dnsweaver
 # https://aquasecurity.github.io/trivy/latest/docs/configuration/filtering/#by-finding-ids
+#
+# These package-level matches are retained under the reviewed Docker-client
+# exception policy in security/govulncheck-exception-review.md. Trivy cannot
+# establish call-graph reachability; advisory metadata and scanner scope must
+# be reviewed together. Do not claim that every scanner reports them as
+# unreachable. The separate govulncheck gate enforces exact finding scope,
+# review on 2026-10-16 and expiry on 2026-12-16.
+# Revisit immediately if client usage, advisory scope or supported fixes change.
 
-# CVE-2026-34040: Docker Engine AuthZ plugin bypass in github.com/docker/docker v28.5.2
-# Fix available in v29.3.1 (github.com/moby/moby/v2), but:
-#   1. Only beta releases on Go proxy (v2.0.0-beta.0 through beta.8)
-#   2. Requires Go 1.25.5+ and full import path migration to moby/moby/v2
-#   3. CVE is a daemon-side AuthZ plugin bypass — dnsweaver is a client-only consumer
-#      that uses the Docker SDK to read container/service state (no AuthZ interaction)
-# Review by: 2026-07-01 or when moby/moby/v2 reaches stable release
+# CVE-2026-34040: Docker Engine AuthZ plugin bypass (oversized request bodies).
 CVE-2026-34040
+
+# CVE-2026-41567: Moby/Docker Engine arbitrary code execution via a malicious
+# container image and compressed layers. Daemon-side; unreachable from a
+# read-only SDK client. No fix in the v28.x github.com/docker/docker module.
+CVE-2026-41567
+
+# CVE-2026-42306: Moby host file overwrite via a race condition in container
+# archive handling. Daemon-side; unreachable from a read-only SDK client. No fix
+# in the v28.x github.com/docker/docker module.
+CVE-2026-42306

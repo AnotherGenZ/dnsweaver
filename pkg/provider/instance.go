@@ -5,10 +5,11 @@ import (
 	"errors"
 	"net"
 	"strings"
+	"sync/atomic"
 	"time"
 
-	"gitlab.bluewillows.net/root/dnsweaver/internal/matcher"
-	"gitlab.bluewillows.net/root/dnsweaver/internal/metrics"
+	"github.com/maxfield-allison/dnsweaver/internal/matcher"
+	"github.com/maxfield-allison/dnsweaver/internal/metrics"
 )
 
 // Metrics status values.
@@ -62,7 +63,19 @@ type ProviderInstance struct {
 	// Target is the value for DNS records:
 	// - For A records: an IP address (e.g., "192.0.2.10")
 	// - For CNAME records: a target hostname (e.g., "example.com")
+	//
+	// Target holds the statically configured value. When a dynamic target
+	// resolver is active (DNSWEAVER_{NAME}_TARGET_MODE), the resolved value is
+	// stored separately via SetDynamicTarget and takes precedence; read the
+	// effective value with EffectiveTarget(). Target itself remains the
+	// last-resort fallback used until the first successful resolution.
 	Target string
+
+	// dynamicTarget holds a resolver-provided target that overrides the static
+	// Target. It is read on the reconcile hot path and written by the target
+	// refresh goroutine, so access is lock-free via atomic. A nil pointer means
+	// no dynamic target has been resolved yet (fall back to Target).
+	dynamicTarget atomic.Pointer[string]
 
 	// TTL is the time-to-live for DNS records in seconds.
 	TTL int
@@ -71,20 +84,61 @@ type ProviderInstance struct {
 	// Defaults to ModeManaged if not set.
 	Mode OperationalMode
 
-	// MatchLabeledOnly requires explicit provider-instance targeting labels
-	// for this instance to be selected during standard domain matching.
-	// Explicit provider routing still works regardless of this flag.
-	MatchLabeledOnly bool
+	// AdoptExisting overrides the reconciler's global adoption policy for this
+	// provider. nil inherits the global setting.
+	AdoptExisting *bool
+
+	// AdoptExistingAllowOverrides permits workload-controlled adopt=true hints
+	// to enable adoption for this provider.
+	AdoptExistingAllowOverrides bool
 
 	// InstanceID is the unique identifier for the dnsweaver instance.
 	// Used for multi-instance coordination to scope ownership records.
 	// Empty string means single-instance mode (legacy behavior).
 	InstanceID string
+
+	// MetadataFilters scopes this instance to hostnames whose Metadata map
+	// satisfies every key in this map. For each key, the hostname's value
+	// must appear in the configured allowlist. A hostname missing the key
+	// entirely is treated as a wildcard and matches any filter (mirrors
+	// Traefik's "no entrypoints declared = bound to all entrypoints"
+	// semantics). nil/empty means no metadata filtering — domain match alone
+	// decides ownership (full backward compatibility).
+	MetadataFilters map[string][]string
+
+	// Identity is the backend identity reported by the underlying Provider
+	// (or a conservative fallback for providers that don't implement
+	// Identifiable). The reconciler uses this together with RecordType to
+	// group overlapping providers so each distinct backend receives exactly
+	// one write per hostname per reconciliation. See identity.go and #88.
+	Identity ProviderIdentity
 }
 
 // Name returns the provider instance name (delegates to Provider).
 func (pi *ProviderInstance) Name() string {
 	return pi.Provider.Name()
+}
+
+// EffectiveTarget returns the target to use for DNS records: the dynamically
+// resolved target if one has been set (see SetDynamicTarget), otherwise the
+// statically configured Target. Safe for concurrent use.
+func (pi *ProviderInstance) EffectiveTarget() string {
+	if v := pi.dynamicTarget.Load(); v != nil {
+		return *v
+	}
+	return pi.Target
+}
+
+// SetDynamicTarget stores a resolver-provided target that overrides the static
+// Target. Callers (the target refresh loop) should only pass non-empty,
+// validated values; passing "" clears the override and falls back to Target.
+// Safe for concurrent use.
+func (pi *ProviderInstance) SetDynamicTarget(target string) {
+	if target == "" {
+		pi.dynamicTarget.Store(nil)
+		return
+	}
+	pi.dynamicTarget.Store(&target)
 }
 
 // Type returns the provider type (delegates to Provider).
@@ -93,26 +147,73 @@ func (pi *ProviderInstance) Type() string {
 }
 
 // Matches returns true if this instance should handle the given hostname.
+//
+// This is the legacy domain-only matcher. Metadata filters are NOT consulted
+// — callers that have a full source.Hostname in hand should prefer
+// MatchesWithMetadata so that DNSWEAVER_{NAME}_ENTRYPOINTS-style filters
+// take effect.
 func (pi *ProviderInstance) Matches(hostname string) bool {
 	return pi.Matcher.Matches(hostname)
+}
+
+// MatchesWithMetadata returns true if this instance should handle the given
+// hostname, AND the supplied metadata satisfies every configured
+// MetadataFilter. A hostname missing a filtered key entirely is treated as a
+// wildcard and matches any filter value.
+func (pi *ProviderInstance) MatchesWithMetadata(hostname string, metadata map[string]string) bool {
+	if !pi.Matcher.Matches(hostname) {
+		return false
+	}
+	return matchesMetadataFilters(metadata, pi.MetadataFilters)
+}
+
+// matchesMetadataFilters checks the AND-of-OR predicate: for every filter
+// key, either the hostname omits the key (wildcard) or its value is in the
+// allowlist. nil/empty filters always match.
+func matchesMetadataFilters(metadata map[string]string, filters map[string][]string) bool {
+	if len(filters) == 0 {
+		return true
+	}
+	for key, allowed := range filters {
+		value, present := metadata[key]
+		if !present {
+			// Missing key = wildcard — matches any filter.
+			continue
+		}
+		if !sliceContainsString(allowed, value) {
+			return false
+		}
+	}
+	return true
+}
+
+func sliceContainsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }
 
 // CreateRecord creates a DNS record for the given hostname using this instance's
 // record type and target configuration.
 func (pi *ProviderInstance) CreateRecord(ctx context.Context, hostname string) error {
-	return pi.CreateRecordWithValues(ctx, hostname, pi.RecordType, pi.Target, pi.TTL, nil, nil)
+	return pi.CreateRecordWithValues(ctx, hostname, pi.RecordType, pi.EffectiveTarget(), pi.TTL, nil, nil, nil)
 }
 
-// CreateRecordWithValues creates a DNS record with explicit type, target, TTL, optional SRV data,
-// and optional metadata. Metadata is passed through to the provider for provider-specific behavior
-// (e.g., Cloudflare proxied state). A nil metadata map is valid and means no metadata.
-func (pi *ProviderInstance) CreateRecordWithValues(ctx context.Context, hostname string, recordType RecordType, target string, ttl int, srvData *SRVData, metadata map[string]string) error {
+// CreateRecordWithValues creates a DNS record with explicit type, target, TTL, optional SRV
+// and MX data, and optional metadata. Metadata is passed through to the provider for
+// provider-specific behavior (e.g., Cloudflare proxied state). A nil metadata map is valid
+// and means no metadata.
+func (pi *ProviderInstance) CreateRecordWithValues(ctx context.Context, hostname string, recordType RecordType, target string, ttl int, srvData *SRVData, mxData *MXData, metadata map[string]string) error {
 	record := Record{
 		Hostname: hostname,
 		Type:     recordType,
 		Target:   target,
 		TTL:      ttl,
 		SRV:      srvData,
+		MX:       mxData,
 		Metadata: metadata,
 	}
 
@@ -136,7 +237,7 @@ func (pi *ProviderInstance) DeleteRecord(ctx context.Context, hostname string) e
 	record := Record{
 		Hostname: hostname,
 		Type:     pi.RecordType,
-		Target:   pi.Target,
+		Target:   pi.EffectiveTarget(),
 	}
 
 	start := time.Now()
@@ -209,6 +310,17 @@ func (pi *ProviderInstance) UpdateRecord(ctx context.Context, existing, desired 
 	return err
 }
 
+// RecordNeedsUpdate reports whether the provider would write different
+// provider-specific state for desired than existing currently holds (see
+// RecordComparer). Providers that do not implement RecordComparer never report
+// a difference, so callers see today's TTL/SRV-only comparison for them.
+func (pi *ProviderInstance) RecordNeedsUpdate(existing, desired Record) bool {
+	if cmp, ok := pi.Provider.(RecordComparer); ok {
+		return cmp.RecordNeedsUpdate(existing, desired)
+	}
+	return false
+}
+
 // GetExistingRecords returns all A/CNAME records that exist for a given hostname.
 // This is used by the reconciler to detect if the target has changed or if there's
 // a type conflict before creating a new record.
@@ -233,7 +345,7 @@ func (pi *ProviderInstance) GetExistingRecords(ctx context.Context, hostname str
 		// Case-insensitive hostname comparison per RFC 1035 Section 2.3.3
 		if strings.EqualFold(r.Hostname, hostname) {
 			switch r.Type {
-			case RecordTypeA, RecordTypeAAAA, RecordTypeCNAME, RecordTypeSRV, RecordTypeHTTPS:
+			case RecordTypeA, RecordTypeAAAA, RecordTypeCNAME, RecordTypeSRV, RecordTypeHTTPS, RecordTypeMX, RecordTypeNS:
 				matching = append(matching, r)
 			case RecordTypeTXT:
 				// Skip TXT records (ownership markers)
@@ -266,6 +378,22 @@ func (pi *ProviderInstance) DeleteRecordByTarget(ctx context.Context, hostname s
 	metrics.ProviderAPIRequestsTotal.WithLabelValues(pi.Name(), "delete", status).Inc()
 	metrics.ProviderAPIDuration.WithLabelValues(pi.Name(), "delete").Observe(duration)
 
+	return err
+}
+
+// DeleteMember removes the exact provider record supplied by a List snapshot,
+// preserving provider IDs and type-specific identity fields.
+func (pi *ProviderInstance) DeleteMember(ctx context.Context, record Record) error {
+	start := time.Now()
+	err := pi.Provider.Delete(ctx, record)
+	duration := time.Since(start).Seconds()
+
+	status := statusSuccess
+	if err != nil {
+		status = statusError
+	}
+	metrics.ProviderAPIRequestsTotal.WithLabelValues(pi.Name(), "delete", status).Inc()
+	metrics.ProviderAPIDuration.WithLabelValues(pi.Name(), "delete").Observe(duration)
 	return err
 }
 
@@ -321,6 +449,28 @@ func (pi *ProviderInstance) CreateOwnershipRecord(ctx context.Context, hostname 
 	return err
 }
 
+// CreateMemberOwnershipRecord creates a versioned TXT marker for one logical
+// DNS record member.
+func (pi *ProviderInstance) CreateMemberOwnershipRecord(ctx context.Context, member Record, metadata map[string]string) error {
+	record := MemberOwnershipRecord(member.Hostname, pi.TTL, pi.InstanceID, member, metadata)
+
+	start := time.Now()
+	err := pi.Provider.Create(ctx, record)
+	duration := time.Since(start).Seconds()
+
+	status := statusSuccess
+	if err != nil {
+		if IsConflict(err) {
+			return nil
+		}
+		status = statusError
+	}
+
+	metrics.ProviderAPIRequestsTotal.WithLabelValues(pi.Name(), "create_member_ownership", status).Inc()
+	metrics.ProviderAPIDuration.WithLabelValues(pi.Name(), "create_member_ownership").Observe(duration)
+	return err
+}
+
 // DeleteOwnershipRecord removes the TXT ownership record for a hostname.
 func (pi *ProviderInstance) DeleteOwnershipRecord(ctx context.Context, hostname string) error {
 	record := OwnershipRecord(hostname, pi.TTL, pi.InstanceID, nil)
@@ -337,6 +487,24 @@ func (pi *ProviderInstance) DeleteOwnershipRecord(ctx context.Context, hostname 
 	metrics.ProviderAPIRequestsTotal.WithLabelValues(pi.Name(), "delete_ownership", status).Inc()
 	metrics.ProviderAPIDuration.WithLabelValues(pi.Name(), "delete_ownership").Observe(duration)
 
+	return err
+}
+
+// DeleteMemberOwnershipRecord deletes the exact TXT marker for one logical DNS
+// record member, leaving markers for sibling values unchanged.
+func (pi *ProviderInstance) DeleteMemberOwnershipRecord(ctx context.Context, member Record, metadata map[string]string) error {
+	record := MemberOwnershipRecord(member.Hostname, pi.TTL, pi.InstanceID, member, metadata)
+
+	start := time.Now()
+	err := pi.Provider.Delete(ctx, record)
+	duration := time.Since(start).Seconds()
+
+	status := statusSuccess
+	if err != nil {
+		status = statusError
+	}
+	metrics.ProviderAPIRequestsTotal.WithLabelValues(pi.Name(), "delete_member_ownership", status).Inc()
+	metrics.ProviderAPIDuration.WithLabelValues(pi.Name(), "delete_member_ownership").Observe(duration)
 	return err
 }
 
@@ -370,6 +538,22 @@ func (pi *ProviderInstance) HasOwnershipRecord(ctx context.Context, hostname str
 	return false, nil
 }
 
+// HasMemberOwnershipRecord checks for an exact versioned ownership marker.
+func (pi *ProviderInstance) HasMemberOwnershipRecord(ctx context.Context, member Record) (bool, error) {
+	ownershipName := OwnershipRecordName(member.Hostname)
+	records, err := pi.Provider.List(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, record := range records {
+		if record.Type == RecordTypeTXT && strings.EqualFold(record.Hostname, ownershipName) &&
+			MatchesMemberOwnership(record.Target, pi.InstanceID, member) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // RecoveredHostname represents a hostname recovered from ownership TXT records,
 // along with any metadata that was persisted in the ownership value.
 type RecoveredHostname struct {
@@ -379,6 +563,40 @@ type RecoveredHostname struct {
 	// Metadata contains key-value pairs recovered from the ownership TXT value.
 	// For old-format records (no metadata), this will be nil.
 	Metadata map[string]string
+}
+
+// RecoveredMember represents one exact DNS member recovered from a versioned
+// ownership marker.
+type RecoveredMember struct {
+	Record   Record
+	Metadata map[string]string
+}
+
+// RecoverOwnedMembers scans the provider for versioned member markers owned by
+// this dnsweaver instance. Legacy hostname-level markers are deliberately not
+// returned because they cannot identify a safe deletion target.
+func (pi *ProviderInstance) RecoverOwnedMembers(ctx context.Context) ([]RecoveredMember, error) {
+	records, err := pi.Provider.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var recovered []RecoveredMember
+	for _, record := range records {
+		if record.Type != RecordTypeTXT || !IsOwnershipRecord(record.Hostname) {
+			continue
+		}
+		owned, instanceID, member, metadata := ParseMemberOwnershipValue(record.Target)
+		if !owned || instanceID != pi.InstanceID || member == nil {
+			continue
+		}
+		member.Hostname = ExtractHostnameFromOwnership(record.Hostname)
+		if member.Hostname == "" {
+			continue
+		}
+		recovered = append(recovered, RecoveredMember{Record: *member, Metadata: metadata})
+	}
+	return recovered, nil
 }
 
 // RecoverOwnedHostnames scans the provider for ownership TXT records and returns
@@ -460,6 +678,13 @@ type ProviderInstanceConfig struct {
 	// Target is the IP or hostname target for records.
 	Target string
 
+	// TargetMode, when non-empty, signals that Target is resolved dynamically
+	// at runtime (DNSWEAVER_{NAME}_TARGET_MODE, e.g. "public" or
+	// "interface:<name>"). In that case Target is optional and acts only as a
+	// fallback until the first successful resolution, so Validate does not
+	// require it. Empty means Target is used verbatim and is required.
+	TargetMode string
+
 	// TTL is the record TTL in seconds.
 	TTL int
 
@@ -467,10 +692,13 @@ type ProviderInstanceConfig struct {
 	// Defaults to "managed" if not set.
 	Mode OperationalMode
 
-	// MatchLabeledOnly requires explicit provider-instance targeting labels
-	// for this instance to match during standard domain-based routing.
-	// Defaults to false.
-	MatchLabeledOnly bool
+	// AdoptExisting overrides the global adoption policy for this provider.
+	// nil inherits the global setting.
+	AdoptExisting *bool
+
+	// AdoptExistingAllowOverrides permits workload-controlled adopt=true hints
+	// to enable adoption for this provider.
+	AdoptExistingAllowOverrides bool
 
 	// Domains is a list of glob patterns for matching hostnames.
 	// At least one is required.
@@ -485,6 +713,11 @@ type ProviderInstanceConfig struct {
 
 	// ExcludeDomainsRegex is an optional list of regex patterns to exclude.
 	ExcludeDomainsRegex []string
+
+	// MetadataFilters scopes this instance to hostnames whose Metadata map
+	// satisfies every key in this map. See ProviderInstance.MetadataFilters
+	// for the full semantics. nil/empty means no metadata filtering.
+	MetadataFilters map[string][]string
 
 	// ProviderConfig holds provider-specific settings (URL, token, zone, etc.).
 	ProviderConfig map[string]string
@@ -501,19 +734,27 @@ func (c *ProviderInstanceConfig) Validate() error {
 	if c.RecordType != RecordTypeA && c.RecordType != RecordTypeAAAA && c.RecordType != RecordTypeCNAME {
 		return ErrConfigInvalid("record_type", string(c.RecordType), "must be A, AAAA, or CNAME")
 	}
-	if c.Target == "" {
-		return ErrConfigMissing("target")
-	}
 
-	// Validate target matches record type
-	if c.RecordType == RecordTypeCNAME && isIPAddress(c.Target) {
-		return ErrConfigInvalid("target", c.Target, "CNAME records cannot point to IP addresses; use record_type=A or AAAA for IP targets")
-	}
-	if c.RecordType == RecordTypeA && !isIPv4Address(c.Target) {
-		return ErrConfigInvalid("target", c.Target, "A records must point to IPv4 addresses; use record_type=AAAA for IPv6 or CNAME for hostnames")
-	}
-	if c.RecordType == RecordTypeAAAA && !isIPv6Address(c.Target) {
-		return ErrConfigInvalid("target", c.Target, "AAAA records must point to IPv6 addresses; use record_type=A for IPv4 or CNAME for hostnames")
+	// Target is required unless a dynamic TargetMode is configured, in which
+	// case it is resolved at runtime and Target (when set) is only a fallback.
+	// When a fallback Target is provided alongside a mode we still type-check
+	// it below; when it is empty the runtime resolver is family-aware and
+	// validates its own output, so there is nothing to check here.
+	if c.Target == "" {
+		if c.TargetMode == "" {
+			return ErrConfigMissing("target")
+		}
+	} else {
+		// Validate target matches record type.
+		if c.RecordType == RecordTypeCNAME && isIPAddress(c.Target) {
+			return ErrConfigInvalid("target", c.Target, "CNAME records cannot point to IP addresses; use record_type=A or AAAA for IP targets")
+		}
+		if c.RecordType == RecordTypeA && !isIPv4Address(c.Target) {
+			return ErrConfigInvalid("target", c.Target, "A records must point to IPv4 addresses; use record_type=AAAA for IPv6 or CNAME for hostnames")
+		}
+		if c.RecordType == RecordTypeAAAA && !isIPv6Address(c.Target) {
+			return ErrConfigInvalid("target", c.Target, "AAAA records must point to IPv6 addresses; use record_type=A for IPv4 or CNAME for hostnames")
+		}
 	}
 
 	if c.TTL < 1 {

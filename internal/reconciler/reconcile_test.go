@@ -5,10 +5,11 @@ import (
 	"errors"
 	"testing"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
-	"gitlab.bluewillows.net/root/dnsweaver/sources/traefik"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/source"
+	"github.com/maxfield-allison/dnsweaver/pkg/workload"
+	dnsweaversrc "github.com/maxfield-allison/dnsweaver/sources/dnsweaver"
+	"github.com/maxfield-allison/dnsweaver/sources/traefik"
 )
 
 // =============================================================================
@@ -205,276 +206,6 @@ func TestReconcile_MultipleWorkloads(t *testing.T) {
 	}
 }
 
-func TestReconcile_CleansUpWhenHostnameStopsMatchingProvider(t *testing.T) {
-	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
-	dockerMock.AddWorkload("my-app", map[string]string{
-		"traefik.http.routers.myapp.rule": "Host(`app.example.com`)",
-	})
-
-	logger := quietLogger()
-
-	sources := source.NewRegistry(logger)
-	sources.Register(traefik.New(traefik.WithLogger(logger)))
-
-	mockProvider := newTestMockProvider("internal-dns")
-	mockProvider.AddRecord(provider.Record{
-		Hostname: "app.example.com",
-		Type:     provider.RecordTypeA,
-		Target:   "10.0.0.1",
-		TTL:      300,
-	})
-
-	providers := provider.NewRegistry(logger)
-	providers.RegisterFactory("mock", func(cfg provider.FactoryConfig) (provider.Provider, error) {
-		return mockProvider, nil
-	})
-	_ = providers.CreateInstance(provider.ProviderInstanceConfig{
-		Name:             "internal-dns",
-		TypeName:         "mock",
-		RecordType:       provider.RecordTypeA,
-		Target:           "10.0.0.1",
-		TTL:              300,
-		MatchLabeledOnly: true, // Domain-based matching no longer routes this hostname
-		Mode:             provider.ModeAuthoritative,
-		Domains:          []string{"*.example.com"},
-	})
-
-	cfg := DefaultConfig()
-	cfg.CleanupOrphans = true
-	cfg.OwnershipTracking = false
-
-	r := New([]workload.Lister{dockerMock}, sources, providers,
-		WithConfig(cfg),
-		WithLogger(logger),
-	)
-
-	// Simulate previous reconciliation state when this hostname was routed.
-	r.mu.Lock()
-	r.knownHostnames = map[string]struct{}{
-		"app.example.com": {},
-	}
-	r.hostnameProviders = map[string][]string{
-		"app.example.com": {"internal-dns"},
-	}
-	r.mu.Unlock()
-
-	result, err := r.Reconcile(context.Background())
-	if err != nil {
-		t.Fatalf("Reconcile returned error: %v", err)
-	}
-
-	deleted := mockProvider.GetDeleted()
-	if len(deleted) == 0 {
-		t.Fatalf("expected detached-provider cleanup to delete record, got none")
-	}
-
-	foundDeleteAction := false
-	for _, action := range result.Actions {
-		if action.Type == ActionDelete && action.Provider == "internal-dns" && action.Hostname == "app.example.com" {
-			foundDeleteAction = true
-			break
-		}
-	}
-	if !foundDeleteAction {
-		t.Fatalf("expected delete action for detached provider; actions: %+v", result.Actions)
-	}
-}
-
-func TestReconcile_MatchLabeledOnlyTransition_DeletesInternalKeepsExternal(t *testing.T) {
-	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
-	dockerMock.AddWorkload("my-app", map[string]string{
-		"traefik.http.routers.myapp.rule": "Host(`app.example.com`)",
-	})
-
-	logger := quietLogger()
-	sources := source.NewRegistry(logger)
-	sources.Register(traefik.New(traefik.WithLogger(logger)))
-
-	internalMock := newTestMockProvider("internal-dns")
-	externalMock := newTestMockProvider("external-dns")
-
-	internalMock.AddRecord(provider.Record{
-		Hostname: "app.example.com",
-		Type:     provider.RecordTypeA,
-		Target:   "10.0.0.1",
-		TTL:      300,
-	})
-	externalMock.AddRecord(provider.Record{
-		Hostname: "app.example.com",
-		Type:     provider.RecordTypeA,
-		Target:   "203.0.113.10",
-		TTL:      300,
-	})
-
-	providers := provider.NewRegistry(logger)
-	providers.RegisterFactory("mock", func(cfg provider.FactoryConfig) (provider.Provider, error) {
-		if cfg.Name == "internal-dns" {
-			return internalMock, nil
-		}
-		if cfg.Name == "external-dns" {
-			return externalMock, nil
-		}
-		return newTestMockProvider(cfg.Name), nil
-	})
-
-	_ = providers.CreateInstance(provider.ProviderInstanceConfig{
-		Name:             "internal-dns",
-		TypeName:         "mock",
-		RecordType:       provider.RecordTypeA,
-		Target:           "10.0.0.1",
-		TTL:              300,
-		MatchLabeledOnly: true, // Newly enabled: no longer selected by default matching
-		Mode:             provider.ModeAuthoritative,
-		Domains:          []string{"*.example.com"},
-	})
-	_ = providers.CreateInstance(provider.ProviderInstanceConfig{
-		Name:       "external-dns",
-		TypeName:   "mock",
-		RecordType: provider.RecordTypeA,
-		Target:     "203.0.113.10",
-		TTL:        300,
-		Mode:       provider.ModeAuthoritative,
-		Domains:    []string{"*.example.com"},
-	})
-
-	cfg := DefaultConfig()
-	cfg.CleanupOrphans = true
-	cfg.OwnershipTracking = false
-
-	r := New([]workload.Lister{dockerMock}, sources, providers,
-		WithConfig(cfg),
-		WithLogger(logger),
-	)
-
-	// Previous state before enabling MatchLabeledOnly on internal-dns:
-	// hostname routed to both providers.
-	r.mu.Lock()
-	r.knownHostnames = map[string]struct{}{
-		"app.example.com": {},
-	}
-	r.hostnameProviders = map[string][]string{
-		"app.example.com": {"internal-dns", "external-dns"},
-	}
-	r.mu.Unlock()
-
-	result, err := r.Reconcile(context.Background())
-	if err != nil {
-		t.Fatalf("Reconcile returned error: %v", err)
-	}
-
-	internalDeleted := internalMock.GetDeleted()
-	if len(internalDeleted) == 0 {
-		t.Fatalf("expected internal-dns record to be deleted after routing change")
-	}
-
-	externalDeleted := externalMock.GetDeleted()
-	if len(externalDeleted) != 0 {
-		t.Fatalf("expected external-dns records to be preserved, got deletions: %+v", externalDeleted)
-	}
-
-	for _, action := range result.Actions {
-		if action.Type == ActionDelete && action.Provider == "external-dns" {
-			t.Fatalf("unexpected external-dns delete action: %+v", action)
-		}
-	}
-}
-
-func TestReconcile_DetachedCleanupDeferredWhenCurrentProviderFails(t *testing.T) {
-	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
-	dockerMock.AddWorkload("my-app", map[string]string{
-		"traefik.http.routers.myapp.rule": "Host(`app.example.com`)",
-	})
-
-	logger := quietLogger()
-	sources := source.NewRegistry(logger)
-	sources.Register(traefik.New(traefik.WithLogger(logger)))
-
-	internalMock := newTestMockProvider("internal-dns")
-	externalMock := newTestMockProvider("external-dns")
-	externalMock.createFn = func(_ context.Context, r provider.Record) error {
-		if r.Type != provider.RecordTypeTXT {
-			return errors.New("external provider API timeout")
-		}
-		return nil
-	}
-
-	internalMock.AddRecord(provider.Record{
-		Hostname: "app.example.com",
-		Type:     provider.RecordTypeA,
-		Target:   "10.0.0.1",
-		TTL:      300,
-	})
-
-	providers := provider.NewRegistry(logger)
-	providers.RegisterFactory("mock", func(cfg provider.FactoryConfig) (provider.Provider, error) {
-		if cfg.Name == "internal-dns" {
-			return internalMock, nil
-		}
-		if cfg.Name == "external-dns" {
-			return externalMock, nil
-		}
-		return newTestMockProvider(cfg.Name), nil
-	})
-
-	_ = providers.CreateInstance(provider.ProviderInstanceConfig{
-		Name:             "internal-dns",
-		TypeName:         "mock",
-		RecordType:       provider.RecordTypeA,
-		Target:           "10.0.0.1",
-		TTL:              300,
-		MatchLabeledOnly: true,
-		Mode:             provider.ModeAuthoritative,
-		Domains:          []string{"*.example.com"},
-	})
-	_ = providers.CreateInstance(provider.ProviderInstanceConfig{
-		Name:       "external-dns",
-		TypeName:   "mock",
-		RecordType: provider.RecordTypeA,
-		Target:     "203.0.113.10",
-		TTL:        300,
-		Mode:       provider.ModeAuthoritative,
-		Domains:    []string{"*.example.com"},
-	})
-
-	cfg := DefaultConfig()
-	cfg.CleanupOrphans = true
-	cfg.OwnershipTracking = false
-
-	r := New([]workload.Lister{dockerMock}, sources, providers,
-		WithConfig(cfg),
-		WithLogger(logger),
-	)
-
-	r.mu.Lock()
-	r.knownHostnames = map[string]struct{}{
-		"app.example.com": {},
-	}
-	r.hostnameProviders = map[string][]string{
-		"app.example.com": {"internal-dns", "external-dns"},
-	}
-	r.mu.Unlock()
-
-	result, err := r.Reconcile(context.Background())
-	if err != nil {
-		t.Fatalf("Reconcile returned error: %v", err)
-	}
-
-	if deleted := internalMock.GetDeleted(); len(deleted) != 0 {
-		t.Fatalf("internal provider should not be cleaned up while current provider failed, got deletions: %+v", deleted)
-	}
-
-	foundExternalFailure := false
-	for _, action := range result.Actions {
-		if action.Provider == "external-dns" && action.Status == StatusFailed {
-			foundExternalFailure = true
-			break
-		}
-	}
-	if !foundExternalFailure {
-		t.Fatalf("expected a failed external-dns action, got actions: %+v", result.Actions)
-	}
-}
-
 func TestReconcile_DryRunNoChanges(t *testing.T) {
 	// Setup: dry-run mode should not create records
 	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
@@ -662,6 +393,90 @@ func TestReconcile_DuplicateHostnameAcrossWorkloads(t *testing.T) {
 	}
 }
 
+// TestReconcile_SourceCollision_NativeHintsWinRegardlessOfOrder verifies that
+// when a single workload declares the same hostname via both a Traefik router
+// rule (which carries no per-record hints) and a native dnsweaver record (which
+// carries an explicit proxied=false hint), the explicit hint always wins — no
+// matter which source is registered first. Regression test for issue #159.
+func TestReconcile_SourceCollision_NativeHintsWinRegardlessOfOrder(t *testing.T) {
+	registerOrders := []struct {
+		name  string
+		first string // which source is registered first
+	}{
+		{name: "traefik_first", first: "traefik"},
+		{name: "dnsweaver_first", first: "dnsweaver"},
+	}
+
+	for _, tc := range registerOrders {
+		t.Run(tc.name, func(t *testing.T) {
+			// One container exposes the same hostname via a Traefik rule AND a
+			// native dnsweaver record that overrides proxied to false with a
+			// non-proxiable target.
+			dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
+			dockerMock.AddWorkload("zerobyte", map[string]string{
+				"traefik.http.routers.zerobyte.rule": "Host(`app.example.com`)",
+				"dnsweaver.records.primary.hostname": "app.example.com",
+				"dnsweaver.records.primary.proxied":  "false",
+				"dnsweaver.records.primary.target":   "192.0.2.144",
+			})
+
+			logger := quietLogger()
+
+			sources := source.NewRegistry(logger)
+			if tc.first == "traefik" {
+				sources.Register(traefik.New(traefik.WithLogger(logger)))
+				sources.Register(dnsweaversrc.New(dnsweaversrc.WithLogger(logger)))
+			} else {
+				sources.Register(dnsweaversrc.New(dnsweaversrc.WithLogger(logger)))
+				sources.Register(traefik.New(traefik.WithLogger(logger)))
+			}
+
+			mockProvider := newTestMockProvider("test-dns")
+			providers := provider.NewRegistry(logger)
+			providers.RegisterFactory("mock", func(_ provider.FactoryConfig) (provider.Provider, error) {
+				return mockProvider, nil
+			})
+			_ = providers.CreateInstance(provider.ProviderInstanceConfig{
+				Name:       "test-dns",
+				TypeName:   "mock",
+				RecordType: provider.RecordTypeA,
+				Target:     "10.0.0.1",
+				TTL:        300,
+				Domains:    []string{"*.example.com"},
+			})
+
+			r := New([]workload.Lister{dockerMock}, sources, providers,
+				WithConfig(DefaultConfig()),
+				WithLogger(logger),
+			)
+
+			result, err := r.Reconcile(context.Background())
+			if err != nil {
+				t.Fatalf("Reconcile returned error: %v", err)
+			}
+
+			// The collision is on a single workload, so it must not be counted
+			// as a cross-workload duplicate.
+			if result.HostnamesDuplicate != 0 {
+				t.Errorf("HostnamesDuplicate = %d, want 0 (same-workload multi-source is not a duplicate)", result.HostnamesDuplicate)
+			}
+
+			created := mockProvider.GetCreatedDNSRecords()
+			if len(created) != 1 {
+				t.Fatalf("expected exactly 1 DNS record, got %d", len(created))
+			}
+
+			rec := created[0]
+			if rec.Metadata["proxied"] != "false" {
+				t.Errorf("explicit per-record proxied override was dropped: Metadata[proxied] = %q, want %q", rec.Metadata["proxied"], "false")
+			}
+			if rec.Target != "192.0.2.144" {
+				t.Errorf("native record target was not applied: Target = %q, want %q", rec.Target, "192.0.2.144")
+			}
+		})
+	}
+}
+
 func TestReconcile_OrphanCleanup(t *testing.T) {
 	// Setup: provider has a record that isn't in any workload
 	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
@@ -682,13 +497,8 @@ func TestReconcile_OrphanCleanup(t *testing.T) {
 		Target:   "10.0.0.1",
 		TTL:      300,
 	})
-	// Add ownership record for current app (correct format: _dnsweaver.hostname)
-	mockProvider.AddRecord(provider.Record{
-		Hostname: "_dnsweaver.current.example.com",
-		Type:     provider.RecordTypeTXT,
-		Target:   "heritage=dnsweaver",
-		TTL:      300,
-	})
+	// Add exact ownership record for current app.
+	mockProvider.AddRecord(memberOwnershipTXT("current.example.com", "10.0.0.1"))
 	// Add orphan record (workload no longer exists)
 	mockProvider.AddRecord(provider.Record{
 		Hostname: "orphan.example.com",
@@ -696,13 +506,8 @@ func TestReconcile_OrphanCleanup(t *testing.T) {
 		Target:   "10.0.0.1",
 		TTL:      300,
 	})
-	// Add ownership record for orphan (so it can be deleted)
-	mockProvider.AddRecord(provider.Record{
-		Hostname: "_dnsweaver.orphan.example.com",
-		Type:     provider.RecordTypeTXT,
-		Target:   "heritage=dnsweaver",
-		TTL:      300,
-	})
+	// Add exact ownership record for orphan (so it can be deleted).
+	mockProvider.AddRecord(memberOwnershipTXT("orphan.example.com", "10.0.0.1"))
 
 	providers := provider.NewRegistry(logger)
 	providers.RegisterFactory("mock", func(cfg provider.FactoryConfig) (provider.Provider, error) {
@@ -1392,12 +1197,9 @@ func TestReconcile_CaseSensitivity(t *testing.T) {
 	}
 }
 
-// TestReconcile_ProviderCreateFailsAfterDelete tests the scenario where:
-// 1. Old record exists with wrong target
-// 2. Old record is deleted successfully
-// 3. New record creation FAILS
-// Result: Hostname has NO DNS record - partial failure state
-func TestReconcile_ProviderCreateFailsAfterDelete(t *testing.T) {
+// TestReconcile_ProviderCreateFailurePreservesOldMember verifies that a target
+// change does not delete the working old member when its replacement fails.
+func TestReconcile_ProviderCreateFailurePreservesOldMember(t *testing.T) {
 	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("my-app", map[string]string{
 		"traefik.http.routers.myapp.rule": "Host(`app.example.com`)",
@@ -1416,6 +1218,7 @@ func TestReconcile_ProviderCreateFailsAfterDelete(t *testing.T) {
 		Target:   "10.0.0.99", // Old target - will be deleted
 		TTL:      300,
 	})
+	mockProvider.AddRecord(memberOwnershipTXT("app.example.com", "10.0.0.99"))
 
 	// Make Create fail
 	createCallCount := 0
@@ -1453,10 +1256,10 @@ func TestReconcile_ProviderCreateFailsAfterDelete(t *testing.T) {
 		t.Fatalf("Reconcile returned error: %v", err)
 	}
 
-	// Old record should have been deleted
+	// The old record must remain until the replacement exists.
 	deleted := mockProvider.GetDeleted()
-	if len(deleted) < 1 {
-		t.Errorf("expected old record to be deleted, got %d deletions", len(deleted))
+	if len(deleted) != 0 {
+		t.Errorf("replacement failure deleted existing records: %+v", deleted)
 	}
 
 	// Create should have been attempted and failed
@@ -1469,10 +1272,6 @@ func TestReconcile_ProviderCreateFailsAfterDelete(t *testing.T) {
 	if len(failed) != 1 {
 		t.Errorf("expected 1 failed action, got %d", len(failed))
 	}
-
-	// The concerning state: old record deleted, new record not created
-	// This is a known limitation - the test documents it
-	t.Log("Note: After this failure, the hostname has no DNS record (old deleted, new failed)")
 }
 
 // TestReconcile_FirstRunAfterRestart verifies that the first reconciliation
@@ -1496,12 +1295,7 @@ func TestReconcile_FirstRunAfterRestart(t *testing.T) {
 		Target:   "10.0.0.1",
 		TTL:      300,
 	})
-	mockProvider.AddRecord(provider.Record{
-		Hostname: "_dnsweaver.app.example.com",
-		Type:     provider.RecordTypeTXT,
-		Target:   "heritage=dnsweaver",
-		TTL:      300,
-	})
+	mockProvider.AddRecord(memberOwnershipTXT("app.example.com", "10.0.0.1"))
 
 	providers := provider.NewRegistry(logger)
 	providers.RegisterFactory("mock", func(cfg provider.FactoryConfig) (provider.Provider, error) {

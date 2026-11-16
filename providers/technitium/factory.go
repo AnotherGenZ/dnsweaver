@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/httputil"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/httputil"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
 )
 
 // Factory returns a provider.Factory for creating Technitium provider instances.
@@ -19,24 +19,16 @@ func Factory() provider.Factory {
 			return nil, err
 		}
 
-		// Merge TLS skip verify: HTTP config from registry (global/per-instance) OR legacy per-provider setting
-		tlsSkipVerify := cfg.HTTP.TLSSkipVerify || providerCfg.InsecureSkipVerify
-
-		// Create HTTP client with the merged HTTP configuration
+		// Create HTTP client with the framework-supplied HTTP configuration.
+		// TLS settings (custom CA, mTLS, SNI, min version, skip verify) are
+		// passed through cfg.HTTP.TLS — no per-provider TLS interpretation
+		// here. httputil.NewClient logs a WARN itself when skip verify is on.
 		httpClient := httputil.NewClient(&httputil.ClientConfig{
-			Timeout:       cfg.HTTP.Timeout,
-			TLSSkipVerify: tlsSkipVerify,
-			UserAgent:     cfg.HTTP.UserAgent,
-			Logger:        cfg.HTTP.Logger,
+			Timeout:   cfg.HTTP.Timeout,
+			TLS:       cfg.HTTP.TLS,
+			UserAgent: cfg.HTTP.UserAgent,
+			Logger:    cfg.HTTP.Logger,
 		})
-
-		// Log warning if TLS verification is disabled
-		if tlsSkipVerify && cfg.HTTP.Logger != nil {
-			cfg.HTTP.Logger.Warn("TLS certificate verification disabled for Technitium provider",
-				slog.String("provider", cfg.Name),
-				slog.String("url", providerCfg.URL),
-			)
-		}
 
 		// Create the provider with the HTTP client
 		return NewWithHTTPClient(cfg.Name, providerCfg, httpClient, cfg.HTTP.Logger)
@@ -61,6 +53,7 @@ func NewWithHTTPClient(name string, config *Config, httpClient *http.Client, log
 
 	p := &Provider{
 		name:             name,
+		url:              config.URL,
 		zone:             config.Zone,
 		ttl:              config.TTL,
 		autoHTTPSRecords: config.AutoHTTPSRecords,

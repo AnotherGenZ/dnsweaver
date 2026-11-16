@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/httputil"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/httputil"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
 )
 
 // V6APIClient implements DNSClient for Pi-hole v6's REST API.
@@ -104,7 +104,7 @@ func (c *V6APIClient) authenticate(ctx context.Context) error {
 		Password: c.password,
 	}
 
-	body, err := json.Marshal(payload)
+	body, err := json.Marshal(payload) // #nosec G117 -- password sent directly to Pi-hole's own auth endpoint, not logged
 	if err != nil {
 		return fmt.Errorf("marshaling auth request: %w", err)
 	}

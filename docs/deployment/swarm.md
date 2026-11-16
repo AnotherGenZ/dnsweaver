@@ -1,3 +1,8 @@
+---
+title: Docker Swarm Deployment
+description: Production deployment guide for running dnsweaver on Docker Swarm clusters with automatic DNS records.
+---
+
 # Docker Swarm Deployment
 
 Production deployment for Docker Swarm clusters.
@@ -131,7 +136,7 @@ services:
     secrets:
       - dns_token
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      test: ["CMD", "/usr/local/bin/dnsweaver", "--healthcheck"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -234,6 +239,9 @@ Expose metrics for Prometheus:
 services:
   dnsweaver:
     # ... other config ...
+    environment:
+      - DNSWEAVER_HEALTH_ADDRESS=0.0.0.0
+      - DNSWEAVER_HEALTH_ALLOW_NETWORK=true
     ports:
       - target: 8080
         published: 8080
@@ -244,3 +252,5 @@ services:
         - "prometheus.port=8080"
         - "prometheus.path=/metrics"
 ```
+
+The two health settings are an explicit network-listener opt-in, not authentication. Restrict port 8080 to the Prometheus nodes with the host firewall, Swarm network controls, or an equivalent network-layer policy. Keep the local `--healthcheck` for container health even when metrics are not published.

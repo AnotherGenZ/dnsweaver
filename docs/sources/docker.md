@@ -1,3 +1,8 @@
+---
+title: Docker Labels Source
+description: dnsweaver watches Docker containers and extracts hostnames from Traefik, Caddy, nginx-proxy, and native labels to create DNS records automatically.
+---
+
 # Docker Labels
 
 dnsweaver watches Docker containers and services for hostname information, extracting them from labels to create DNS records.
@@ -13,40 +18,6 @@ Configure which sources to use:
 
 ```yaml
 - DNSWEAVER_SOURCES=traefik,dnsweaver
-```
-
-## Route to a Specific Provider Instance
-
-Use `dnsweaver.provider` on a container/service to route all extracted hostnames
-from that workload to one or more provider instance names (for example
-`internal`, `external`):
-
-```yaml
-labels:
-  - "traefik.http.routers.app.rule=Host(`app.example.com`)"
-  - "dnsweaver.provider=internal"
-```
-
-For split routing, provide a comma-separated list:
-
-```yaml
-labels:
-  - "traefik.http.routers.app.rule=Host(`app.example.com`)"
-  - "dnsweaver.provider=internal,external"
-```
-
-This works with Traefik labels and native dnsweaver labels.
-
-## Disable a Workload Across All Sources
-
-Set `dnsweaver.enabled=false` on a container/service to skip DNS management for
-that workload entirely. This disables hostname extraction from **all** enabled
-sources for that workload, including Traefik labels.
-
-```yaml
-labels:
-  - "traefik.http.routers.app.rule=Host(`app.example.com`)"
-  - "dnsweaver.enabled=false"
 ```
 
 ## Docker Modes
@@ -108,7 +79,11 @@ environment:
 
 ### Socket Proxy (Recommended for Security)
 
-Use a socket proxy for improved security:
+A socket proxy is the **recommended** way to give dnsweaver Docker access. It
+sits in front of the Docker API and exposes only the read-only endpoints
+dnsweaver needs, so a compromise of dnsweaver can't drive the full Docker API to
+escape the container. dnsweaver connects over TCP and never touches the socket,
+so it also keeps running as its unprivileged `uid 1000` user.
 
 ```yaml
 services:
@@ -116,14 +91,18 @@ services:
     image: tecnativa/docker-socket-proxy
     environment:
       - CONTAINERS=1
-      - SERVICES=1
-      - TASKS=1
-      - NETWORKS=1
+      - EVENTS=1
+      - INFO=1
+      - PING=1
+      # Swarm only:
+      # - SERVICES=1
+      # - TASKS=1
+      # - NETWORKS=1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
   dnsweaver:
-    image: maxamill/dnsweaver:latest
+    image: ghcr.io/maxfield-allison/dnsweaver:latest
     environment:
       - DNSWEAVER_DOCKER_HOST=tcp://socket-proxy:2375
     depends_on:
@@ -132,9 +111,88 @@ services:
 
 Required socket proxy permissions:
 - `CONTAINERS=1` - Read container info
-- `SERVICES=1` - Read service info (Swarm)
-- `TASKS=1` - Read task info (Swarm)
-- `NETWORKS=1` - Read network info
+- `EVENTS=1` - Stream container start/stop events
+- `INFO=1` - dnsweaver queries `/info` at startup
+- `PING=1` - Connectivity/health check
+- `SERVICES=1` - Read service info (Swarm only)
+- `TASKS=1` - Read task info (Swarm only)
+- `NETWORKS=1` - Read network info (Swarm only)
+
+A full runnable example lives at
+[`docs/examples/docker-compose.socket-proxy.example.yml`](https://github.com/maxfield-allison/dnsweaver/blob/main/docs/examples/docker-compose.socket-proxy.example.yml).
+
+## Socket Permissions & the Non-Root User
+
+dnsweaver runs as an unprivileged user (`uid 1000`) inside the container. When
+you bind-mount the socket directly, the container starts as root just long
+enough for its entrypoint to detect the socket's group (GID) and add the
+`dnsweaver` user to it, then drops privileges via `su-exec`. The standard
+compose example works out of the box — no `group_add` needed.
+
+The entrypoint deliberately **does not** grant access when the socket is owned
+by GID 0 (root), because that would silently hand the `dnsweaver` user
+root-group membership. If that happens you'll see a startup log explaining the
+options below.
+
+### `DNSWEAVER_DOCKER_GID` (explicit opt-in)
+
+Set this to force the `dnsweaver` user into a specific group GID. It's an escape
+hatch for platforms whose socket ownership can't be detected or changed:
+
+```yaml
+environment:
+  - DNSWEAVER_DOCKER_GID=0   # read a root-owned socket
+```
+
+The process still drops to `uid 1000` — only a supplementary group is added, so
+the application never runs as root. A socket proxy is still the stronger option.
+
+### Custom UID and GID
+
+Starting with v3.2.2, use Docker's `--user UID:GID` or Compose's `user` setting to run with your own numeric identity. The entrypoint honors an already non-root user and preserves its supplementary groups. The default remains 1000:1000 when no user override is supplied.
+
+```yaml
+services:
+  dnsweaver:
+    image: ghcr.io/maxfield-allison/dnsweaver:latest
+    user: "1001:1001"
+    group_add:
+      - "999" # Replace with the group ID of your host's Docker socket.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+```
+
+For a direct socket mount, find its group with `stat -c '%g' /var/run/docker.sock` and supply that value through `group_add`. Automatic socket-group setup and `DNSWEAVER_DOCKER_GID` apply to the default root-start path; an explicitly non-root entrypoint cannot change group membership. With a socket proxy, omit the socket mount and `group_add`. Mounted configuration and credential files must be readable by your chosen user, and any configured log directory must be writable. The entrypoint does not change ownership of mounted files.
+
+### Synology (Container Manager)
+
+Synology's Container Manager mounts `/var/run/docker.sock` as `root:root` and
+reverts ownership changes on reboot, and it won't let you create host users with
+arbitrary UIDs/GIDs. Because the socket is GID 0, direct-mount auto-detection is
+intentionally skipped. Two supported ways forward:
+
+1. **Socket proxy (recommended).** The proxy runs as root (which Synology
+   requires anyway) and dnsweaver connects over TCP as `uid 1000`. See the
+   example above.
+2. **`DNSWEAVER_DOCKER_GID=0`.** Quick single-line opt-in that lets the
+   unprivileged dnsweaver user read the root-owned socket. Simpler, but grants
+   the container's user root-group membership, so prefer the proxy where you can.
+
+#### Startup timing with label-driven proxies
+
+Some proxies (e.g. [`wollomatic/socket-proxy`](https://github.com/wollomatic/socket-proxy))
+build their allow-list *per container* from Docker labels and only authorize
+dnsweaver a few seconds **after** its container starts. During that brief window
+every request is blocked (`403`/`405`), so dnsweaver's first Docker call can
+fail.
+
+dnsweaver handles this by retrying the initial Docker connection for up to
+`DNSWEAVER_DOCKER_CONNECT_TIMEOUT` (default `30s`) before failing hard. You'll
+see `waiting for docker endpoint to become available` at INFO level until the
+proxy authorizes it. Set `DNSWEAVER_DOCKER_CONNECT_TIMEOUT=0` for strict
+fail-fast (exit on the first error) if you prefer to rely on the container
+restart policy instead.
+
 
 ## Event Processing
 
@@ -143,7 +201,7 @@ When a container/service starts:
 1. dnsweaver receives the Docker event
 2. Inspects the container/service for labels
 3. Extracts hostnames from matching labels
-4. If `dnsweaver.provider` is set, routes to those provider instances; otherwise matches by provider domain patterns
+4. Matches hostnames against provider domain patterns
 5. Creates DNS records in matching providers
 
 When a container/service stops:

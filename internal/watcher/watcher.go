@@ -20,8 +20,8 @@ import (
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
 
-	"gitlab.bluewillows.net/root/dnsweaver/internal/docker"
-	"gitlab.bluewillows.net/root/dnsweaver/internal/metrics"
+	"github.com/maxfield-allison/dnsweaver/internal/docker"
+	"github.com/maxfield-allison/dnsweaver/internal/metrics"
 )
 
 // ReconcileFunc is called when changes are detected that require reconciliation.
@@ -219,7 +219,11 @@ func (w *Watcher) buildEventFilters(isSwarm bool) filters.Args {
 	} else {
 		// Standalone mode: watch container events
 		filterArgs.Add("type", string(events.ContainerEventType))
+		filterArgs.Add("event", "create")
 		filterArgs.Add("event", "start")
+		filterArgs.Add("event", "restart")
+		filterArgs.Add("event", "pause")
+		filterArgs.Add("event", "unpause")
 		filterArgs.Add("event", "stop")
 		filterArgs.Add("event", "die")
 		filterArgs.Add("event", "destroy")

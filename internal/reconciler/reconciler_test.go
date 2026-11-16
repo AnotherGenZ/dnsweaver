@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/source"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -32,18 +32,6 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if !cfg.Enabled {
 		t.Error("DefaultConfig should have Enabled=true")
-	}
-	if cfg.DetachedCleanupAllowMassDelete {
-		t.Error("DefaultConfig should have DetachedCleanupAllowMassDelete=false")
-	}
-	if cfg.DetachedCleanupRatioThreshold != defaultDetachedCleanupRatioThreshold {
-		t.Errorf("DefaultConfig DetachedCleanupRatioThreshold = %v, want %v", cfg.DetachedCleanupRatioThreshold, defaultDetachedCleanupRatioThreshold)
-	}
-	if cfg.DetachedCleanupRatioMinHostnames != defaultDetachedCleanupRatioMinHostnames {
-		t.Errorf("DefaultConfig DetachedCleanupRatioMinHostnames = %d, want %d", cfg.DetachedCleanupRatioMinHostnames, defaultDetachedCleanupRatioMinHostnames)
-	}
-	if cfg.DetachedCleanupAbsoluteMaxHostnames != defaultDetachedCleanupAbsoluteMaxHostnames {
-		t.Errorf("DefaultConfig DetachedCleanupAbsoluteMaxHostnames = %d, want %d", cfg.DetachedCleanupAbsoluteMaxHostnames, defaultDetachedCleanupAbsoluteMaxHostnames)
 	}
 }
 

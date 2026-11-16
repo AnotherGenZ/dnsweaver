@@ -1,8 +1,8 @@
 package testutil
 
 import (
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/source"
 )
 
 // DefaultTTL is the default TTL for test records.
@@ -72,6 +72,29 @@ func SRVRecord(hostname, target string, port, priority, weight uint16) provider.
 			Weight:   weight,
 			Port:     port,
 		},
+	}
+}
+
+// MXRecord creates an MX record for testing.
+func MXRecord(hostname, target string, preference uint16) provider.Record {
+	return provider.Record{
+		Hostname: hostname,
+		Type:     provider.RecordTypeMX,
+		Target:   target,
+		TTL:      DefaultTTL,
+		MX: &provider.MXData{
+			Preference: preference,
+		},
+	}
+}
+
+// NSRecord creates an NS record for testing.
+func NSRecord(hostname, target string) provider.Record {
+	return provider.Record{
+		Hostname: hostname,
+		Type:     provider.RecordTypeNS,
+		Target:   target,
+		TTL:      DefaultTTL,
 	}
 }
 

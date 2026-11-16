@@ -1,7 +1,8 @@
 // Package workload defines platform-agnostic types for representing resources
 // that declare DNS hostnames. This abstraction enables dnsweaver to work with
-// Docker containers, Kubernetes Ingress/IngressRoute/HTTPRoute/Services, and
-// static configuration sources through a unified interface.
+// Docker containers, Kubernetes Ingress/IngressRoute/HTTPRoute/Services,
+// Proxmox VMs/LXC containers, and static configuration sources through a
+// unified interface.
 //
 // The core type is [Workload], which represents any resource (container,
 // K8s Ingress, etc.) that may declare hostnames for DNS record management.
@@ -42,6 +43,10 @@ const (
 	PlatformDocker Platform = "docker"
 	// PlatformKubernetes represents workloads from Kubernetes.
 	PlatformKubernetes Platform = "kubernetes"
+	// PlatformProxmox represents workloads from Proxmox VE (VMs and LXC containers).
+	PlatformProxmox Platform = "proxmox"
+	// PlatformIncus represents workloads from Incus (system containers and VMs).
+	PlatformIncus Platform = "incus"
 	// PlatformStatic represents workloads from static file configuration.
 	PlatformStatic Platform = "static"
 )
@@ -49,6 +54,16 @@ const (
 // String returns the string representation of the platform.
 func (p Platform) String() string {
 	return string(p)
+}
+
+// IsProxmox returns true if the platform is Proxmox VE.
+func (p Platform) IsProxmox() bool {
+	return p == PlatformProxmox
+}
+
+// IsIncus returns true if the platform is Incus.
+func (p Platform) IsIncus() bool {
+	return p == PlatformIncus
 }
 
 // Kind identifies the specific resource type within a platform.
@@ -74,6 +89,20 @@ const (
 	KindK8sService Kind = "k8s-service"
 	// KindPod represents a v1 Pod with hostname annotations.
 	KindPod Kind = "pod"
+
+	// Proxmox kinds.
+
+	// KindVM represents a Proxmox QEMU/KVM virtual machine.
+	KindVM Kind = "vm"
+	// KindLXC represents a Proxmox LXC container.
+	KindLXC Kind = "lxc"
+
+	// Incus kinds.
+
+	// KindIncusContainer represents an Incus system container.
+	KindIncusContainer Kind = "incus-container"
+	// KindIncusVM represents an Incus virtual machine.
+	KindIncusVM Kind = "incus-vm"
 )
 
 // String returns the string representation of the kind.

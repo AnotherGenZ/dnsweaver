@@ -12,11 +12,10 @@ The Kubernetes source extracts hostnames from Kubernetes networking resources. I
 
 ```mermaid
 flowchart LR
-    A["K8s API Server"] -->|"Informer Watch"| B["Resource Converters"]
-    B -->|"Ingress/IngressRoute/<br/>HTTPRoute/Service"| C["Workload Builder"]
-    C -->|"workload.Hostnames"| D["K8s Source"]
-    D -->|"+ Annotations"| E["source.Hostname[]"]
-    E --> F["Reconciler → DNS"]
+    A["Kubernetes API"] -->|"Watch (informer)"| B["Resource Watcher"]
+    B -->|"Ingress / IngressRoute /<br/>HTTPRoute / Service"| C["Extract Hostnames"]
+    C -->|"Apply annotations<br/>(record type, target, etc.)"| D["Kubernetes Source"]
+    D --> E["Reconciler → DNS"]
 ```
 
 1. **Informer-based watcher** monitors K8s resources via the API server
@@ -69,17 +68,18 @@ The Kubernetes source reads `dnsweaver.dev/*` annotations from resources to over
 | `dnsweaver.dev/record-type` | `string` | _(from provider)_ | Override record type: `A`, `AAAA`, `CNAME`, `SRV`, `TXT` |
 | `dnsweaver.dev/target` | `string` | _(from provider)_ | Override DNS target (IP or hostname) |
 | `dnsweaver.dev/ttl` | `int` | _(from provider)_ | Override TTL in seconds |
-| `dnsweaver.dev/provider` | `string` | _(auto-matched)_ | Route to one or more DNS provider instances by name (comma-separated) |
+| `dnsweaver.dev/provider` | `string` | _(auto-matched)_ | Route to a specific DNS provider by name |
 | `dnsweaver.dev/proxied` | `bool` | _(from provider)_ | Enable Cloudflare proxy for this record |
+| `dnsweaver.dev/adopt` | `bool` | _(from provider/global policy)_ | Enable or disable existing-record adoption for every hostname on this resource. Enabling requires the matching provider's `ADOPT_EXISTING_ALLOW_OVERRIDES` gate. Disabling is always honored. |
 
 ### Behavior
 
 - **Annotations are optional** — resources without annotations are processed normally using provider defaults
 - **`dnsweaver.dev/enabled`** defaults to `true` when absent; explicitly set `"false"` to exclude a resource
 - **RecordHints are per-hostname** — all hostnames from a resource inherit the same annotations
-- **Provider matching** — if `dnsweaver.dev/provider` is set, only those providers handle the record; otherwise, normal domain-matching applies
-- **Docker equivalent** — for Docker/Swarm workloads, use `dnsweaver.provider=<instance-name>` (or a comma-separated list)
+- **Provider matching** — if `dnsweaver.dev/provider` is set, only that provider handles the record; otherwise, normal domain-matching applies
 - **Multiple sources** — if both `dnsweaver` and `kubernetes` sources are enabled, annotations are processed by both (the dnsweaver source converts `dnsweaver.dev/*` annotations to its native label format)
+- **`dnsweaver.dev/proxied` applies to existing records too**: changing the annotation (or the Cloudflare instance's `PROXIED` default) updates a record that already exists on the next reconciliation, rather than only taking effect on creation
 
 ### Examples
 

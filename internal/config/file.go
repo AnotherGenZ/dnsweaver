@@ -62,24 +62,22 @@ type FileRotationConfig struct {
 
 // FileReconcilerConfig holds reconciliation settings.
 type FileReconcilerConfig struct {
-	Interval                            string   `yaml:"interval,omitempty"`                                // Go duration format (e.g., "60s", "5m")
-	ShutdownTimeout                     string   `yaml:"shutdown_timeout,omitempty"`                        // Max time to wait for in-flight ops during shutdown
-	DryRun                              *bool    `yaml:"dry_run,omitempty"`                                 // Pointer to distinguish unset from false
-	CleanupOrphans                      *bool    `yaml:"cleanup_orphans,omitempty"`                         // Delete records for removed workloads
-	CleanupOnStop                       *bool    `yaml:"cleanup_on_stop,omitempty"`                         // Delete records when containers stop
-	OwnershipTracking                   *bool    `yaml:"ownership_tracking,omitempty"`                      // Use TXT records for ownership
-	AdoptExisting                       *bool    `yaml:"adopt_existing,omitempty"`                          // Adopt pre-existing DNS records
-	DetachedCleanupAllowMassDelete      *bool    `yaml:"detached_cleanup_allow_mass_delete,omitempty"`      // Bypass detached cleanup circuit breaker
-	DetachedCleanupRatioThreshold       *float64 `yaml:"detached_cleanup_ratio_threshold,omitempty"`        // Detached cleanup ratio threshold (0,1]
-	DetachedCleanupRatioMinHostnames    *int     `yaml:"detached_cleanup_ratio_min_hostnames,omitempty"`    // Min hostnames before ratio breaker
-	DetachedCleanupAbsoluteMaxHostnames *int     `yaml:"detached_cleanup_absolute_max_hostnames,omitempty"` // Absolute detached hostname cap
-	InstanceID                          string   `yaml:"instance_id,omitempty"`                             // Unique ID for multi-instance coordination
+	Interval          string `yaml:"interval,omitempty"`           // Go duration format (e.g., "60s", "5m")
+	ShutdownTimeout   string `yaml:"shutdown_timeout,omitempty"`   // Max time to wait for in-flight ops during shutdown
+	DryRun            *bool  `yaml:"dry_run,omitempty"`            // Pointer to distinguish unset from false
+	CleanupOrphans    *bool  `yaml:"cleanup_orphans,omitempty"`    // Delete records for removed workloads
+	CleanupOnStop     *bool  `yaml:"cleanup_on_stop,omitempty"`    // Delete records when containers stop
+	OwnershipTracking *bool  `yaml:"ownership_tracking,omitempty"` // Use TXT records for ownership
+	OwnershipStorage  string `yaml:"ownership_storage,omitempty"`  // compact or legacy
+	AdoptExisting     *bool  `yaml:"adopt_existing,omitempty"`     // Adopt pre-existing DNS records
+	InstanceID        string `yaml:"instance_id,omitempty"`        // Unique ID for multi-instance coordination
 }
 
 // FileDockerConfig holds Docker connection settings.
 type FileDockerConfig struct {
-	Host string `yaml:"host,omitempty"` // unix:///var/run/docker.sock or tcp://...
-	Mode string `yaml:"mode,omitempty"` // auto, swarm, standalone
+	Host           string `yaml:"host,omitempty"`            // unix:///var/run/docker.sock or tcp://...
+	Mode           string `yaml:"mode,omitempty"`            // auto, swarm, standalone
+	ConnectTimeout string `yaml:"connect_timeout,omitempty"` // Max time to retry the initial connect before failing hard (e.g. 30s); "0" fails immediately
 }
 
 // FileKubernetesConfig holds Kubernetes watcher settings.
@@ -110,23 +108,26 @@ type FileFileDiscoveryConfig struct {
 
 // FileProviderConfig holds configuration for a DNS provider instance.
 type FileProviderConfig struct {
-	Name                string            `yaml:"name"`                            // Unique instance name
-	Type                string            `yaml:"type"`                            // technitium, cloudflare, pihole, etc.
-	Domains             []string          `yaml:"domains,omitempty"`               // Glob patterns
-	DomainsRegex        []string          `yaml:"domains_regex,omitempty"`         // Regex patterns
-	ExcludeDomains      []string          `yaml:"exclude_domains,omitempty"`       // Glob exclude patterns
-	ExcludeDomainsRegex []string          `yaml:"exclude_domains_regex,omitempty"` // Regex exclude patterns
-	MatchLabeledOnly    *bool             `yaml:"match_labeled_only,omitempty"`    // Require explicit provider-instance label routing
-	RecordType          string            `yaml:"record_type,omitempty"`           // A, AAAA, CNAME
-	Target              string            `yaml:"target"`                          // IP or hostname
-	TTL                 int               `yaml:"ttl,omitempty"`                   // Default TTL
-	Mode                string            `yaml:"mode,omitempty"`                  // managed, authoritative, additive
-	Config              map[string]string `yaml:"config,omitempty"`                // Provider-specific settings
+	Name                        string            `yaml:"name"`                                     // Unique instance name
+	Type                        string            `yaml:"type"`                                     // technitium, cloudflare, pihole, etc.
+	Domains                     []string          `yaml:"domains,omitempty"`                        // Glob patterns
+	DomainsRegex                []string          `yaml:"domains_regex,omitempty"`                  // Regex patterns
+	ExcludeDomains              []string          `yaml:"exclude_domains,omitempty"`                // Glob exclude patterns
+	ExcludeDomainsRegex         []string          `yaml:"exclude_domains_regex,omitempty"`          // Regex exclude patterns
+	RecordType                  string            `yaml:"record_type,omitempty"`                    // A, AAAA, CNAME
+	Target                      string            `yaml:"target"`                                   // IP or hostname
+	TTL                         int               `yaml:"ttl,omitempty"`                            // Default TTL
+	Mode                        string            `yaml:"mode,omitempty"`                           // managed, authoritative, additive
+	AdoptExisting               *bool             `yaml:"adopt_existing,omitempty"`                 // Override global adoption policy
+	AdoptExistingAllowOverrides bool              `yaml:"adopt_existing_allow_overrides,omitempty"` // Permit workload hints to enable adoption
+	Config                      map[string]string `yaml:"config,omitempty"`                         // Provider-specific settings
 }
 
 // FileServerConfig holds health/metrics server settings.
 type FileServerConfig struct {
-	Port int `yaml:"port,omitempty"` // Port for health/metrics endpoints
+	Port         int    `yaml:"port,omitempty"`          // Port for health/metrics endpoints
+	Address      string `yaml:"address,omitempty"`       // Listener IP address
+	AllowNetwork *bool  `yaml:"allow_network,omitempty"` // Explicit opt-in for non-loopback binding
 }
 
 // envVarPattern matches ${VAR} or ${VAR:-default} syntax.
@@ -166,6 +167,7 @@ func (c *FileConfig) interpolateEnvVars() {
 		c.Reconciler.Interval = InterpolateEnvVars(c.Reconciler.Interval)
 		c.Reconciler.ShutdownTimeout = InterpolateEnvVars(c.Reconciler.ShutdownTimeout)
 		c.Reconciler.InstanceID = InterpolateEnvVars(c.Reconciler.InstanceID)
+		c.Reconciler.OwnershipStorage = InterpolateEnvVars(c.Reconciler.OwnershipStorage)
 	}
 
 	c.Platform = InterpolateEnvVars(c.Platform)
@@ -183,6 +185,9 @@ func (c *FileConfig) interpolateEnvVars() {
 		}
 		c.Kubernetes.LabelSelector = InterpolateEnvVars(c.Kubernetes.LabelSelector)
 		c.Kubernetes.AnnotationFilter = InterpolateEnvVars(c.Kubernetes.AnnotationFilter)
+	}
+	if c.Server != nil {
+		c.Server.Address = InterpolateEnvVars(c.Server.Address)
 	}
 
 	for i := range c.Sources {
@@ -246,33 +251,33 @@ func LoadFile(path string) (*FileConfig, error) {
 // Values from file take precedence over defaults; env vars override later.
 func (c *FileConfig) ToGlobalConfig() *GlobalConfig {
 	cfg := &GlobalConfig{
-		LogLevel:                            DefaultLogLevel,
-		LogFormat:                           DefaultLogFormat,
-		LogMaxSize:                          DefaultLogMaxSize,
-		LogMaxBackups:                       DefaultLogMaxBackups,
-		LogMaxAge:                           DefaultLogMaxAge,
-		LogCompress:                         DefaultLogCompress,
-		DryRun:                              DefaultDryRun,
-		CleanupOrphans:                      DefaultCleanupOrphans,
-		CleanupOnStop:                       DefaultCleanupOnStop,
-		OwnershipTracking:                   DefaultOwnershipTracking,
-		AdoptExisting:                       DefaultAdoptExisting,
-		DetachedCleanupAllowMassDelete:      DefaultDetachedCleanupAllowMassDelete,
-		DetachedCleanupRatioThreshold:       DefaultDetachedCleanupRatioThreshold,
-		DetachedCleanupRatioMinHostnames:    DefaultDetachedCleanupRatioMinHostnames,
-		DetachedCleanupAbsoluteMaxHostnames: DefaultDetachedCleanupAbsoluteMaxHostnames,
-		DefaultTTL:                          DefaultTTL,
-		ReconcileInterval:                   DefaultReconcileInterval,
-		ShutdownTimeout:                     DefaultShutdownTimeout,
-		HealthPort:                          DefaultHealthPort,
-		Platform:                            DefaultPlatform,
-		DockerHost:                          DefaultDockerHost,
-		DockerMode:                          DefaultDockerMode,
-		K8sWatchIngress:                     true,
-		K8sWatchIngressRoute:                true,
-		K8sWatchHTTPRoute:                   true,
-		K8sWatchServices:                    false,
-		Source:                              DefaultSource,
+		LogLevel:             DefaultLogLevel,
+		LogFormat:            DefaultLogFormat,
+		LogMaxSize:           DefaultLogMaxSize,
+		LogMaxBackups:        DefaultLogMaxBackups,
+		LogMaxAge:            DefaultLogMaxAge,
+		LogCompress:          DefaultLogCompress,
+		DryRun:               DefaultDryRun,
+		CleanupOrphans:       DefaultCleanupOrphans,
+		CleanupOnStop:        DefaultCleanupOnStop,
+		OwnershipTracking:    DefaultOwnershipTracking,
+		OwnershipStorage:     DefaultOwnershipStorage,
+		AdoptExisting:        DefaultAdoptExisting,
+		DefaultTTL:           DefaultTTL,
+		ReconcileInterval:    DefaultReconcileInterval,
+		ShutdownTimeout:      DefaultShutdownTimeout,
+		HealthPort:           DefaultHealthPort,
+		HealthAddress:        DefaultHealthAddress,
+		HealthAllowNetwork:   DefaultHealthAllowNetwork,
+		Platform:             DefaultPlatform,
+		DockerHost:           defaultDockerHost(),
+		DockerMode:           DefaultDockerMode,
+		DockerConnectTimeout: DefaultDockerConnectTimeout,
+		K8sWatchIngress:      true,
+		K8sWatchIngressRoute: true,
+		K8sWatchHTTPRoute:    true,
+		K8sWatchServices:     false,
+		Source:               DefaultSource,
 	}
 
 	if c.Logging != nil {
@@ -317,27 +322,6 @@ func (c *FileConfig) ToGlobalConfig() *GlobalConfig {
 		if c.Reconciler.AdoptExisting != nil {
 			cfg.AdoptExisting = *c.Reconciler.AdoptExisting
 		}
-		if c.Reconciler.DetachedCleanupAllowMassDelete != nil {
-			cfg.DetachedCleanupAllowMassDelete = *c.Reconciler.DetachedCleanupAllowMassDelete
-		}
-		if c.Reconciler.DetachedCleanupRatioThreshold != nil {
-			ratio := *c.Reconciler.DetachedCleanupRatioThreshold
-			if ratio > 0 && ratio <= 1 {
-				cfg.DetachedCleanupRatioThreshold = ratio
-			}
-		}
-		if c.Reconciler.DetachedCleanupRatioMinHostnames != nil {
-			minHostnames := *c.Reconciler.DetachedCleanupRatioMinHostnames
-			if minHostnames >= 1 {
-				cfg.DetachedCleanupRatioMinHostnames = minHostnames
-			}
-		}
-		if c.Reconciler.DetachedCleanupAbsoluteMaxHostnames != nil {
-			absoluteMax := *c.Reconciler.DetachedCleanupAbsoluteMaxHostnames
-			if absoluteMax >= 1 {
-				cfg.DetachedCleanupAbsoluteMaxHostnames = absoluteMax
-			}
-		}
 		if c.Reconciler.Interval != "" {
 			if interval, err := time.ParseDuration(c.Reconciler.Interval); err == nil && interval >= time.Second {
 				cfg.ReconcileInterval = interval
@@ -347,6 +331,9 @@ func (c *FileConfig) ToGlobalConfig() *GlobalConfig {
 			if timeout, err := time.ParseDuration(c.Reconciler.ShutdownTimeout); err == nil && timeout >= time.Second {
 				cfg.ShutdownTimeout = timeout
 			}
+		}
+		if c.Reconciler.OwnershipStorage != "" {
+			cfg.OwnershipStorage = c.Reconciler.OwnershipStorage
 		}
 		if c.Reconciler.InstanceID != "" {
 			cfg.InstanceID = c.Reconciler.InstanceID
@@ -365,6 +352,11 @@ func (c *FileConfig) ToGlobalConfig() *GlobalConfig {
 		}
 		if c.Docker.Mode != "" {
 			cfg.DockerMode = strings.ToLower(c.Docker.Mode)
+		}
+		if c.Docker.ConnectTimeout != "" {
+			if timeout, err := time.ParseDuration(c.Docker.ConnectTimeout); err == nil && timeout >= 0 {
+				cfg.DockerConnectTimeout = timeout
+			}
 		}
 	}
 
@@ -402,6 +394,12 @@ func (c *FileConfig) ToGlobalConfig() *GlobalConfig {
 	if c.Server != nil {
 		if c.Server.Port > 0 && c.Server.Port <= 65535 {
 			cfg.HealthPort = c.Server.Port
+		}
+		if c.Server.Address != "" {
+			cfg.HealthAddress = strings.TrimSpace(c.Server.Address)
+		}
+		if c.Server.AllowNetwork != nil {
+			cfg.HealthAllowNetwork = *c.Server.AllowNetwork
 		}
 	}
 

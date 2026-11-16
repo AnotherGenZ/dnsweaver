@@ -7,11 +7,11 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"gitlab.bluewillows.net/root/dnsweaver/internal/metrics"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
-	"gitlab.bluewillows.net/root/dnsweaver/sources/traefik"
+	"github.com/maxfield-allison/dnsweaver/internal/metrics"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/source"
+	"github.com/maxfield-allison/dnsweaver/pkg/workload"
+	"github.com/maxfield-allison/dnsweaver/sources/traefik"
 )
 
 // =============================================================================
@@ -381,12 +381,8 @@ func TestReconcile_DryRunOrphanCleanupReportsActions(t *testing.T) {
 		Target:   "10.0.0.1",
 		TTL:      300,
 	})
-	// Also seed the ownership TXT record (managed mode requires it)
-	mockProvider.AddRecord(provider.Record{
-		Hostname: "_dnsweaver.orphan.example.com",
-		Type:     provider.RecordTypeTXT,
-		Target:   "heritage=dnsweaver",
-	})
+	// Also seed the exact ownership TXT record (managed mode requires it).
+	mockProvider.AddRecord(memberOwnershipTXT("orphan.example.com", "10.0.0.1"))
 
 	r := New([]workload.Lister{dockerMock}, sources, providers,
 		WithConfig(cfg),

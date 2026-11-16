@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/source"
 )
 
 // loadFromFile loads configuration from a YAML file and converts it to runtime types.
@@ -50,18 +50,15 @@ func convertFileProvider(fp FileProviderConfig, defaultTTL int) (*ProviderInstan
 	var errs []*ConfigError
 
 	cfg := &ProviderInstanceConfig{
-		Name:                fp.Name,
-		TypeName:            strings.ToLower(fp.Type),
-		Domains:             fp.Domains,
-		DomainsRegex:        fp.DomainsRegex,
-		ExcludeDomains:      fp.ExcludeDomains,
-		ExcludeDomainsRegex: fp.ExcludeDomainsRegex,
-		MatchLabeledOnly:    false,
-		ProviderConfig:      make(map[string]string),
-	}
-
-	if fp.MatchLabeledOnly != nil {
-		cfg.MatchLabeledOnly = *fp.MatchLabeledOnly
+		Name:                        fp.Name,
+		TypeName:                    strings.ToLower(fp.Type),
+		Domains:                     fp.Domains,
+		DomainsRegex:                fp.DomainsRegex,
+		ExcludeDomains:              fp.ExcludeDomains,
+		ExcludeDomainsRegex:         fp.ExcludeDomainsRegex,
+		AdoptExisting:               fp.AdoptExisting,
+		AdoptExistingAllowOverrides: fp.AdoptExistingAllowOverrides,
+		ProviderConfig:              make(map[string]string),
 	}
 
 	// Validate name
@@ -236,45 +233,15 @@ func mergeGlobalConfig(base *GlobalConfig) (*GlobalConfig, []*ConfigError) {
 		cfg.OwnershipTracking = parseBool(v, cfg.OwnershipTracking)
 	}
 
+	if v := getEnv("DNSWEAVER_OWNERSHIP_STORAGE"); v != "" {
+		cfg.OwnershipStorage = v
+	}
+	if cfg.OwnershipStorage != "compact" && cfg.OwnershipStorage != "legacy" {
+		errs = append(errs, configErr("DNSWEAVER_OWNERSHIP_STORAGE", "must be compact or legacy"))
+	}
+
 	if v := getEnv("DNSWEAVER_ADOPT_EXISTING"); v != "" {
 		cfg.AdoptExisting = parseBool(v, cfg.AdoptExisting)
-	}
-
-	if v := getEnv("DNSWEAVER_DETACHED_CLEANUP_ALLOW_MASS_DELETE"); v != "" {
-		cfg.DetachedCleanupAllowMassDelete = parseBool(v, cfg.DetachedCleanupAllowMassDelete)
-	}
-
-	if v := getEnv("DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD"); v != "" {
-		ratio, err := strconv.ParseFloat(v, 64)
-		if err != nil {
-			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD", fmt.Sprintf("invalid value %q", v), "Must be a decimal between 0 and 1 (exclusive of 0, inclusive of 1)", "DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD=0.5"))
-		} else if ratio <= 0 || ratio > 1 {
-			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD", fmt.Sprintf("must be > 0 and <= 1, got %v", ratio), "Use a ratio like 0.5 for 50%", "DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD=0.5"))
-		} else {
-			cfg.DetachedCleanupRatioThreshold = ratio
-		}
-	}
-
-	if v := getEnv("DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES"); v != "" {
-		minHostnames, err := parseIntEnv(v)
-		if err != nil {
-			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES", fmt.Sprintf("invalid value %q", v), "Must be an integer >= 1", "DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES=10"))
-		} else if minHostnames < 1 {
-			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES", "must be at least 1", "Use at least 1 to avoid always-on ratio breaker", "DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES=10"))
-		} else {
-			cfg.DetachedCleanupRatioMinHostnames = minHostnames
-		}
-	}
-
-	if v := getEnv("DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES"); v != "" {
-		absoluteMax, err := parseIntEnv(v)
-		if err != nil {
-			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES", fmt.Sprintf("invalid value %q", v), "Must be an integer >= 1", "DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES=100"))
-		} else if absoluteMax < 1 {
-			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES", "must be at least 1", "Use at least 1 to keep detached cleanup bounded", "DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES=100"))
-		} else {
-			cfg.DetachedCleanupAbsoluteMaxHostnames = absoluteMax
-		}
 	}
 
 	if v := getEnv("DNSWEAVER_DEFAULT_TTL"); v != "" {
@@ -293,13 +260,15 @@ func mergeGlobalConfig(base *GlobalConfig) (*GlobalConfig, []*ConfigError) {
 		}
 	}
 
-	if v := getEnv("DNSWEAVER_HEALTH_PORT"); v != "" {
-		if port, err := parseIntEnv(v); err == nil && port >= 1 && port <= 65535 {
-			cfg.HealthPort = port
-		} else {
-			errs = append(errs, configErrFull("DNSWEAVER_HEALTH_PORT", fmt.Sprintf("invalid value %q", v), "Must be a valid TCP port (1-65535)", "DNSWEAVER_HEALTH_PORT=8080"))
-		}
+	var healthPortErr *ConfigError
+	cfg.HealthPort, healthPortErr = healthPortFromEnvironment(cfg.HealthPort)
+	if healthPortErr != nil {
+		errs = append(errs, healthPortErr)
 	}
+	healthAddress, healthAllowNetwork, healthListenerErrs := healthListenerFromEnvironment(cfg.HealthAddress, cfg.HealthAllowNetwork)
+	cfg.HealthAddress = healthAddress
+	cfg.HealthAllowNetwork = healthAllowNetwork
+	errs = append(errs, healthListenerErrs...)
 
 	// Note: DNSWEAVER_SOURCE (singular) is deprecated. Source list is
 	// determined by parseSources() which reads DNSWEAVER_SOURCES and
@@ -316,12 +285,12 @@ func mergeGlobalConfig(base *GlobalConfig) (*GlobalConfig, []*ConfigError) {
 
 	// Override platform if set in env
 	if v := getEnv("DNSWEAVER_PLATFORM"); v != "" {
-		cfg.Platform = strings.ToLower(v)
+		cfg.Platform = normalizePlatform(v)
 		switch cfg.Platform {
-		case "docker", "kubernetes", "both":
+		case "docker", "kubernetes", "both", "none":
 			// Valid
 		default:
-			errs = append(errs, configErrFull("DNSWEAVER_PLATFORM", fmt.Sprintf("invalid value %q", v), "Must be one of: docker, kubernetes, both", "DNSWEAVER_PLATFORM=docker"))
+			errs = append(errs, configErrFull("DNSWEAVER_PLATFORM", fmt.Sprintf("invalid value %q", v), "Must be one of: docker, kubernetes, both, none", "DNSWEAVER_PLATFORM=docker"))
 		}
 	}
 

@@ -4,16 +4,17 @@ package cloudflare
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/httputil"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/httputil"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
 )
 
 const (
@@ -27,21 +28,6 @@ type apiError struct {
 	Message string `json:"message"`
 }
 
-// apiRequestError wraps Cloudflare API errors with their code.
-type apiRequestError struct {
-	Code    int
-	Message string
-}
-
-func (e *apiRequestError) Error() string {
-	return fmt.Sprintf("API error: %s (code: %d)", e.Message, e.Code)
-}
-
-func isAPIErrorCode(err error, code int) bool {
-	var apiErr *apiRequestError
-	return errors.As(err, &apiErr) && apiErr.Code == code
-}
-
 // apiMessage represents a message from the Cloudflare API.
 // Cloudflare returns messages as objects with code/message fields (same shape as errors).
 type apiMessage struct {
@@ -51,35 +37,39 @@ type apiMessage struct {
 
 // apiResponse is the standard Cloudflare API response wrapper.
 type apiResponse struct {
-	Success  bool            `json:"success"`
-	Errors   []apiError      `json:"errors"`
-	Messages []apiMessage    `json:"messages"`
-	Result   json.RawMessage `json:"result"`
+	Success    bool            `json:"success"`
+	Errors     []apiError      `json:"errors"`
+	Messages   []apiMessage    `json:"messages"`
+	Result     json.RawMessage `json:"result"`
+	ResultInfo *struct {
+		Page       int `json:"page"`
+		TotalPages int `json:"total_pages"`
+	} `json:"result_info"`
 }
 
 // zoneResult represents a zone from the Cloudflare API.
 type zoneResult struct {
-	ID      string       `json:"id"`
-	Name    string       `json:"name"`
-	Status  string       `json:"status"`
-	Account *zoneAccount `json:"account,omitempty"`
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Status string `json:"status"`
 }
 
-// zoneAccount represents zone ownership details from the Cloudflare API.
-type zoneAccount struct {
-	ID string `json:"id"`
+// zonesResponse wraps the zones list response.
+type zonesResponse struct {
+	Result []zoneResult `json:"result"`
 }
 
 // dnsRecord represents a DNS record from the Cloudflare API.
 type dnsRecord struct {
-	ID      string         `json:"id"`
-	Type    string         `json:"type"`
-	Name    string         `json:"name"`
-	Content string         `json:"content"`
-	TTL     int            `json:"ttl"`
-	Proxied bool           `json:"proxied"`
-	ZoneID  string         `json:"zone_id"`
-	Data    *srvRecordData `json:"data,omitempty"` // For SRV records
+	ID       string         `json:"id"`
+	Type     string         `json:"type"`
+	Name     string         `json:"name"`
+	Content  string         `json:"content"`
+	TTL      int            `json:"ttl"`
+	Proxied  bool           `json:"proxied"`
+	ZoneID   string         `json:"zone_id"`
+	Data     *srvRecordData `json:"data,omitempty"`     // For SRV records
+	Priority *uint16        `json:"priority,omitempty"` // For MX records
 }
 
 // srvRecordData contains the structured data for SRV records in Cloudflare.
@@ -100,12 +90,13 @@ type dnsRecordsResponse struct {
 
 // createRecordRequest is the request body for creating a DNS record.
 type createRecordRequest struct {
-	Type    string         `json:"type"`
-	Name    string         `json:"name"`
-	Content string         `json:"content,omitempty"`
-	TTL     int            `json:"ttl"`
-	Proxied bool           `json:"proxied"`
-	Data    *srvRecordData `json:"data,omitempty"` // For SRV records
+	Type     string         `json:"type"`
+	Name     string         `json:"name"`
+	Content  string         `json:"content,omitempty"`
+	TTL      int            `json:"ttl"`
+	Proxied  bool           `json:"proxied"`
+	Data     *srvRecordData `json:"data,omitempty"`     // For SRV records
+	Priority *uint16        `json:"priority,omitempty"` // For MX records
 }
 
 // Client is a Cloudflare DNS API client.
@@ -203,7 +194,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body io.Rea
 			if errCode == 81057 || strings.Contains(strings.ToLower(errMsg), "cname") && strings.Contains(strings.ToLower(errMsg), "cannot") {
 				return nil, provider.ErrTypeConflict
 			}
-			return nil, &apiRequestError{Code: errCode, Message: errMsg}
+			return nil, fmt.Errorf("API error: %s (code: %d)", errMsg, errCode)
 		}
 		return nil, fmt.Errorf("unexpected status code %d: %s", resp.StatusCode, string(respBody))
 	}
@@ -215,10 +206,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body io.Rea
 
 	if !apiResp.Success {
 		if len(apiResp.Errors) > 0 {
-			return nil, &apiRequestError{
-				Code:    apiResp.Errors[0].Code,
-				Message: apiResp.Errors[0].Message,
-			}
+			return nil, fmt.Errorf("API error: %s (code: %d)", apiResp.Errors[0].Message, apiResp.Errors[0].Code)
 		}
 		return nil, fmt.Errorf("API request failed with unknown error")
 	}
@@ -226,38 +214,20 @@ func (c *Client) doRequest(ctx context.Context, method, path string, body io.Rea
 	return &apiResp, nil
 }
 
-// Ping checks connectivity to the Cloudflare API.
-// Uses the /user/tokens/verify endpoint which is lightweight.
-func (c *Client) Ping(ctx context.Context) error {
-	if err := c.verifyUserToken(ctx); err != nil {
+// Ping checks connectivity by reading the managed zone's details. That
+// endpoint accepts user and account API tokens holding only DNS Read or DNS
+// Write on the zone, the same permissions the record operations need.
+func (c *Client) Ping(ctx context.Context, zoneID string) error {
+	_, err := c.doRequest(ctx, http.MethodGet, "/zones/"+url.PathEscape(zoneID), nil)
+	if err != nil {
 		return fmt.Errorf("ping failed: %w", err)
 	}
 	return nil
 }
 
-func (c *Client) verifyUserToken(ctx context.Context) error {
-	_, err := c.doRequest(ctx, http.MethodGet, "/user/tokens/verify", nil)
-	return err
-}
-
-func (c *Client) verifyAccountToken(ctx context.Context, accountID string) error {
-	path := fmt.Sprintf("/accounts/%s/tokens/verify", accountID)
-	_, err := c.doRequest(ctx, http.MethodGet, path, nil)
-	return err
-}
-
 // GetZoneID returns the zone ID for a given domain name.
 // It looks up the zone by name using the Cloudflare API.
 func (c *Client) GetZoneID(ctx context.Context, domain string) (string, error) {
-	zone, err := c.findZone(ctx, domain)
-	if err != nil {
-		return "", err
-	}
-
-	return zone.ID, nil
-}
-
-func (c *Client) findZone(ctx context.Context, domain string) (*zoneResult, error) {
 	// Find the root zone for this domain by progressively stripping subdomains
 	parts := strings.Split(domain, ".")
 	for i := 0; i < len(parts)-1; i++ {
@@ -271,68 +241,83 @@ func (c *Client) findZone(ctx context.Context, domain string) (*zoneResult, erro
 			continue // Try next level
 		}
 
-		var zones []zoneResult
-		if err := json.Unmarshal(resp.Result, &zones); err != nil {
+		var zones zonesResponse
+		if err := json.Unmarshal(resp.Result, &zones.Result); err != nil {
 			continue
 		}
 
-		if len(zones) > 0 {
+		if len(zones.Result) > 0 {
 			c.logger.Debug("found zone",
 				slog.String("domain", domain),
 				slog.String("zone", zoneName),
-				slog.String("zone_id", zones[0].ID),
+				slog.String("zone_id", zones.Result[0].ID),
 			)
-			return &zones[0], nil
+			return zones.Result[0].ID, nil
 		}
 	}
 
-	return nil, fmt.Errorf("no zone found for domain %s", domain)
+	return "", fmt.Errorf("no zone found for domain %s", domain)
 }
 
-// GetAccountIDFromZoneID resolves the owning account ID for a Cloudflare zone.
-func (c *Client) GetAccountIDFromZoneID(ctx context.Context, zoneID string) (string, error) {
-	path := fmt.Sprintf("/zones/%s", zoneID)
-	resp, err := c.doRequest(ctx, http.MethodGet, path, nil)
+// GetZoneName resolves the DNS name for a configured zone ID.
+func (c *Client) GetZoneName(ctx context.Context, zoneID string) (string, error) {
+	resp, err := c.doRequest(ctx, http.MethodGet, "/zones/"+url.PathEscape(zoneID), nil)
 	if err != nil {
-		return "", fmt.Errorf("getting zone details: %w", err)
+		return "", fmt.Errorf("getting zone: %w", err)
 	}
-
 	var zone zoneResult
-	if err := json.Unmarshal(resp.Result, &zone); err != nil {
-		return "", fmt.Errorf("parsing zone details response: %w", err)
+	if err := json.Unmarshal(resp.Result, &zone); err != nil || zone.Name == "" {
+		return "", fmt.Errorf("zone response has no valid name")
 	}
-
-	if zone.Account == nil || zone.Account.ID == "" {
-		return "", fmt.Errorf("zone details missing account id for zone %s", zoneID)
-	}
-
-	return zone.Account.ID, nil
+	return zone.Name, nil
 }
 
-// ListRecords returns all DNS records of the specified type in the given zone.
+// ListRecords returns all pages of DNS records of the specified type.
 func (c *Client) ListRecords(ctx context.Context, zoneID string, recordType string) ([]dnsRecord, error) {
 	params := url.Values{}
 	params.Set("type", recordType)
-	params.Set("per_page", "100") // Max per page
-
-	path := fmt.Sprintf("/zones/%s/dns_records?%s", zoneID, params.Encode())
-	resp, err := c.doRequest(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, fmt.Errorf("listing records: %w", err)
+	params.Set("per_page", "100")
+	var records []dnsRecord
+	seen := make(map[string]bool)
+	for page := 1; page <= 10000; page++ {
+		params.Set("page", strconv.Itoa(page))
+		path := fmt.Sprintf("/zones/%s/dns_records?%s", zoneID, params.Encode())
+		resp, err := c.doRequest(ctx, http.MethodGet, path, nil)
+		if err != nil {
+			return nil, fmt.Errorf("listing records page %d: %w", page, err)
+		}
+		var batch []dnsRecord
+		if err := json.Unmarshal(resp.Result, &batch); err != nil {
+			return nil, fmt.Errorf("parsing records response: %w", err)
+		}
+		if batch == nil {
+			return nil, fmt.Errorf("DNS record listing is missing its result array")
+		}
+		for _, record := range batch {
+			if record.ID == "" {
+				continue
+			}
+			if seen[record.ID] {
+				return nil, fmt.Errorf("DNS record appeared on multiple listing pages")
+			}
+			seen[record.ID] = true
+		}
+		records = append(records, batch...)
+		if resp.ResultInfo != nil {
+			if page == 1 && resp.ResultInfo.TotalPages == 0 && len(batch) == 0 {
+				return records, nil
+			}
+			if resp.ResultInfo.Page != page || resp.ResultInfo.TotalPages < page {
+				return nil, fmt.Errorf("inconsistent DNS record pagination")
+			}
+			if page == resp.ResultInfo.TotalPages {
+				return records, nil
+			}
+		} else if len(batch) < 100 {
+			return records, nil
+		}
 	}
-
-	var records dnsRecordsResponse
-	if err := json.Unmarshal(resp.Result, &records.Result); err != nil {
-		return nil, fmt.Errorf("parsing records response: %w", err)
-	}
-
-	c.logger.Debug("listed records",
-		slog.String("zone_id", zoneID),
-		slog.String("type", recordType),
-		slog.Int("count", len(records.Result)),
-	)
-
-	return records.Result, nil
+	return nil, fmt.Errorf("DNS record pagination exceeded 10000 pages")
 }
 
 // CreateRecord creates a new DNS record in the specified zone.
@@ -407,6 +392,75 @@ func (c *Client) CreateSRVRecord(ctx context.Context, zoneID string, name string
 	return nil
 }
 
+// CreateMXRecord creates an MX record in the specified zone.
+// target is the mail exchanger hostname and preference is the RFC 1035 MX
+// preference, which the Cloudflare API carries in the top-level "priority"
+// field alongside "content".
+func (c *Client) CreateMXRecord(ctx context.Context, zoneID, name, target string, preference uint16, ttl int) error {
+	reqBody := createRecordRequest{
+		Type:     "MX",
+		Name:     name,
+		Content:  target,
+		TTL:      ttl,
+		Priority: &preference,
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("marshaling request: %w", err)
+	}
+
+	path := fmt.Sprintf("/zones/%s/dns_records", zoneID)
+	_, err = c.doRequest(ctx, http.MethodPost, path, strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return fmt.Errorf("creating MX record: %w", err)
+	}
+
+	c.logger.Info("created MX record",
+		slog.String("zone_id", zoneID),
+		slog.String("name", name),
+		slog.String("target", target),
+		slog.Uint64("preference", uint64(preference)),
+		slog.Int("ttl", ttl),
+	)
+
+	return nil
+}
+
+// UpdateMXRecord updates an MX record by ID, replacing its mail exchanger,
+// preference and TTL.
+func (c *Client) UpdateMXRecord(ctx context.Context, zoneID, recordID, name, target string, preference uint16, ttl int) error {
+	reqBody := createRecordRequest{
+		Type:     "MX",
+		Name:     name,
+		Content:  target,
+		TTL:      ttl,
+		Priority: &preference,
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("marshaling request: %w", err)
+	}
+
+	path := fmt.Sprintf("/zones/%s/dns_records/%s", zoneID, recordID)
+	_, err = c.doRequest(ctx, http.MethodPatch, path, strings.NewReader(string(bodyBytes)))
+	if err != nil {
+		return fmt.Errorf("updating MX record: %w", err)
+	}
+
+	c.logger.Info("updated MX record",
+		slog.String("zone_id", zoneID),
+		slog.String("record_id", recordID),
+		slog.String("name", name),
+		slog.String("target", target),
+		slog.Uint64("preference", uint64(preference)),
+		slog.Int("ttl", ttl),
+	)
+
+	return nil
+}
+
 // DeleteRecord deletes a DNS record by ID.
 func (c *Client) DeleteRecord(ctx context.Context, zoneID, recordID string) error {
 	path := fmt.Sprintf("/zones/%s/dns_records/%s", zoneID, recordID)
@@ -440,27 +494,92 @@ func (c *Client) UpdateRecord(ctx context.Context, zoneID, recordID, recordType,
 	}
 
 	path := fmt.Sprintf("/zones/%s/dns_records/%s", zoneID, recordID)
-	_, err = c.doRequest(ctx, http.MethodPatch, path, strings.NewReader(string(bodyBytes)))
+	resp, err := c.doRequest(ctx, http.MethodPatch, path, strings.NewReader(string(bodyBytes)))
 	if err != nil {
 		return fmt.Errorf("updating record: %w", err)
 	}
 
+	var updated dnsRecord
+	if err := json.Unmarshal(resp.Result, &updated); err != nil {
+		return fmt.Errorf("parsing updated record response: %w", err)
+	}
+	if updated.ID == "" {
+		return fmt.Errorf("parsing updated record response: missing record ID")
+	}
+
+	if differences := updateResponseDifferences(updated, reqBody); len(differences) > 0 {
+		c.logger.Warn("Cloudflare update response differs from request",
+			slog.String("zone_id", zoneID),
+			slog.String("record_id", updated.ID),
+			slog.Any("differences", differences),
+			slog.String("requested_type", recordType),
+			slog.String("actual_type", updated.Type),
+			slog.String("requested_name", name),
+			slog.String("actual_name", updated.Name),
+			slog.String("requested_content", content),
+			slog.String("actual_content", updated.Content),
+			slog.Int("requested_ttl", ttl),
+			slog.Int("actual_ttl", updated.TTL),
+			slog.Bool("requested_proxied", proxied),
+			slog.Bool("actual_proxied", updated.Proxied),
+		)
+	}
+
+	// Log the accepted state returned by Cloudflare, not merely the values sent
+	// in the request. Cloudflare may normalize fields while still returning a
+	// successful response.
 	c.logger.Info("updated DNS record",
 		slog.String("zone_id", zoneID),
-		slog.String("record_id", recordID),
-		slog.String("type", recordType),
-		slog.String("name", name),
-		slog.String("content", content),
-		slog.Int("ttl", ttl),
-		slog.Bool("proxied", proxied),
+		slog.String("record_id", updated.ID),
+		slog.String("type", updated.Type),
+		slog.String("name", updated.Name),
+		slog.String("content", updated.Content),
+		slog.Int("ttl", updated.TTL),
+		slog.Bool("proxied", updated.Proxied),
 	)
 
 	return nil
 }
 
-// FindRecord finds a DNS record by name and type in the given zone.
-// Returns the record if found, nil otherwise.
-func (c *Client) FindRecord(ctx context.Context, zoneID, recordType, name string) (*dnsRecord, error) {
+func updateResponseDifferences(actual dnsRecord, requested createRecordRequest) []string {
+	var differences []string
+	if !strings.EqualFold(actual.Type, requested.Type) {
+		differences = append(differences, "type")
+	}
+	if !equalDNSName(actual.Name, requested.Name) {
+		differences = append(differences, "name")
+	}
+	if !equalRecordContent(requested.Type, actual.Content, requested.Content) {
+		differences = append(differences, "content")
+	}
+	if actual.TTL != requested.TTL {
+		differences = append(differences, "ttl")
+	}
+	if actual.Proxied != requested.Proxied {
+		differences = append(differences, "proxied")
+	}
+	return differences
+}
+
+func equalDNSName(a, b string) bool {
+	return strings.EqualFold(strings.TrimSuffix(a, "."), strings.TrimSuffix(b, "."))
+}
+
+func equalRecordContent(recordType, a, b string) bool {
+	switch strings.ToUpper(recordType) {
+	case "A", "AAAA":
+		aAddr, aErr := netip.ParseAddr(a)
+		bAddr, bErr := netip.ParseAddr(b)
+		return aErr == nil && bErr == nil && aAddr == bAddr
+	case "CNAME":
+		return equalDNSName(a, b)
+	default:
+		return a == b
+	}
+}
+
+// FindRecords finds DNS records by name and type in the given zone.
+func (c *Client) FindRecords(ctx context.Context, zoneID, recordType, name string) ([]dnsRecord, error) {
 	params := url.Values{}
 	params.Set("type", recordType)
 	params.Set("name", name)
@@ -476,9 +595,21 @@ func (c *Client) FindRecord(ctx context.Context, zoneID, recordType, name string
 		return nil, fmt.Errorf("parsing records response: %w", err)
 	}
 
-	if len(records.Result) == 0 {
+	return records.Result, nil
+}
+
+// FindRecord finds the first DNS record by name and type in the given zone.
+// Callers that need to distinguish members of a multi-value RRset must use
+// FindRecords and match the record value before mutating it.
+func (c *Client) FindRecord(ctx context.Context, zoneID, recordType, name string) (*dnsRecord, error) {
+	records, err := c.FindRecords(ctx, zoneID, recordType, name)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(records) == 0 {
 		return nil, nil // Not found
 	}
 
-	return &records.Result[0], nil
+	return &records[0], nil
 }

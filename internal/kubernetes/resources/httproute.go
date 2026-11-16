@@ -3,7 +3,7 @@ package resources
 import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
+	"github.com/maxfield-allison/dnsweaver/pkg/workload"
 )
 
 // ConvertHTTPRoute converts an unstructured gateway.networking.k8s.io/v1 HTTPRoute
@@ -41,7 +41,7 @@ func ConvertHTTPRoute(obj *unstructured.Unstructured) workload.Workload {
 		Kind:        workload.KindHTTPRoute,
 		Hostnames:   hostnames,
 		Metadata: map[string]string{
-			"resourceVersion": obj.GetResourceVersion(),
+			metaKeyResourceVersion: obj.GetResourceVersion(),
 		},
 	}
 }

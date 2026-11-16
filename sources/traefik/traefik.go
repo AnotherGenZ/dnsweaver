@@ -22,8 +22,8 @@ import (
 	"context"
 	"log/slog"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
+	"github.com/maxfield-allison/dnsweaver/pkg/source"
+	"github.com/maxfield-allison/dnsweaver/pkg/workload"
 )
 
 const sourceName = "traefik"
@@ -35,9 +35,10 @@ const DefaultFilePattern = "*.yml,*.yaml,*.toml"
 // Traefik implements the source.Source interface for extracting hostnames
 // from Traefik container labels and static configuration files.
 type Traefik struct {
-	parser     *Parser
-	logger     *slog.Logger
-	fileConfig source.FileDiscoveryConfig
+	parser             *Parser
+	logger             *slog.Logger
+	fileConfig         source.FileDiscoveryConfig
+	defaultEntryPoints []string
 }
 
 // Option is a functional option for configuring Traefik.
@@ -61,6 +62,22 @@ func WithFileDiscovery(config source.FileDiscoveryConfig) Option {
 	}
 }
 
+// WithDefaultEntryPoints configures which entrypoints should be assumed for
+// Traefik routers that declare no `entryPoints` (label or static config).
+//
+// Mirrors Traefik's `entryPoints.<name>.asDefault = true` setting: when set
+// in Traefik, undeclared routers bind only to the `asDefault` entrypoints,
+// not to all entrypoints. dnsweaver cannot read Traefik's static config so
+// this must be supplied explicitly via
+// `DNSWEAVER_SOURCE_TRAEFIK_DEFAULT_ENTRYPOINTS`.
+//
+// Empty/unset preserves pre-1.4.2 wildcard behavior.
+func WithDefaultEntryPoints(eps []string) Option {
+	return func(t *Traefik) {
+		t.defaultEntryPoints = eps
+	}
+}
+
 // New creates a new Traefik source.
 func New(opts ...Option) *Traefik {
 	t := &Traefik{
@@ -72,7 +89,11 @@ func New(opts ...Option) *Traefik {
 		opt(t)
 	}
 
-	t.parser = NewParser(WithParserLogger(t.logger))
+	parserOpts := []ParserOption{WithParserLogger(t.logger)}
+	if len(t.defaultEntryPoints) > 0 {
+		parserOpts = append(parserOpts, WithParserDefaultEntryPoints(t.defaultEntryPoints))
+	}
+	t.parser = NewParser(parserOpts...)
 
 	return t
 }
@@ -100,9 +121,10 @@ func (t *Traefik) Extract(ctx context.Context, w workload.Workload) ([]source.Ho
 	hostnames := make([]source.Hostname, 0, len(extractions))
 	for _, e := range extractions {
 		hostnames = append(hostnames, source.Hostname{
-			Name:   e.Hostname,
-			Source: sourceName,
-			Router: e.Router,
+			Name:     e.Hostname,
+			Source:   sourceName,
+			Router:   e.Router,
+			Metadata: entryPointMetadata(e.EntryPoint),
 		})
 	}
 
@@ -141,9 +163,10 @@ func (t *Traefik) Discover(ctx context.Context) ([]source.Hostname, error) {
 	result := make([]source.Hostname, 0, len(hostnames))
 	for _, e := range hostnames {
 		result = append(result, source.Hostname{
-			Name:   e.Hostname,
-			Source: sourceName,
-			Router: e.Router,
+			Name:     e.Hostname,
+			Source:   sourceName,
+			Router:   e.Router,
+			Metadata: entryPointMetadata(e.EntryPoint),
 		})
 	}
 
@@ -174,3 +197,17 @@ func (t *Traefik) FileConfig() source.FileDiscoveryConfig {
 
 // Ensure Traefik implements source.Source
 var _ source.Source = (*Traefik)(nil)
+
+// entryPointMetadata returns a Metadata map carrying the traefik entrypoint,
+// or nil when the extraction is wildcard-bound (no entrypoint declared).
+// Returning nil for the wildcard case preserves Hostname.Matches semantics:
+// MatchingProvidersForHostname treats a missing key as “matches every
+// filter”, which mirrors Traefik's own “undeclared = bound to all
+// entrypoints” behavior and keeps backward compatibility for users who
+// don't opt into DNSWEAVER_{NAME}_ENTRYPOINTS.
+func entryPointMetadata(entrypoint string) map[string]string {
+	if entrypoint == "" {
+		return nil
+	}
+	return map[string]string{MetadataKeyEntryPoint: entrypoint}
+}

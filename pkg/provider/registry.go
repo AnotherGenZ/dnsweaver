@@ -8,7 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"gitlab.bluewillows.net/root/dnsweaver/internal/matcher"
+	"github.com/maxfield-allison/dnsweaver/internal/matcher"
+	"github.com/maxfield-allison/dnsweaver/pkg/httputil"
 )
 
 // HTTPConfig contains HTTP client configuration passed from the framework to providers.
@@ -18,7 +19,16 @@ type HTTPConfig struct {
 	// Timeout is the HTTP client timeout.
 	Timeout time.Duration
 
-	// TLSSkipVerify controls whether to skip TLS certificate verification.
+	// TLS is the unified per-instance TLS configuration (custom CA, mTLS,
+	// SNI override, min version, skip-verify). Nil or zero means "use
+	// stdlib defaults". Providers should pass this verbatim to
+	// httputil.NewClient — no per-provider TLS interpretation should be
+	// required.
+	TLS *httputil.TLSConfig
+
+	// TLSSkipVerify is a legacy convenience shortcut for TLS.InsecureSkip.
+	// Retained for back-compat with provider factories that have not yet
+	// migrated to the unified TLS struct. Deprecated: prefer TLS.
 	TLSSkipVerify bool
 
 	// UserAgent is the User-Agent header to use for requests.
@@ -47,12 +57,15 @@ type Factory func(cfg FactoryConfig) (Provider, error)
 
 // Registry manages provider type factories and active provider instances.
 type Registry struct {
-	mu         sync.RWMutex
-	factories  map[string]Factory           // type name -> factory function
-	instances  []*ProviderInstance          // instances in priority order
-	byName     map[string]*ProviderInstance // instance name -> instance
-	instanceID string                       // dnsweaver instance ID for multi-instance mode
-	logger     *slog.Logger
+	mu               sync.RWMutex
+	factories        map[string]Factory           // type name -> factory function
+	instances        []*ProviderInstance          // instances in priority order
+	byName           map[string]*ProviderInstance // instance name -> instance
+	instanceID       string                       // dnsweaver instance ID for multi-instance mode
+	compactOwnership bool
+	legacyOwnership  bool
+	ownershipMutexes map[ProviderIdentity]*sync.Mutex
+	logger           *slog.Logger
 }
 
 // NewRegistry creates a new provider registry.
@@ -61,10 +74,11 @@ func NewRegistry(logger *slog.Logger) *Registry {
 		logger = slog.Default()
 	}
 	return &Registry{
-		factories: make(map[string]Factory),
-		instances: make([]*ProviderInstance, 0),
-		byName:    make(map[string]*ProviderInstance),
-		logger:    logger,
+		factories:        make(map[string]Factory),
+		instances:        make([]*ProviderInstance, 0),
+		byName:           make(map[string]*ProviderInstance),
+		ownershipMutexes: make(map[ProviderIdentity]*sync.Mutex),
+		logger:           logger,
 	}
 }
 
@@ -74,6 +88,22 @@ func (r *Registry) SetInstanceID(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.instanceID = id
+}
+
+// SetCompactOwnership selects DNS-backed compact storage before creating providers.
+// Unsupported providers retain their existing capability-specific ownership behavior.
+func (r *Registry) SetCompactOwnership(enabled bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.compactOwnership = enabled
+}
+
+// SetOwnershipStorage enables compact-aware reads in either DNS storage mode.
+func (r *Registry) SetOwnershipStorage(mode string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.compactOwnership = mode == "compact"
+	r.legacyOwnership = mode == "legacy"
 }
 
 // RegisterFactory registers a provider factory for a given type.
@@ -105,13 +135,27 @@ func (r *Registry) CreateInstance(cfg ProviderInstanceConfig) error {
 		return fmt.Errorf("unknown provider type: %s", cfg.TypeName)
 	}
 
-	// Build FactoryConfig with HTTP settings from GlobalConfig
+	// Build FactoryConfig with HTTP settings, lifting any per-instance TLS
+	// settings out of ProviderConfig so every HTTP-based factory consumes
+	// them through the same shared HTTPConfig.TLS field rather than each
+	// re-parsing the map. The TLS_* keys are added to providerConfigFields
+	// in internal/config and so always live in the map when set.
+	tlsCfg, err := extractTLSConfig(cfg.ProviderConfig, cfg.Name)
+	if err != nil {
+		return fmt.Errorf("invalid TLS configuration for provider %q: %w", cfg.Name, err)
+	}
+	if tlsCfg != nil {
+		if _, buildErr := tlsCfg.Build(); buildErr != nil {
+			return fmt.Errorf("invalid TLS configuration for provider %q: %w", cfg.Name, buildErr)
+		}
+	}
 	factoryCfg := FactoryConfig{
 		Name:           cfg.Name,
 		ProviderConfig: cfg.ProviderConfig,
 		HTTP: HTTPConfig{
-			// HTTP config populated at factory level; GlobalConfig integration deferred
-			Logger: r.logger,
+			TLS:           tlsCfg,
+			TLSSkipVerify: tlsCfg != nil && tlsCfg.InsecureSkip,
+			Logger:        r.logger,
 		},
 	}
 
@@ -119,6 +163,42 @@ func (r *Registry) CreateInstance(cfg ProviderInstanceConfig) error {
 	provider, err := factory(factoryCfg)
 	if err != nil {
 		return fmt.Errorf("creating provider %s: %w", cfg.Name, err)
+	}
+	if (r.compactOwnership || r.legacyOwnership) && provider.Capabilities().SupportsOwnershipTXT {
+		identity := IdentityOf(provider)
+		zone := cfg.ProviderConfig["ZONE"]
+		if identity.Type == "cloudflare" {
+			zone = ""
+		}
+		if zone == "" && identity.Type != "cloudflare" {
+			zone = identity.Zone
+		}
+		_, resolvable := provider.(OwnershipZoneResolver)
+		if zone != "" || resolvable {
+			mutex := r.ownershipMutexes[identity]
+			if mutex == nil {
+				mutex = &sync.Mutex{}
+				r.ownershipMutexes[identity] = mutex
+			}
+			if enabler, ok := provider.(interface{ EnableCompactOwnership() }); ok {
+				enabler.EnableCompactOwnership()
+			}
+			if r.legacyOwnership {
+				if enabler, ok := provider.(interface{ EnableLegacyOwnership() }); ok {
+					enabler.EnableLegacyOwnership()
+				}
+			}
+			storage, storageErr := NewCompactOwnershipProvider(provider, r.instanceID, zone, r.logger, mutex)
+			err = storageErr
+			if err != nil {
+				return fmt.Errorf("configuring compact ownership for %s: %w", cfg.Name, err)
+			}
+			storage.legacy = r.legacyOwnership
+			provider = storage
+			r.logger.Info("DNS ownership storage enabled", "provider", cfg.Name, "owner", r.instanceID, "compact", r.compactOwnership)
+		} else {
+			r.logger.Info("using provider-native ownership", "provider", cfg.Name, "reason", "no DNS zone enumeration")
+		}
 	}
 
 	// Create domain matcher
@@ -134,14 +214,17 @@ func (r *Registry) CreateInstance(cfg ProviderInstanceConfig) error {
 
 	// Create provider instance
 	instance := &ProviderInstance{
-		Provider:         provider,
-		Matcher:          domainMatcher,
-		RecordType:       cfg.RecordType,
-		Target:           cfg.Target,
-		TTL:              cfg.TTL,
-		Mode:             cfg.Mode,
-		MatchLabeledOnly: cfg.MatchLabeledOnly,
-		InstanceID:       r.instanceID,
+		Provider:                    provider,
+		Matcher:                     domainMatcher,
+		RecordType:                  cfg.RecordType,
+		Target:                      cfg.Target,
+		TTL:                         cfg.TTL,
+		Mode:                        cfg.Mode,
+		AdoptExisting:               cfg.AdoptExisting,
+		AdoptExistingAllowOverrides: cfg.AdoptExistingAllowOverrides,
+		InstanceID:                  r.instanceID,
+		MetadataFilters:             cfg.MetadataFilters,
+		Identity:                    IdentityOf(provider),
 	}
 
 	// Default to managed mode if not set
@@ -158,7 +241,6 @@ func (r *Registry) CreateInstance(cfg ProviderInstanceConfig) error {
 		slog.String("record_type", string(cfg.RecordType)),
 		slog.String("target", cfg.Target),
 		slog.String("mode", string(instance.Mode)),
-		slog.Bool("match_labeled_only", instance.MatchLabeledOnly),
 	)
 
 	return nil
@@ -185,16 +267,35 @@ func (r *Registry) All() []*ProviderInstance {
 
 // MatchingProviders returns all provider instances that match the given hostname.
 // The order matches the priority order from DNSWEAVER_INSTANCES.
+//
+// This domain-only variant ignores MetadataFilters. Prefer
+// MatchingProvidersForHostname when full hostname metadata is available so
+// that DNSWEAVER_{NAME}_ENTRYPOINTS-style scoping takes effect.
 func (r *Registry) MatchingProviders(hostname string) []*ProviderInstance {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	var matches []*ProviderInstance
 	for _, inst := range r.instances {
-		if inst.MatchLabeledOnly {
-			continue
-		}
 		if inst.Matches(hostname) {
+			matches = append(matches, inst)
+		}
+	}
+
+	return matches
+}
+
+// MatchingProvidersForHostname returns all provider instances that match
+// the given hostname AND satisfy any configured metadata filters. The order
+// matches the priority order from DNSWEAVER_INSTANCES, so callers can pick
+// the first match for first-match-wins precedence.
+func (r *Registry) MatchingProvidersForHostname(hostname string, metadata map[string]string) []*ProviderInstance {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var matches []*ProviderInstance
+	for _, inst := range r.instances {
+		if inst.MatchesWithMetadata(hostname, metadata) {
 			matches = append(matches, inst)
 		}
 	}
@@ -209,9 +310,6 @@ func (r *Registry) FirstMatchingProvider(hostname string) *ProviderInstance {
 	defer r.mu.RUnlock()
 
 	for _, inst := range r.instances {
-		if inst.MatchLabeledOnly {
-			continue
-		}
 		if inst.Matches(hostname) {
 			return inst
 		}
@@ -277,8 +375,20 @@ func (r *Registry) Close() error {
 
 	var firstErr error
 	for _, inst := range r.instances {
-		// Providers may implement a Close method in the future
-		// For now, just clear the registry
+		// Providers holding long-lived resources (e.g. SSH/SFTP sessions)
+		// implement Closer; release them on shutdown.
+		if closer, ok := inst.Provider.(Closer); ok {
+			if err := closer.Close(); err != nil {
+				r.logger.Warn("error closing provider instance",
+					slog.String("name", inst.Name()),
+					slog.String("error", err.Error()),
+				)
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+		}
 		r.logger.Debug("closing provider instance", slog.String("name", inst.Name()))
 	}
 
@@ -293,4 +403,48 @@ func (r *Registry) Count() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.instances)
+}
+
+// WarnDuplicateIdentities scans all registered instances and emits one WARN
+// log entry per group of instances that share the same backend identity AND
+// RecordType. Such instances will collide when both match the same hostname
+// (one will overwrite the other every reconciliation, see #86), so the
+// reconciler resolves the collision via first-match-wins. Surfacing the
+// collision once at startup makes the misconfiguration visible without
+// spamming a warning on every reconcile.
+//
+// Intended to be called from main() once after all providers are loaded.
+func (r *Registry) WarnDuplicateIdentities() {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	type identityKey struct {
+		Identity   ProviderIdentity
+		RecordType RecordType
+	}
+	groups := make(map[identityKey][]string, len(r.instances))
+	order := make([]identityKey, 0)
+	for _, inst := range r.instances {
+		k := identityKey{Identity: inst.Identity, RecordType: inst.RecordType}
+		if _, seen := groups[k]; !seen {
+			order = append(order, k)
+		}
+		groups[k] = append(groups[k], inst.Name())
+	}
+
+	for _, k := range order {
+		names := groups[k]
+		if len(names) < 2 {
+			continue
+		}
+		r.logger.Warn("multiple provider instances share the same backend identity; only the first to match a hostname will write",
+			slog.String("provider_type", k.Identity.Type),
+			slog.String("endpoint", k.Identity.Endpoint),
+			slog.String("zone", k.Identity.Zone),
+			slog.String("record_type", string(k.RecordType)),
+			slog.Any("instances", names),
+			slog.String("winner", names[0]),
+			slog.String("hint", "ensure each backend (type+endpoint+zone+record_type) is referenced by at most one DNSWEAVER_INSTANCES entry, or use DNSWEAVER_{NAME}_ENTRYPOINTS / metadata filters to make scopes mutually exclusive"),
+		)
+	}
 }

@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>dnsweaver · Your services move. Your DNS keeps up.</title>
+    <meta
+      name="description"
+      content="Automatic DNS records for containers, VMs and clusters. Connect your workloads to your own DNS providers."
+    />
+    <link rel="canonical" href="https://dnsweaver.com/" />
+    <meta name="theme-color" content="#0b111b" />
+    <meta
+      property="og:title"
+      content="dnsweaver · Your services move. Your DNS keeps up."
+    />
+    <meta
+      property="og:description"
+      content="Automatic DNS records for containers, VMs and clusters. Connect your workloads to your own DNS providers."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://dnsweaver.com/" />
+    <meta
+      property="og:image"
+      content="https://dnsweaver.com/assets/og-image.png"
+    />
+    <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/product.css" />
+    <script src="/product.js" defer></script>
+  </head>
+  <body class="dnsweaver">
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="masthead">
+      <div class="nav-inner wrap">
+        <a class="brand" href="/" aria-label="dnsweaver home"
+          ><img
+            src="/assets/mark.svg"
+            alt=""
+            width="29"
+            height="32"
+          />dnsweaver</a
+        >
+        <nav aria-label="Main navigation">
+          <a class="nav-detail" href="#how-it-works">How it works</a
+          ><a
+            class="nav-detail"
+            href="https://maxfield-allison.github.io/dnsweaver/"
+            >Docs</a
+          ><a href="/pricing/">Pricing</a>
+        </nav>
+        <a class="pill primary small" href="#get-started">Get dnsweaver</a>
+      </div>
+    </header>
+    <main id="main">
+      <section class="hero wrap">
+        <p class="eyebrow">Your homelab. Fewer loose ends.</p>
+        <h1>Your services move.<br /><span>Your DNS keeps up.</span></h1>
+        <p class="lead">
+          A container starts. A VM boots. A service moves.<br />dnsweaver keeps
+          the matching records<br class="nav-detail" />
+          in the DNS providers you already use.
+        </p>
+        <div class="actions">
+          <a class="pill primary" href="#get-started">Get dnsweaver</a
+          ><a class="text-link" href="#how-it-works">See how it works</a>
+        </div>
+        <p class="meta">One Go binary · Your infrastructure · Open source</p>
+      </section>
+      <figure class="showcase wrap">
+        <div class="window">
+          <div class="window-bar">
+            <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span
+            ><span class="window-label">dnsweaver / workload → record</span
+            ><span>ILLUSTRATION</span>
+          </div>
+          <div
+            class="flow-stage"
+            role="img"
+            aria-label="Docker, Proxmox and Kubernetes provide workload names to dnsweaver, which reconciles records in internal and public DNS providers."
+          >
+            <div class="source-stack" aria-hidden="true">
+              <div class="source-node">
+                <svg viewBox="0 0 24 24">
+                  <path
+                    d="M3 8h18v13H3zM7 3v5m5-5v5m5-5v5M3 13h18M8 8v13m8-13v13"
+                  /></svg
+                >Docker
+              </div>
+              <div class="source-node">
+                <svg viewBox="0 0 24 24">
+                  <rect x="3" y="3" width="18" height="7" rx="1" />
+                  <rect x="3" y="14" width="18" height="7" rx="1" />
+                  <path d="M6 6.5h1m3 0h8M6 17.5h1m3 0h8" /></svg
+                >Proxmox
+              </div>
+              <div class="source-node">
+                <svg viewBox="0 0 24 24">
+                  <path
+                    d="m12 2 9 5v10l-9 5-9-5V7zm0 0v20M3 7l9 5 9-5M3 17l9-5 9 5"
+                  /></svg
+                >Kubernetes
+              </div>
+            </div>
+            <svg
+              class="flow-wires"
+              viewBox="0 0 120 260"
+              preserveAspectRatio="none"
+              aria-hidden="true"
+            >
+              <path
+                d="M0 42C65 42 55 130 120 130M0 130H120M0 218C65 218 55 130 120 130"
+              />
+              <path
+                class="signal"
+                d="M0 42C65 42 55 130 120 130M0 130H120M0 218C65 218 55 130 120 130"
+              />
+            </svg>
+            <div class="weaver-core" aria-hidden="true">
+              <img
+                src="/assets/mark.svg"
+                width="74"
+                height="74"
+                alt=""
+              /><strong>dnsweaver</strong><span>Discover · Reconcile</span>
+            </div>
+            <svg
+              class="flow-wires out"
+              viewBox="0 0 120 260"
+              preserveAspectRatio="none"
+              aria-hidden="true"
+            >
+              <path
+                d="M0 130C65 130 55 65 120 65M0 130C65 130 55 195 120 195"
+              />
+              <path
+                class="signal"
+                d="M0 130C65 130 55 65 120 65M0 130C65 130 55 195 120 195"
+              />
+            </svg>
+            <div class="destinations" aria-hidden="true">
+              <div class="destination">
+                <strong><i class="status-dot"></i>Internal DNS</strong
+                ><code>app.example.com<br />A → 192.0.2.20</code>
+              </div>
+              <div class="destination">
+                <strong><i class="status-dot"></i>Public DNS</strong
+                ><code>app.example.com<br />A → 203.0.113.20</code>
+              </div>
+            </div>
+          </div>
+          <div class="flow-caption" aria-hidden="true">
+            <span>DISCOVER NAMES. MATCH PROVIDERS. RECONCILE.</span
+            ><span>YOUR RECORDS. YOUR RULES.</span>
+          </div>
+        </div>
+        <figcaption class="caption">
+          How the pieces connect. An illustration using example names and
+          addresses.
+        </figcaption>
+      </figure>
+      <div class="specs wrap">
+        <span
+          ><strong>Containers. VMs. Clusters.</strong>Run your sources
+          together.</span
+        ><span
+          ><strong>Internal + public DNS.</strong>Choose where records
+          belong.</span
+        ><span><strong>One Go binary.</strong>amd64 and arm64.</span>
+      </div>
+      <section class="chapter wrap" id="how-it-works">
+        <div class="chapter-heading" data-reveal>
+          <p class="eyebrow">A small bridge between moving parts.</p>
+          <h2>Let the labels<br /><span>do the typing.</span></h2>
+        </div>
+        <div class="chapter-copy" data-reveal>
+          <p>
+            Your workloads already have names. Read them from Traefik, Caddy,
+            nginx-proxy or native labels.
+            <strong>Connect Kubernetes, Proxmox VE or Incus too.</strong> Run
+            the sources you need together.
+          </p>
+          <p>
+            Domain rules select the DNS providers. dnsweaver creates and updates
+            the matching records, then reconciles changes as workloads come and
+            go. <strong>You choose the ownership and cleanup policy.</strong>
+          </p>
+        </div>
+        <div class="source-list" aria-label="Hostname sources" data-reveal>
+          <span>Traefik</span><span>Caddy</span><span>nginx-proxy</span
+          ><span>Native labels</span><span>Kubernetes</span
+          ><span>Proxmox VE</span><span>Incus</span>
+        </div>
+      </section>
+      <section class="chapter wrap" aria-labelledby="horizon-heading">
+        <div class="chapter-heading" data-reveal>
+          <p class="eyebrow">Split-horizon DNS.</p>
+          <h2 id="horizon-heading">
+            One name.<br /><span>The right answer on each side.</span>
+          </h2>
+        </div>
+        <div class="panel" data-reveal>
+          <div class="panel-top">
+            <span class="panel-title"
+              >Explore two views of the same hostname</span
+            >
+            <div
+              class="segmented"
+              data-horizon-controls
+              hidden
+              role="group"
+              aria-label="Choose a DNS view"
+            >
+              <button type="button" data-horizon="both" aria-pressed="true">
+                Both views</button
+              ><button
+                type="button"
+                data-horizon="internal"
+                aria-pressed="false"
+              >
+                Internal</button
+              ><button type="button" data-horizon="public" aria-pressed="false">
+                Public
+              </button>
+            </div>
+          </div>
+          <div class="horizon-stage">
+            <div class="horizon-host">
+              <code>app.example.com</code><span>One workload hostname</span>
+            </div>
+            <div class="resolver-grid">
+              <article
+                class="resolver"
+                data-resolver="internal"
+                data-active="true"
+              >
+                <svg
+                  class="resolver-icon"
+                  viewBox="0 0 48 48"
+                  aria-hidden="true"
+                >
+                  <rect x="7" y="7" width="34" height="12" rx="2" />
+                  <rect x="7" y="28" width="34" height="12" rx="2" />
+                  <path d="M12 13h3m5 0h15M12 34h3m5 0h15" />
+                </svg>
+                <p class="eyebrow">Inside your network</p>
+                <h3>Your internal resolver.</h3>
+                <div class="record">
+                  <span>A RECORD</span><code>192.0.2.20</code>
+                </div>
+                <p>The address configured for the internal provider.</p>
+              </article>
+              <article
+                class="resolver"
+                data-resolver="public"
+                data-active="true"
+              >
+                <svg
+                  class="resolver-icon"
+                  viewBox="0 0 48 48"
+                  aria-hidden="true"
+                >
+                  <circle cx="24" cy="24" r="17" />
+                  <ellipse cx="24" cy="24" rx="8" ry="17" />
+                  <path d="M7 24h34M11 14h26M11 34h26" />
+                </svg>
+                <p class="eyebrow">Outside your network</p>
+                <h3>Your public provider.</h3>
+                <div class="record">
+                  <span>A RECORD</span><code>203.0.113.20</code>
+                </div>
+                <p>The address configured for the public provider.</p>
+              </article>
+            </div>
+            <p
+              class="horizon-status"
+              id="horizon-status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              Both views: the same hostname has a different answer in each
+              configured DNS provider.
+            </p>
+          </div>
+          <p class="demo-note">
+            Interactive illustration. These are documentation addresses, not a
+            live DNS lookup.
+            <a
+              href="https://maxfield-allison.github.io/dnsweaver/deployment/split-horizon/"
+              >Configure split-horizon DNS</a
+            >
+          </p>
+        </div>
+      </section>
+      <section class="chapter wrap" aria-labelledby="provider-heading">
+        <div class="chapter-heading" data-reveal>
+          <p class="eyebrow">Bring your DNS.</p>
+          <h2 id="provider-heading">
+            The resolver you run.<br /><span>The provider you picked.</span>
+          </h2>
+        </div>
+        <div class="chapter-copy" data-reveal>
+          <p>
+            Keep internal names on your own resolver. Send public records to a
+            hosted DNS API.
+            <strong
+              >Different providers can work from the same workload
+              labels.</strong
+            >
+          </p>
+          <p>
+            Use domain rules and provider instances to decide where each record
+            belongs. The docs cover credentials, supported record types and each
+            provider's options.
+          </p>
+        </div>
+        <div
+          class="provider-list"
+          aria-label="Supported DNS providers"
+          data-reveal
+        >
+          <span>Technitium</span><span>Cloudflare</span><span>OVHcloud</span
+          ><span>RFC 2136</span><span>PowerDNS</span><span>Pi-hole</span
+          ><span>AdGuard Home</span><span>OPNsense</span><span>pfSense</span
+          ><span>UniFi</span><span>dnsmasq</span><span>Webhook</span>
+        </div>
+      </section>
+      <section class="chapter wrap" aria-labelledby="control-heading">
+        <div class="chapter-heading" data-reveal>
+          <p class="eyebrow">Small tool. Visible decisions.</p>
+          <h2 id="control-heading">
+            Know what it owns.<br /><span>See what it's doing.</span>
+          </h2>
+        </div>
+        <div class="feature-grid">
+          <article class="feature" data-reveal>
+            <h3>Cleanup is a policy<br />you choose.</h3>
+            <p>
+              Managed mode tracks ownership and removes owned records according
+              to your cleanup settings. Additive mode creates records without
+              deleting them.
+            </p>
+            <div class="mode-list">
+              <div class="mode">
+                <strong>Managed</strong><span>Ownership-aware cleanup</span>
+              </div>
+              <div class="mode">
+                <strong>Additive</strong><span>Create without deleting</span>
+              </div>
+              <div class="mode">
+                <strong>Dry run</strong><span>Inspect planned changes</span>
+              </div>
+            </div>
+            <p class="small-note">
+              Authoritative mode can delete unrecognized records. Use it only
+              for a zone dedicated to dnsweaver.
+              <a
+                href="https://maxfield-allison.github.io/dnsweaver/configuration/modes/"
+                >Read the mode guide</a
+              >.
+            </p>
+          </article>
+          <article class="feature" data-reveal>
+            <h3>Keep the machinery<br />in view.</h3>
+            <p>
+              Structured logs, health endpoints and Prometheus metrics. Check
+              the process and follow reconciliation without adding another
+              dashboard.
+            </p>
+            <div class="terminal" aria-label="Available process endpoints">
+              <span class="comment"># Process and monitoring endpoints</span
+              ><br /><span class="key">/health</span>
+              <span class="ok">health check</span><br /><span class="key"
+                >/ready</span
+              >
+              <span class="ok">readiness check</span><br /><span class="key"
+                >/metrics</span
+              >
+              <span class="ok">Prometheus metrics</span>
+            </div>
+            <p class="small-note">
+              Keep management endpoints on a trusted interface. Provider
+              credentials can come from files.
+            </p>
+          </article>
+        </div>
+      </section>
+      <section class="chapter wrap">
+        <div class="pricing-teaser" data-reveal>
+          <a
+            class="pricing-image"
+            href="/pricing/"
+            aria-label="Visit dnsweaver pricing with Rivet"
+            ><img
+              src="/pricing/img/dnsweaver-poster-wide.jpg"
+              width="1280"
+              height="720"
+              loading="lazy"
+              alt="Rivet the jackdaw at the resolver desk, where all three prices are zero"
+          /></a>
+          <div>
+            <p class="eyebrow">The pricing department</p>
+            <h2>Every plan<br />resolves to $0.</h2>
+            <p>
+              Free and open source. Rivet has a slightly longer explanation.
+            </p>
+            <div class="actions">
+              <a class="text-link" href="/pricing/"
+                >Visit the pricing department</a
+              >
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="get-section wrap" id="get-started">
+        <p class="eyebrow">One fewer thing to update by hand.</p>
+        <h2>Give your DNS<br />some follow-through.</h2>
+        <p class="lead">
+          Run dnsweaver as a container or a standalone binary. Connect a source,
+          configure a provider, and start with a dry run.
+        </p>
+        <div class="actions">
+          <a
+            class="pill primary"
+            href="https://maxfield-allison.github.io/dnsweaver/getting-started/"
+            >Get started in the docs</a
+          ><a
+            class="pill"
+            href="https://github.com/maxfield-allison/dnsweaver/releases"
+            >Releases</a
+          >
+        </div>
+        <p class="notice">
+          The docs cover discovery, credentials, record ownership and upgrades.
+          Review the provider and cleanup settings before starting
+          reconciliation.
+        </p>
+      </section>
+    </main>
+    <footer class="footer wrap">
+      <div>
+        A <a href="https://probablyfine.dev/">ProbablyFine</a> project. Free and
+        MIT-licensed.
+      </div>
+      <nav aria-label="Footer">
+        <a href="https://github.com/maxfield-allison/dnsweaver">Source</a
+        ><a href="https://maxfield-allison.github.io/dnsweaver/"
+          >Documentation</a
+        ><a href="/pricing/">Pricing</a><a href="/privacy/">Privacy</a
+        ><a href="/pricing/#support-title">Support the projects</a>
+      </nav>
+    </footer>
+  </body>
+</html>

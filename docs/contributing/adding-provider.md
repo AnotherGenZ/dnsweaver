@@ -175,7 +175,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
 )
 
 type Provider struct {
@@ -282,7 +282,7 @@ In `cmd/dnsweaver/main.go`:
 ```go
 import (
 	// ...
-	"gitlab.bluewillows.net/root/dnsweaver/providers/myprovider"
+	"github.com/maxfield-allison/dnsweaver/providers/myprovider"
 )
 
 func registerProviderFactories(registry *provider.Registry) {
@@ -361,7 +361,7 @@ DNSWEAVER_{NAME}_ZONE_ID=...     # Or ZONE for name lookup
 DNSWEAVER_{NAME}_TTL=300
 ```
 
-### Private DNS Providers (Technitium, Pi-hole, dnsmasq, unbound)
+### Private DNS Providers (Technitium, Pi-hole, dnsmasq, unbound, OPNsense, pfSense, UniFi)
 
 Characteristics:
 - Local network access
@@ -381,7 +381,7 @@ DNSWEAVER_{NAME}_ZONE=home.example.com
 1. Update `README.md` with provider-specific settings table
 2. Add example configuration in "Quick Start" section
 3. Update `CHANGELOG.md` with new provider announcement
-4. Create issue in GitLab for tracking
+4. Open an issue on GitHub for tracking
 
 ## Record Types
 

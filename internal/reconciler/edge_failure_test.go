@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"testing"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
-	"gitlab.bluewillows.net/root/dnsweaver/sources/traefik"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/source"
+	"github.com/maxfield-allison/dnsweaver/pkg/workload"
+	"github.com/maxfield-allison/dnsweaver/sources/traefik"
 )
 
 // =============================================================================
@@ -117,12 +117,7 @@ func TestReconcile_CanceledContextDuringProviderDelete(t *testing.T) {
 		Type:     provider.RecordTypeA,
 		Target:   "10.0.0.1",
 	})
-	// Add ownership TXT at the correct hostname (_dnsweaver. prefix)
-	mockProvider.AddRecord(provider.Record{
-		Hostname: provider.OwnershipRecordName("orphan.example.com"),
-		Type:     provider.RecordTypeTXT,
-		Target:   "heritage=dnsweaver",
-	})
+	mockProvider.AddRecord(memberOwnershipTXT("orphan.example.com", "10.0.0.1"))
 
 	mockProvider.deleteFn = func(_ context.Context, _ provider.Record) error {
 		return context.Canceled
@@ -228,8 +223,8 @@ func TestReconcile_ProviderListFailureDuringCacheBuild(t *testing.T) {
 }
 
 func TestReconcile_ProviderDeleteFails(t *testing.T) {
-	// When provider.Delete() fails during ensureRecord (target change),
-	// the action should report failure.
+	// When deletion of the old member fails during a target change, the
+	// replacement stays created and the exact failed deletion is reported.
 	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("app", map[string]string{
 		"traefik.http.routers.app.rule": "Host(`app.example.com`)",
@@ -246,6 +241,13 @@ func TestReconcile_ProviderDeleteFails(t *testing.T) {
 		Type:     provider.RecordTypeA,
 		Target:   "10.0.0.99", // different from the 10.0.0.1 the provider instance wants
 	})
+	mockProvider.AddRecord(memberOwnershipTXT("app.example.com", "10.0.0.99"))
+	mockProvider.deleteFn = func(_ context.Context, record provider.Record) error {
+		if record.Type == provider.RecordTypeA {
+			return errors.New("provider delete failed")
+		}
+		return nil
+	}
 
 	providers := provider.NewRegistry(logger)
 	providers.RegisterFactory("mock", func(_ provider.FactoryConfig) (provider.Provider, error) {
@@ -270,10 +272,13 @@ func TestReconcile_ProviderDeleteFails(t *testing.T) {
 		t.Fatalf("Reconcile returned hard error: %v", err)
 	}
 
-	// Should have an update action (old target 10.0.0.99 → new target 10.0.0.1)
-	updated := result.Updated()
-	if len(updated) != 1 {
-		t.Errorf("expected 1 updated action, got %d", len(updated))
+	created := result.Created()
+	if len(created) != 1 || created[0].Target != "10.0.0.1" {
+		t.Errorf("created actions = %+v, want replacement member", created)
+	}
+	failed := result.Failed()
+	if len(failed) != 1 || failed[0].Type != ActionDelete || failed[0].Target != "10.0.0.99" {
+		t.Errorf("failed actions = %+v, want exact old-member deletion failure", failed)
 	}
 }
 
@@ -335,8 +340,11 @@ func TestReconcile_PartialListerFailure(t *testing.T) {
 // --- Partial Failure Recovery ---
 
 func TestReconcile_CreateFailsButOtherProvidersSucceed(t *testing.T) {
-	// When hostname matches multiple providers and one fails, the other
-	// should still succeed.
+	// Under first-match-wins (issue #86), only the first declared matching
+	// provider writes — there is no automatic failover to a second provider.
+	// This test verifies the failure of the winning provider is reported
+	// (and the loser is left untouched) rather than silently masking the
+	// failure by writing to the second instance.
 	dockerMock := newTestMockWorkloadLister(workload.PlatformDocker)
 	dockerMock.AddWorkload("app", map[string]string{
 		"traefik.http.routers.app.rule": "Host(`app.example.com`)",
@@ -346,33 +354,34 @@ func TestReconcile_CreateFailsButOtherProvidersSucceed(t *testing.T) {
 	sources := source.NewRegistry(logger)
 	sources.Register(traefik.New(traefik.WithLogger(logger)))
 
-	goodProvider := newTestMockProvider("good-dns")
+	// Declare the failing provider first so it is the winner.
 	badProvider := newTestMockProvider("bad-dns")
 	badProvider.createFn = func(_ context.Context, _ provider.Record) error {
 		return errors.New("provider API error")
 	}
+	goodProvider := newTestMockProvider("good-dns")
 
 	providers := provider.NewRegistry(logger)
 	providers.RegisterFactory("mock", func(cfg provider.FactoryConfig) (provider.Provider, error) {
-		if cfg.Name == "good-dns" {
-			return goodProvider, nil
+		if cfg.Name == "bad-dns" {
+			return badProvider, nil
 		}
-		return badProvider, nil
+		return goodProvider, nil
 	})
-	// Both providers match *.example.com
-	_ = providers.CreateInstance(provider.ProviderInstanceConfig{
-		Name:       "good-dns",
-		TypeName:   "mock",
-		RecordType: provider.RecordTypeA,
-		Target:     "10.0.0.1",
-		TTL:        300,
-		Domains:    []string{"*.example.com"},
-	})
+	// Both providers match *.example.com — bad-dns is declared first.
 	_ = providers.CreateInstance(provider.ProviderInstanceConfig{
 		Name:       "bad-dns",
 		TypeName:   "mock",
 		RecordType: provider.RecordTypeA,
 		Target:     "10.0.0.2",
+		TTL:        300,
+		Domains:    []string{"*.example.com"},
+	})
+	_ = providers.CreateInstance(provider.ProviderInstanceConfig{
+		Name:       "good-dns",
+		TypeName:   "mock",
+		RecordType: provider.RecordTypeA,
+		Target:     "10.0.0.1",
 		TTL:        300,
 		Domains:    []string{"*.example.com"},
 	})
@@ -387,12 +396,13 @@ func TestReconcile_CreateFailsButOtherProvidersSucceed(t *testing.T) {
 		t.Fatalf("Reconcile returned hard error: %v", err)
 	}
 
-	// One provider should succeed, one should fail
-	if result.CreatedCount() < 1 {
-		t.Errorf("expected at least 1 created record, got %d", result.CreatedCount())
-	}
+	// The winning provider's failure must be reported.
 	if result.FailedCount() < 1 {
-		t.Errorf("expected at least 1 failed record, got %d", result.FailedCount())
+		t.Errorf("expected at least 1 failed record from bad-dns, got %d", result.FailedCount())
+	}
+	// The losing provider must NOT have been called as a fallback.
+	if got := len(goodProvider.GetCreatedDNSRecords()); got != 0 {
+		t.Errorf("good-dns (loser) should not be called as a fallback, got %d created records", got)
 	}
 }
 

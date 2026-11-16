@@ -1,3 +1,8 @@
+---
+title: AdGuard Home DNS Provider
+description: Automate AdGuard Home DNS rewrites from Docker, Kubernetes, and Proxmox with dnsweaver — managed A, AAAA, and CNAME records via the AdGuard Home API.
+---
+
 # AdGuard Home
 
 AdGuard Home is a network-wide ad blocker and DNS server. dnsweaver manages DNS records via AdGuard Home's DNS Rewrite API.
@@ -174,6 +179,26 @@ services:
       - DNSWEAVER_ADGUARD_USERNAME=admin
       - DNSWEAVER_ADGUARD_PASSWORD=your-password
 ```
+
+## TLS Configuration
+
+AdGuard Home is often fronted by a reverse proxy with a private CA or self-signed certificate. dnsweaver supports the unified TLS surface used by every HTTP provider:
+
+| Env key | Purpose |
+|---------|---------|
+| `DNSWEAVER_ADGUARD_TLS_CA_FILE` | Trust a private CA bundle (PEM) |
+| `DNSWEAVER_ADGUARD_TLS_CERT_FILE` / `_TLS_KEY_FILE` | Present a client certificate (mTLS) |
+| `DNSWEAVER_ADGUARD_TLS_SERVER_NAME` | Override SNI / hostname verification |
+| `DNSWEAVER_ADGUARD_TLS_SKIP_VERIFY` | Disable verification (development only) |
+| `DNSWEAVER_ADGUARD_TLS_MIN_VERSION` | `1.2` (default) or `1.3` |
+
+The legacy `DNSWEAVER_ADGUARD_INSECURE_SKIP_VERIFY` variable still works but emits a deprecation warning and will be removed in a future major release. See the [environment reference](../configuration/environment.md) for complete recipes.
+
+!!! warning "Mounted certs must be readable by uid/gid 1000"
+    The container drops privileges to the unprivileged `dnsweaver` user, so a
+    client key mounted `root:root 0600` yields `permission denied`. See
+    [TLS Certificate File Permissions](../configuration/environment.md#tls-certificate-file-permissions).
+
 
 ## Troubleshooting
 

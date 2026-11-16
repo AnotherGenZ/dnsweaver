@@ -8,15 +8,16 @@ import (
 	"math"
 	"strings"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
 )
 
 // Provider implements provider.Provider for Technitium DNS Server.
 type Provider struct {
 	name             string
+	url              string // Technitium API URL (recorded for Identity reporting)
 	zone             string
 	ttl              int
-	autoHTTPSRecords bool   // Create companion HTTPS records for A/CNAME records
+	autoHTTPSRecords bool   // Create companion HTTPS records for A/AAAA records
 	autoHTTPSALPN    string // ALPN value for companion HTTPS records (e.g., "h2")
 	client           *Client
 	logger           *slog.Logger
@@ -46,6 +47,7 @@ func New(name string, config *Config, opts ...ProviderOption) (*Provider, error)
 
 	p := &Provider{
 		name:             name,
+		url:              config.URL,
 		zone:             config.Zone,
 		ttl:              config.TTL,
 		autoHTTPSRecords: config.AutoHTTPSRecords,
@@ -71,16 +73,13 @@ func New(name string, config *Config, opts ...ProviderOption) (*Provider, error)
 	// Build client options
 	clientOpts := []ClientOption{WithLogger(p.logger)}
 
-	// Add insecure skip verify if configured
-	if config.InsecureSkipVerify {
-		clientOpts = append(clientOpts, WithInsecureSkipVerify(true))
-		p.logger.Warn("TLS certificate verification disabled for Technitium provider",
-			slog.String("provider", name),
-			slog.String("url", config.URL),
-		)
-	}
-
-	// Create the API client with the same logger
+	// Create the API client with the same logger.
+	// NOTE: TLS settings (custom CA, mTLS, skip-verify) are configured at
+	// the framework level via FactoryConfig.HTTP.TLS and applied to the
+	// shared HTTP client constructed in the factory. The legacy path
+	// (calling New() directly with InsecureSkipVerify in Config) used to
+	// override the client here; that bespoke knob was removed in v1.5 in
+	// favor of the unified httputil.TLSConfig.
 	p.client = NewClient(config.URL, config.Token, clientOpts...)
 
 	return p, nil
@@ -105,6 +104,17 @@ func (p *Provider) Name() string {
 // Type returns "technitium".
 func (p *Provider) Type() string {
 	return "technitium"
+}
+
+// Identity returns the backend identity for this provider instance.
+// Two technitium instances are considered the same backend when they target
+// the same API URL and zone (see provider.ProviderIdentity, issue #88).
+func (p *Provider) Identity() provider.ProviderIdentity {
+	return provider.ProviderIdentity{
+		Type:     "technitium",
+		Endpoint: p.url,
+		Zone:     p.zone,
+	}
 }
 
 // Capabilities returns the provider's feature support.
@@ -201,11 +211,31 @@ func (p *Provider) List(ctx context.Context) ([]provider.Record, error) {
 				HTTPS: &provider.HTTPSData{
 					Priority:   uint16(min(max(0, r.RData.SvcPriority), math.MaxUint16)),
 					TargetName: r.RData.SvcTargetName,
-					ALPN:       extractALPN(r.RData.SvcParams),
+					ALPN:       extractALPN(string(r.RData.SvcParams)),
 				},
 			})
 		}
 		// Skip other record types (NS, SOA, etc.)
+	}
+
+	// Attach the complete companion snapshot to each address, so an unchanged
+	// address can still trigger an ownership-gated companion repair.
+	byName := make(map[string][]apiRecord)
+	for _, record := range apiRecords {
+		name := strings.ToLower(strings.TrimSuffix(record.Name, "."))
+		byName[name] = append(byName[name], record)
+	}
+	for i := range records {
+		if !needsCompanionHTTPS(records[i].Type) {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSuffix(records[i].Hostname, "."))
+		companion, protected := companionHTTPS(byName[name], records[i].Hostname)
+		state := companionState(companion)
+		if protected {
+			state = protectedCompanionState
+		}
+		records[i].Metadata = map[string]string{companionStateKey: state}
 	}
 
 	p.logger.Debug("listed records",
@@ -268,7 +298,7 @@ func (p *Provider) Create(ctx context.Context, record provider.Record) error {
 		slog.Int("ttl", ttl),
 	)
 
-	// Auto-create companion HTTPS record for A/AAAA/CNAME records when enabled.
+	// Auto-create companion HTTPS record for A/AAAA records when enabled.
 	// This prevents ECH fallback errors in split-horizon DNS environments.
 	if err := p.createCompanionHTTPS(ctx, record.Hostname, record.Type, ttl); err != nil {
 		p.logger.Warn("companion HTTPS record creation failed (non-fatal)",
@@ -325,7 +355,7 @@ func (p *Provider) Delete(ctx context.Context, record provider.Record) error {
 		slog.String("target", record.Target),
 	)
 
-	// Auto-delete companion HTTPS record when an A/AAAA/CNAME record is removed.
+	// Auto-delete companion HTTPS record when an A/AAAA record is removed.
 	// Uses best-effort: companion may already be gone or manually deleted.
 	if err := p.deleteCompanionHTTPS(ctx, record.Hostname, record.Type); err != nil {
 		p.logger.Warn("companion HTTPS record deletion failed (non-fatal)",
@@ -348,12 +378,16 @@ func (p *Provider) Update(ctx context.Context, existing, desired provider.Record
 	// Technitium's update API requires identifying the old record and specifying new values
 	switch desired.Type {
 	case provider.RecordTypeA:
-		if err := p.client.UpdateARecord(ctx, p.zone, existing.Hostname, existing.Target, desired.Target, ttl); err != nil {
-			return fmt.Errorf("updating A record: %w", err)
+		if existing.Target != desired.Target || existing.TTL != ttl {
+			if err := p.client.UpdateARecord(ctx, p.zone, existing.Hostname, existing.Target, desired.Target, ttl); err != nil {
+				return fmt.Errorf("updating A record: %w", err)
+			}
 		}
 	case provider.RecordTypeAAAA:
-		if err := p.client.UpdateAAAARecord(ctx, p.zone, existing.Hostname, existing.Target, desired.Target, ttl); err != nil {
-			return fmt.Errorf("updating AAAA record: %w", err)
+		if existing.Target != desired.Target || existing.TTL != ttl {
+			if err := p.client.UpdateAAAARecord(ctx, p.zone, existing.Hostname, existing.Target, desired.Target, ttl); err != nil {
+				return fmt.Errorf("updating AAAA record: %w", err)
+			}
 		}
 	case provider.RecordTypeCNAME:
 		if err := p.client.UpdateCNAMERecord(ctx, p.zone, existing.Hostname, existing.Target, desired.Target, ttl); err != nil {
@@ -374,7 +408,7 @@ func (p *Provider) Update(ctx context.Context, existing, desired provider.Record
 			return fmt.Errorf("creating new SRV record for update: %w", err)
 		}
 	case provider.RecordTypeHTTPS:
-		// HTTPS records: delete+create (Technitium has no native HTTPS update API)
+		// Explicit HTTPS records use the existing delete+create path.
 		if existing.HTTPS == nil || desired.HTTPS == nil {
 			return fmt.Errorf("updating HTTPS record: HTTPS data is required")
 		}
@@ -397,6 +431,10 @@ func (p *Provider) Update(ctx context.Context, existing, desired provider.Record
 		}
 	default:
 		return fmt.Errorf("unsupported record type: %s", desired.Type)
+	}
+
+	if err := p.createCompanionHTTPS(ctx, desired.Hostname, desired.Type, ttl); err != nil {
+		return fmt.Errorf("reconciling companion HTTPS record: %w", err)
 	}
 
 	p.logger.Info("updated record",

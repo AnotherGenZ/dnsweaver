@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
 )
 
 // clearAllEnv removes all DNSWEAVER_ environment variables for clean test state.
@@ -61,6 +61,9 @@ func TestLoad_MinimalConfig(t *testing.T) {
 	}
 	if cfg.HealthPort() != DefaultHealthPort {
 		t.Errorf("HealthPort() = %d, want %d", cfg.HealthPort(), DefaultHealthPort)
+	}
+	if cfg.HealthAddress() != DefaultHealthAddress || cfg.HealthAllowNetwork() {
+		t.Errorf("health listener = %s allow=%v, want loopback default", cfg.HealthAddress(), cfg.HealthAllowNetwork())
 	}
 	if cfg.DockerHost() != DefaultDockerHost {
 		t.Errorf("DockerHost() = %q, want %q", cfg.DockerHost(), DefaultDockerHost)
@@ -338,15 +341,15 @@ func TestConfig_GetProviderInstance_NotFound(t *testing.T) {
 
 func TestProviderInstanceConfig_ToProviderConfig(t *testing.T) {
 	cfg := &ProviderInstanceConfig{
-		Name:             "test-dns",
-		TypeName:         "technitium",
-		RecordType:       provider.RecordTypeA,
-		Target:           "10.0.0.1",
-		TTL:              300,
-		MatchLabeledOnly: true,
-		Domains:          []string{"*.example.com"},
-		ExcludeDomains:   []string{"admin.example.com"},
-		ProviderConfig:   map[string]string{"URL": "http://dns:5380"},
+		Name:           "test-dns",
+		TypeName:       "technitium",
+		RecordType:     provider.RecordTypeA,
+		Target:         "10.0.0.1",
+		TargetMode:     "public",
+		TTL:            300,
+		Domains:        []string{"*.example.com"},
+		ExcludeDomains: []string{"admin.example.com"},
+		ProviderConfig: map[string]string{"URL": "http://dns:5380"},
 	}
 
 	provCfg := cfg.ToProviderConfig()
@@ -363,11 +366,11 @@ func TestProviderInstanceConfig_ToProviderConfig(t *testing.T) {
 	if provCfg.Target != cfg.Target {
 		t.Errorf("Target = %q, want %q", provCfg.Target, cfg.Target)
 	}
+	if provCfg.TargetMode != cfg.TargetMode {
+		t.Errorf("TargetMode = %q, want %q", provCfg.TargetMode, cfg.TargetMode)
+	}
 	if provCfg.TTL != cfg.TTL {
 		t.Errorf("TTL = %d, want %d", provCfg.TTL, cfg.TTL)
-	}
-	if provCfg.MatchLabeledOnly != cfg.MatchLabeledOnly {
-		t.Errorf("MatchLabeledOnly = %v, want %v", provCfg.MatchLabeledOnly, cfg.MatchLabeledOnly)
 	}
 }
 
@@ -402,12 +405,89 @@ func TestLoadInstanceConfig_InsecureSkipVerify(t *testing.T) {
 		t.Fatal("expected provider instance 'skip-test' to exist")
 	}
 
-	// Verify INSECURE_SKIP_VERIFY is in ProviderConfig
-	skipVerify, ok := inst.ProviderConfig["INSECURE_SKIP_VERIFY"]
+	// Verify INSECURE_SKIP_VERIFY is migrated to canonical TLS_SKIP_VERIFY in ProviderConfig
+	skipVerify, ok := inst.ProviderConfig["TLS_SKIP_VERIFY"]
 	if !ok {
-		t.Error("INSECURE_SKIP_VERIFY not found in ProviderConfig")
+		t.Error("TLS_SKIP_VERIFY not found in ProviderConfig (legacy INSECURE_SKIP_VERIFY should be migrated)")
 	}
 	if skipVerify != "true" {
-		t.Errorf("INSECURE_SKIP_VERIFY = %q, want %q", skipVerify, "true")
+		t.Errorf("TLS_SKIP_VERIFY = %q, want %q", skipVerify, "true")
+	}
+	// Legacy key should not leak through after migration
+	if _, leaked := inst.ProviderConfig["INSECURE_SKIP_VERIFY"]; leaked {
+		t.Error("legacy INSECURE_SKIP_VERIFY should not remain in ProviderConfig after migration")
+	}
+}
+
+func TestLoadInstanceConfig_AutoHTTPSRecords(t *testing.T) {
+	// Regression test for #83: AUTO_HTTPS_RECORDS env var must be passed
+	// through to ProviderConfig so Technitium provider can read it.
+	os.Setenv("DNSWEAVER_INSTANCES", "https-test")
+	os.Setenv("DNSWEAVER_HTTPS_TEST_TYPE", "technitium")
+	os.Setenv("DNSWEAVER_HTTPS_TEST_TARGET", "10.0.0.1")
+	os.Setenv("DNSWEAVER_HTTPS_TEST_DOMAINS", "*.example.com")
+	os.Setenv("DNSWEAVER_HTTPS_TEST_URL", "https://dns.example.com:5380")
+	os.Setenv("DNSWEAVER_HTTPS_TEST_TOKEN", "secret-token")
+	os.Setenv("DNSWEAVER_HTTPS_TEST_ZONE", "example.com")
+	os.Setenv("DNSWEAVER_HTTPS_TEST_AUTO_HTTPS_RECORDS", "false")
+	os.Setenv("DNSWEAVER_HTTPS_TEST_AUTO_HTTPS_ALPN", "h2,h3")
+	defer func() {
+		os.Unsetenv("DNSWEAVER_INSTANCES")
+		os.Unsetenv("DNSWEAVER_HTTPS_TEST_TYPE")
+		os.Unsetenv("DNSWEAVER_HTTPS_TEST_TARGET")
+		os.Unsetenv("DNSWEAVER_HTTPS_TEST_DOMAINS")
+		os.Unsetenv("DNSWEAVER_HTTPS_TEST_URL")
+		os.Unsetenv("DNSWEAVER_HTTPS_TEST_TOKEN")
+		os.Unsetenv("DNSWEAVER_HTTPS_TEST_ZONE")
+		os.Unsetenv("DNSWEAVER_HTTPS_TEST_AUTO_HTTPS_RECORDS")
+		os.Unsetenv("DNSWEAVER_HTTPS_TEST_AUTO_HTTPS_ALPN")
+	}()
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	inst, ok := cfg.GetProviderInstance("https-test")
+	if !ok {
+		t.Fatal("expected provider instance 'https-test' to exist")
+	}
+
+	if got := inst.ProviderConfig["AUTO_HTTPS_RECORDS"]; got != "false" {
+		t.Errorf("AUTO_HTTPS_RECORDS = %q, want %q", got, "false")
+	}
+	if got := inst.ProviderConfig["AUTO_HTTPS_ALPN"]; got != "h2,h3" {
+		t.Errorf("AUTO_HTTPS_ALPN = %q, want %q", got, "h2,h3")
+	}
+}
+
+func TestDockerHostFromStandardEnv(t *testing.T) {
+	t.Setenv("DNSWEAVER_DOCKER_HOST", "")
+	t.Setenv("DOCKER_HOST", "tcp://10.0.0.5:2375")
+	cfg, errs := loadGlobalConfig()
+	if len(errs) > 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if cfg.DockerHost != "tcp://10.0.0.5:2375" {
+		t.Errorf("DockerHost = %q, want DOCKER_HOST value", cfg.DockerHost)
+	}
+	t.Setenv("DNSWEAVER_DOCKER_HOST", "tcp://other:2375")
+	if cfg, _ = loadGlobalConfig(); cfg.DockerHost != "tcp://other:2375" {
+		t.Errorf("DNSWEAVER_DOCKER_HOST should win, got %q", cfg.DockerHost)
+	}
+}
+
+func TestDockerHostYAMLPrecedence(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "tcp://remote:2375")
+	cases := []struct{ name, host, want string }{
+		{"omitted", "", "tcp://remote:2375"},
+		{"explicit default socket", DefaultDockerHost, DefaultDockerHost},
+		{"custom tcp", "tcp://yaml:2375", "tcp://yaml:2375"},
+	}
+	for _, c := range cases {
+		f := &FileConfig{Docker: &FileDockerConfig{Host: c.host}}
+		if got := f.ToGlobalConfig().DockerHost; got != c.want {
+			t.Errorf("%s: DockerHost = %q, want %q", c.name, got, c.want)
+		}
 	}
 }

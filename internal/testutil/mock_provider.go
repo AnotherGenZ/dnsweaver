@@ -12,7 +12,7 @@ import (
 	"context"
 	"sync"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
 )
 
 // MockProvider implements provider.Provider for testing.
@@ -56,6 +56,8 @@ func NewMockProvider(name string) *MockProvider {
 				provider.RecordTypeCNAME,
 				provider.RecordTypeSRV,
 				provider.RecordTypeTXT,
+				provider.RecordTypeMX,
+				provider.RecordTypeNS,
 			},
 		},
 		records: make([]provider.Record, 0),

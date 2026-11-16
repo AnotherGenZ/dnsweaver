@@ -2,7 +2,7 @@
 package config
 
 import (
-	"log/slog"
+	"fmt"
 	"os"
 	"strings"
 )
@@ -12,59 +12,63 @@ func getEnv(key string) string {
 	return os.Getenv(key)
 }
 
-// getEnvOrFile retrieves a value from either a direct environment variable
-// or a file path specified by the file key (Docker secrets pattern).
-//
-// If both are set, the file takes precedence. This allows local development
-// with direct values while production uses Docker secrets.
-//
-// If the file key is set but the file cannot be read, this returns an empty
-// string (hard failure) rather than silently falling through to the direct
-// env var. This prevents silent misconfiguration when a secret file path is
-// explicitly configured but points to an unreadable location.
-//
-// The file contents are trimmed of leading/trailing whitespace.
-func getEnvOrFile(directKey, fileKey string) string {
-	// Check for file-based secret first (Docker secrets pattern)
+// readEnvOrFile returns the selected value, whether an override was explicitly
+// configured, and any file-read error. The configured bit distinguishes an
+// intentionally empty secret file from no override at all.
+func readEnvOrFile(directKey, fileKey string) (string, bool, error) {
 	if filePath := os.Getenv(fileKey); filePath != "" {
 		content, err := os.ReadFile(filePath)
-		if err == nil {
-			return strings.TrimSpace(string(content))
+		if err != nil {
+			return "", true, fmt.Errorf("reading %s path %q: %w", fileKey, filePath, err)
 		}
-		// File key was explicitly set but file can't be read — this is a
-		// configuration error. Return empty rather than silently falling
-		// through to the direct env var, which would mask the problem.
-		slog.Warn("secret file specified but unreadable, ignoring direct env var",
-			slog.String("file_key", fileKey),
-			slog.String("file_path", filePath),
-			slog.String("error", err.Error()),
-		)
-		return ""
+		return strings.TrimSpace(string(content)), true, nil
 	}
-
-	return os.Getenv(directKey)
+	value, configured := os.LookupEnv(directKey)
+	return value, configured, nil
 }
 
 // getEnvWithFileFallback retrieves a value supporting the _FILE suffix pattern.
 // Given a base key like "TOKEN", it checks:
 //  1. TOKEN_FILE - reads file contents if set
 //  2. TOKEN - returns direct value if set
-func getEnvWithFileFallback(prefix, key string) string {
-	return getEnvOrFile(prefix+key, prefix+key+"_FILE")
+func getEnvWithFileFallback(prefix, key string) (string, bool, error) {
+	return readEnvOrFile(prefix+key, prefix+key+"_FILE")
 }
 
 // parseBool parses a boolean string, returning defaultValue on parse failure.
 // Accepts: true/false, 1/0, yes/no, on/off (case-insensitive).
 func parseBool(s string, defaultValue bool) bool {
+	if value, ok := parseBoolValue(s); ok {
+		return value
+	}
+	return defaultValue
+}
+
+// parseBoolValue parses the accepted boolean spellings and reports whether
+// the input was valid. Callers for new safety-sensitive settings use the ok
+// result to fail fast instead of silently falling back.
+func parseBoolValue(s string) (bool, bool) {
 	s = strings.ToLower(strings.TrimSpace(s))
 	switch s {
 	case "true", "1", "yes", "on":
-		return true
+		return true, true
 	case "false", "0", "no", "off":
-		return false
+		return false, true
 	default:
-		return defaultValue
+		return false, false
 	}
+}
+
+// splitCommaList splits a comma-separated string into a trimmed, non-empty
+// slice. Returns nil for an empty or all-whitespace input.
+func splitCommaList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // normalizeInstanceName converts an instance name to environment variable format.
