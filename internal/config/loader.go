@@ -58,6 +58,7 @@ func convertFileProvider(fp FileProviderConfig, defaultTTL int) (*ProviderInstan
 		ExcludeDomainsRegex:         fp.ExcludeDomainsRegex,
 		AdoptExisting:               fp.AdoptExisting,
 		AdoptExistingAllowOverrides: fp.AdoptExistingAllowOverrides,
+		MatchLabeledOnly:            fp.MatchLabeledOnly,
 		ProviderConfig:              make(map[string]string),
 	}
 

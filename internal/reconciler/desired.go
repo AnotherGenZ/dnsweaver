@@ -172,12 +172,7 @@ func (r *Reconciler) providersForClaim(claim *source.Hostname) ([]*provider.Prov
 		return []*provider.ProviderInstance{instance}, nil
 	}
 
-	instances := r.providers.MatchingProvidersForHostname(claim.Name, claim.Metadata)
-	if claim.Instances != nil {
-		instances = slices.DeleteFunc(instances, func(instance *provider.ProviderInstance) bool {
-			return !slices.Contains(claim.Instances, instance.Name())
-		})
-	}
+	instances := selectInstances(r.providers.MatchingProvidersForHostname(claim.Name, claim.Metadata), claim.Instances)
 	if len(instances) == 0 {
 		return nil, &Action{
 			Type:     ActionSkip,
@@ -187,6 +182,18 @@ func (r *Reconciler) providersForClaim(claim *source.Hostname) ([]*provider.Prov
 		}
 	}
 	return instances, nil
+}
+
+// selectInstances narrows domain-matched providers to a workload's explicit
+// selection. Without a selection, opt-in instances (MATCH_LABELED_ONLY) are
+// dropped: they only ever receive hostnames that name them.
+func selectInstances(matched []*provider.ProviderInstance, selected []string) []*provider.ProviderInstance {
+	return slices.DeleteFunc(matched, func(instance *provider.ProviderInstance) bool {
+		if selected != nil {
+			return !slices.Contains(selected, instance.Name())
+		}
+		return instance.MatchLabeledOnly
+	})
 }
 
 func desiredRecordForClaim(claim *source.Hostname, instance *provider.ProviderInstance) provider.Record {

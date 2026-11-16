@@ -148,6 +148,7 @@ Replace `{NAME}` with your instance name. For example, instance `internal-dns` u
 | `DNSWEAVER_{NAME}_MODE` | No | Operational mode: `managed` (default), `authoritative`, `additive` |
 | `DNSWEAVER_{NAME}_ADOPT_EXISTING` | No | Override `DNSWEAVER_ADOPT_EXISTING` for this provider instance. When unset, the global setting is inherited. |
 | `DNSWEAVER_{NAME}_ADOPT_EXISTING_ALLOW_OVERRIDES` | No | Allow workload `adopt=true` labels or annotations to enable adoption for this provider. Default: `false`. Workloads may always disable adoption. |
+| `DNSWEAVER_{NAME}_MATCH_LABELED_ONLY` | No | **Fork.** Opt-in instance: it only receives hostnames whose workload selects it with `dnsweaver.instances` (or the alias `dnsweaver.provider`), or a named record whose `dnsweaver.records.<name>.provider` names it. Default: `false`. See [opt-in instances](multi-instance.md#opt-in-instances-fork). |
 | `DNSWEAVER_{NAME}_TLS_CA_FILE` | No | Path to a PEM CA bundle appended to system roots (private CAs). Supports `_FILE` suffix. |
 | `DNSWEAVER_{NAME}_TLS_CERT_FILE` | No | Path to PEM client certificate for mutual TLS. Must be set with `TLS_KEY_FILE`. |
 | `DNSWEAVER_{NAME}_TLS_KEY_FILE` | No | Path to PEM client private key for mutual TLS. Must be set with `TLS_CERT_FILE`. |

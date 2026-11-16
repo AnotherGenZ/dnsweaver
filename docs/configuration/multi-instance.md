@@ -51,11 +51,37 @@ metadata:
 
 The selection is intersected with the operator's domain patterns, exclusions and workload filters. It cannot grant a workload access to a provider outside that scope. `dnsweaver.records.<name>.provider` overrides the workload selection for that named record, while still obeying the provider's scope.
 
-Without a selector, existing all-matching-provider routing is unchanged. Spaces around names are ignored and duplicate names are collapsed. An empty selector, an empty list member, an unknown provider, or contradictory label and annotation sets is invalid. Invalid selections do not fall back to all providers. They suppress removals for that reconciliation cycle; correcting or removing the selector lets reconciliation resume. A valid selection with no in-scope destination also suppresses removals.
+`dnsweaver.provider` (and the annotation `dnsweaver.dev/provider`) is accepted as an alias of `dnsweaver.instances` in this fork, for labels written for the fork's 1.x releases. When several of these keys are present they must name the same set.
+
+Without a selector, existing all-matching-provider routing is unchanged, except for opt-in instances. Spaces around names are ignored and duplicate names are collapsed. An empty selector, an empty list member, an unknown provider, or contradictory label and annotation sets is invalid. Invalid selections do not fall back to all providers. They suppress removals for that reconciliation cycle; correcting or removing the selector lets reconciliation resume. A valid selection with no in-scope destination also suppresses removals.
 
 Changing `internal,external` to `internal` retires only the exact owned members on the external route. On providers with ownership TXT support, this also works after a restart. Unrelated records remain untouched. If discovery is incomplete or a provider snapshot cannot be read, removals wait. A failed destination write preserves the previous route. If the DNS write succeeds but its ownership marker fails, that destination needs ownership repair or explicit adoption before the previous route can be retired.
 
 These labels are available in the unreleased source. Check the changelog for your image tag before using them.
+
+
+### Opt-in instances (fork)
+
+Split-horizon setups often publish every app publicly but only some apps internally. Mark the internal
+instance as opt-in and it only receives hostnames that ask for it:
+
+```yaml
+environment:
+  - DNSWEAVER_INSTANCES=internal,external
+  - DNSWEAVER_INTERNAL_DOMAINS=*.example.com
+  - DNSWEAVER_INTERNAL_MATCH_LABELED_ONLY=true   # opt-in
+  - DNSWEAVER_EXTERNAL_DOMAINS=*.example.com
+```
+
+| Workload labels | internal | external |
+|---|---|---|
+| _(none)_ | – | ✓ |
+| `dnsweaver.instances=internal` | ✓ | – |
+| `dnsweaver.instances=internal,external` | ✓ | ✓ |
+| `dnsweaver.records.<name>.provider=internal` | ✓ (that record) | – |
+
+Removing the selector retires the opt-in record like any other route change: the mass-deletion breaker,
+incomplete-discovery suppression and exact ownership still apply. The YAML form is `match_labeled_only: true`.
 
 ## Common Patterns
 

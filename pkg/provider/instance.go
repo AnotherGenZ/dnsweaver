@@ -92,6 +92,10 @@ type ProviderInstance struct {
 	// to enable adoption for this provider.
 	AdoptExistingAllowOverrides bool
 
+	// MatchLabeledOnly makes this an opt-in instance: hostnames reach it only when
+	// their workload selects it explicitly or a named record targets it.
+	MatchLabeledOnly bool
+
 	// InstanceID is the unique identifier for the dnsweaver instance.
 	// Used for multi-instance coordination to scope ownership records.
 	// Empty string means single-instance mode (legacy behavior).
@@ -699,6 +703,10 @@ type ProviderInstanceConfig struct {
 	// AdoptExistingAllowOverrides permits workload-controlled adopt=true hints
 	// to enable adoption for this provider.
 	AdoptExistingAllowOverrides bool
+
+	// MatchLabeledOnly makes this an opt-in instance: hostnames reach it only when
+	// their workload selects it explicitly or a named record targets it.
+	MatchLabeledOnly bool
 
 	// Domains is a list of glob patterns for matching hostnames.
 	// At least one is required.

@@ -120,6 +120,7 @@ type FileProviderConfig struct {
 	Mode                        string            `yaml:"mode,omitempty"`                           // managed, authoritative, additive
 	AdoptExisting               *bool             `yaml:"adopt_existing,omitempty"`                 // Override global adoption policy
 	AdoptExistingAllowOverrides bool              `yaml:"adopt_existing_allow_overrides,omitempty"` // Permit workload hints to enable adoption
+	MatchLabeledOnly            bool              `yaml:"match_labeled_only,omitempty"`             // Opt-in: only explicitly selected workloads
 	Config                      map[string]string `yaml:"config,omitempty"`                         // Provider-specific settings
 }
 

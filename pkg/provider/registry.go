@@ -222,6 +222,7 @@ func (r *Registry) CreateInstance(cfg ProviderInstanceConfig) error {
 		Mode:                        cfg.Mode,
 		AdoptExisting:               cfg.AdoptExisting,
 		AdoptExistingAllowOverrides: cfg.AdoptExistingAllowOverrides,
+		MatchLabeledOnly:            cfg.MatchLabeledOnly,
 		InstanceID:                  r.instanceID,
 		MetadataFilters:             cfg.MetadataFilters,
 		Identity:                    IdentityOf(provider),

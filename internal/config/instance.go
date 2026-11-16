@@ -57,6 +57,11 @@ type ProviderInstanceConfig struct {
 	// to enable adoption for this provider. adopt=false hints are always honored.
 	AdoptExistingAllowOverrides bool
 
+	// MatchLabeledOnly makes this an opt-in instance: it only receives hostnames
+	// whose workload explicitly selects it (dnsweaver.instances / dnsweaver.provider)
+	// or a named record that targets it (dnsweaver.records.<name>.provider).
+	MatchLabeledOnly bool
+
 	// Domain matching patterns
 	Domains             []string // Glob patterns (default)
 	DomainsRegex        []string // Regex patterns (opt-in)
@@ -86,6 +91,7 @@ func (c *ProviderInstanceConfig) ToProviderConfig() provider.ProviderInstanceCon
 		Mode:                        c.Mode,
 		AdoptExisting:               c.AdoptExisting,
 		AdoptExistingAllowOverrides: c.AdoptExistingAllowOverrides,
+		MatchLabeledOnly:            c.MatchLabeledOnly,
 		Domains:                     c.Domains,
 		DomainsRegex:                c.DomainsRegex,
 		ExcludeDomains:              c.ExcludeDomains,
@@ -222,6 +228,14 @@ func loadInstanceConfig(instanceName string, defaultTTL int) (*ProviderInstanceC
 			cfg.AdoptExistingAllowOverrides = parsed
 		} else {
 			errs = append(errs, configErrFull(prefix+"ADOPT_EXISTING_ALLOW_OVERRIDES", fmt.Sprintf("invalid boolean %q", value), "Use true or false", prefix+"ADOPT_EXISTING_ALLOW_OVERRIDES=false"))
+		}
+	}
+
+	if value := getEnv(prefix + "MATCH_LABELED_ONLY"); value != "" {
+		if parsed, ok := parseBoolValue(value); ok {
+			cfg.MatchLabeledOnly = parsed
+		} else {
+			errs = append(errs, configErrFull(prefix+"MATCH_LABELED_ONLY", fmt.Sprintf("invalid boolean %q", value), "Use true or false", prefix+"MATCH_LABELED_ONLY=true"))
 		}
 	}
 
@@ -468,6 +482,14 @@ func mergeProviderEnvOverrides(cfg *ProviderInstanceConfig) []*ConfigError {
 			cfg.AdoptExistingAllowOverrides = parsed
 		} else {
 			errs = append(errs, configErrFull(prefix+"ADOPT_EXISTING_ALLOW_OVERRIDES", fmt.Sprintf("invalid boolean %q", value), "Use true or false", prefix+"ADOPT_EXISTING_ALLOW_OVERRIDES=false"))
+		}
+	}
+
+	if value := getEnv(prefix + "MATCH_LABELED_ONLY"); value != "" {
+		if parsed, ok := parseBoolValue(value); ok {
+			cfg.MatchLabeledOnly = parsed
+		} else {
+			errs = append(errs, configErrFull(prefix+"MATCH_LABELED_ONLY", fmt.Sprintf("invalid boolean %q", value), "Use true or false", prefix+"MATCH_LABELED_ONLY=true"))
 		}
 	}
 

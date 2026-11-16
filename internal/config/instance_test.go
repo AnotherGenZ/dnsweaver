@@ -24,6 +24,7 @@ func clearInstanceEnv(t *testing.T, instanceName string) {
 		prefix + "MODE",
 		prefix + "ADOPT_EXISTING",
 		prefix + "ADOPT_EXISTING_ALLOW_OVERRIDES",
+		prefix + "MATCH_LABELED_ONLY",
 		prefix + "DOMAINS",
 		prefix + "DOMAINS_REGEX",
 		prefix + "EXCLUDE_DOMAINS",
