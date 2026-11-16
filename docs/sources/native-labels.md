@@ -80,6 +80,7 @@ labels:
 | `dnsweaver.hostname` | - | Single hostname to create |
 | `dnsweaver.hostnames` | - | Comma-separated list of hostnames |
 | `dnsweaver.instances` | all matching providers | Comma-separated provider instance names for all hostnames on the workload, including other sources. See [workload selection](../configuration/multi-instance.md#workload-provider-selection). |
+| `dnsweaver.provider` | – | **Fork.** Alias of `dnsweaver.instances` (the fork's 1.x name). If both are set they must agree. |
 | `dnsweaver.enabled` | `true` | Enable/disable processing |
 | `dnsweaver.ttl` | - | Override TTL for this container |
 | `dnsweaver.proxied` | provider default | Cloudflare proxy (orange-cloud) override — `true` or `false`. Applies to every hostname on the container. Ignored by non-Cloudflare providers. |

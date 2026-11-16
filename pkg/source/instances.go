@@ -11,6 +11,9 @@ import (
 // workloadInstances accepts the same selector on Docker labels and Kubernetes
 // annotations. If both exist they must describe the same set; neither silently
 // overrides a contradictory selection on the other surface.
+//
+// Fork: dnsweaver.provider / dnsweaver.dev/provider (the fork's 1.x selector) are
+// accepted as aliases with the same rules; every key that is present must agree.
 func workloadInstances(w workload.Workload) ([]string, error) {
 	var selected []string
 	for _, entry := range []struct {
@@ -19,6 +22,8 @@ func workloadInstances(w workload.Workload) ([]string, error) {
 	}{
 		{"dnsweaver.instances", w.Labels},
 		{"dnsweaver.dev/instances", w.Annotations},
+		{"dnsweaver.provider", w.Labels},
+		{"dnsweaver.dev/provider", w.Annotations},
 	} {
 		value, present := entry.values[entry.key]
 		if !present {
