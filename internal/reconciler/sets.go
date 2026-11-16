@@ -1,0 +1,519 @@
+package reconciler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
+)
+
+func (r *Reconciler) reconcileDesiredSet(ctx context.Context, set *desiredRecordSet, cache *recordCache, previous []provider.Record) []Action {
+	actions, _ := r.reconcileDesiredSetWithState(ctx, set, cache, previous, true)
+	return actions
+}
+
+// reconcileDesiredSetWithState also returns the members this process can
+// still prove it manages. That state is the fallback for providers that
+// cannot persist ownership TXT records; it must describe successful writes
+// and adopted records, not merely whatever appeared in desired state.
+func (r *Reconciler) reconcileDesiredSetWithState(ctx context.Context, set *desiredRecordSet, cache *recordCache, previous []provider.Record, allowRemovals bool) ([]Action, []provider.Record) {
+	instance := set.Instance
+	managed := append([]provider.Record(nil), previous...)
+	if !instance.Provider.Capabilities().SupportsRecordType(set.Key.RecordType) {
+		actions := make([]Action, 0, len(set.Members))
+		for _, member := range set.Members {
+			actions = append(actions, memberAction(ActionSkip, StatusSkipped, instance, member.Record,
+				fmt.Sprintf("record type %s is not supported by provider", member.Record.Type)))
+		}
+		return actions, managed
+	}
+	if cache == nil || !cache.providerAvailable(instance.Name()) {
+		actions := make([]Action, 0, len(set.Members))
+		for _, member := range set.Members {
+			actions = append(actions, memberAction(ActionCreate, StatusFailed, instance, member.Record,
+				"provider record snapshot unavailable"))
+		}
+		return actions, managed
+	}
+
+	existingRecords, _ := cache.getExistingRecords(instance.Name(), set.Key.Hostname, set.Key.RecordType)
+	// A successful replacement or an external deletion retires live authority
+	// for absent members. Never keep a stale no-TXT claim indefinitely.
+	managed = nil
+	for _, prior := range previous {
+		if prior.Type == set.Key.RecordType && recordMemberPresent(existingRecords, prior) {
+			managed = append(managed, prior)
+		}
+	}
+	var sameType, conflicting []provider.Record
+	for _, existing := range existingRecords {
+		switch {
+		case existing.Type == set.Key.RecordType:
+			sameType = append(sameType, existing)
+		case typesConflict(set.Key.RecordType, existing.Type):
+			conflicting = append(conflicting, existing)
+		}
+	}
+
+	actions := make([]Action, 0, len(set.Members)+len(sameType)+len(conflicting))
+	// CNAME is single-valued in practice. Reject ambiguous or self-referential
+	// desired state before deleting any conflicting records at the name.
+	if set.Key.RecordType == provider.RecordTypeCNAME {
+		if len(set.Members) > 1 || len(sameType) > 1 {
+			for _, member := range set.Members {
+				actions = append(actions, memberAction(ActionSkip, StatusSkipped, instance, member.Record, errMultipleCNAMEMembers))
+			}
+			return actions, managed
+		}
+		if len(set.Members) == 1 && isSelfReferential(set.Members[0].Record.Hostname, set.Members[0].Record.Target, provider.RecordTypeCNAME) {
+			member := set.Members[0]
+			r.warnSelfReferentialOnce(member.Record.Hostname, instance.Name(), member.Record.Target)
+			return append(actions, memberAction(ActionSkip, StatusSkipped, instance, member.Record, errSelfReferentialCNAME)), managed
+		}
+	}
+
+	// Empty desired sets retire only their own type; they must never replace
+	// another type which a preceding desired set has just created or restored.
+	if len(set.Members) > 0 && len(conflicting) > 0 {
+		return r.reconcileCrossTypeSet(ctx, set, cache, previous, conflicting, allowRemovals)
+	}
+
+	matchedExisting := make([]bool, len(sameType))
+	_, hasLegacyOwnership := cache.legacyOwnershipRecord(instance.Name(), set.Key.Hostname, instance.InstanceID)
+	hasLegacyOwnership = hasLegacyOwnership && legacyOwnershipCovers(set.Key.RecordType)
+	legacyUpgradeComplete := hasLegacyOwnership && instance.Provider.Capabilities().SupportsOwnershipTXT && set.Key.RecordType != provider.RecordTypeTXT
+	desiredWritesSucceeded := true
+
+	// A CNAME target change must update the one exact existing CNAME instead of
+	// trying to create a second member first. Ambiguity was rejected above.
+	if set.Key.RecordType == provider.RecordTypeCNAME {
+		if len(set.Members) == 1 && len(sameType) == 1 && !provider.SameRecordMember(sameType[0], set.Members[0].Record) {
+			return r.updateSingleValueMember(ctx, set, sameType[0], cache, previous, actions, managed, hasLegacyOwnership)
+		}
+	}
+
+	for _, desiredMember := range set.Members {
+		record := desiredMember.Record
+		existingIndex := -1
+		for i := range sameType {
+			if !matchedExisting[i] && provider.SameRecordMember(sameType[i], record) {
+				existingIndex = i
+				break
+			}
+		}
+
+		if existingIndex < 0 {
+			action := memberAction(ActionCreate, StatusSuccess, instance, record, "")
+			if r.isDryRun() {
+				actions = append(actions, action)
+				continue
+			}
+			if err := instance.CreateRecordWithValues(ctx, record.Hostname, record.Type, record.Target, record.TTL, record.SRV, record.MX, record.Metadata); err != nil {
+				action.Status = StatusFailed
+				action.Error = err.Error()
+				legacyUpgradeComplete = false
+				desiredWritesSucceeded = false
+			} else {
+				managed = rememberRecordMember(managed, record)
+				cache.addRecord(instance.Name(), record)
+				if err := r.ensureMemberOwnership(ctx, instance, record, cache); err != nil {
+					r.rememberMemberOwnershipRepair(instance, record)
+					action.Status = StatusFailed
+					action.Error = fmt.Sprintf("creating member ownership: %v", err)
+					r.logger.Warn("failed to create member ownership record",
+						slog.String("provider", instance.Name()),
+						slog.String("hostname", record.Hostname),
+						slog.String("target", record.Target),
+						slog.String("error", err.Error()),
+					)
+					legacyUpgradeComplete = false
+					desiredWritesSucceeded = false
+				}
+			}
+			actions = append(actions, action)
+			continue
+		}
+
+		matchedExisting[existingIndex] = true
+		existing := sameType[existingIndex]
+		_, hasMemberOwnership := cache.memberOwnershipRecord(instance.Name(), record, instance.InstanceID)
+		adopt := r.effectiveAdoptExisting(desiredMember.Claim, instance)
+		shared := false
+		sharing, supportsSharing := instance.Provider.(provider.SharedOwnership)
+		if supportsSharing && r.config.OwnershipTracking && !hasMemberOwnership && !hasLegacyOwnership {
+			var err error
+			shared, err = sharing.CanShareOwnership(ctx, existing, record)
+			if err != nil {
+				actions = append(actions, memberAction(ActionCreate, StatusFailed, instance, record, err.Error()))
+				desiredWritesSucceeded = false
+				continue
+			}
+		}
+		mayManage := !r.config.OwnershipTracking || !instance.Mode.RequiresOwnership() ||
+			hasMemberOwnership || adopt || hasLegacyOwnership || shared ||
+			(!instance.Provider.Capabilities().SupportsOwnershipTXT && recordMemberPresent(previous, existing))
+		if record.Type == provider.RecordTypeTXT {
+			mayManage = supportsSharing && hasMemberOwnership || shared || !cache.foreignMemberOwnership(instance.Name(), record, instance.InstanceID) &&
+				(hasMemberOwnership || recordMemberPresent(previous, existing) || adopt)
+		}
+		if mayManage && !r.isDryRun() {
+			managed = rememberRecordMember(managed, existing)
+		}
+
+		if instance.RecordNeedsUpdate(existing, record) {
+			canUpdate := mayManage
+			if instance.Mode == provider.ModeAdditive && !instance.Provider.Capabilities().SupportsNativeUpdate {
+				canUpdate = false
+			}
+			if !canUpdate {
+				actions = append(actions, memberAction(ActionSkip, StatusSkipped, instance, record, errRecordAlreadyExists))
+				legacyUpgradeComplete = false
+				continue
+			}
+
+			action := memberAction(ActionUpdate, StatusSuccess, instance, record, "")
+			if !r.isDryRun() {
+				if err := instance.UpdateRecord(ctx, existing, record); err != nil {
+					action.Status = StatusFailed
+					action.Error = err.Error()
+					legacyUpgradeComplete = false
+					desiredWritesSucceeded = false
+				} else if err := r.ensureMemberOwnership(ctx, instance, record, cache); err != nil {
+					r.rememberMemberOwnershipRepair(instance, record)
+					action.Status = StatusFailed
+					action.Error = fmt.Sprintf("creating member ownership: %v", err)
+					legacyUpgradeComplete = false
+					desiredWritesSucceeded = false
+					r.logger.Warn("failed to create member ownership record",
+						slog.String("provider", instance.Name()),
+						slog.String("hostname", record.Hostname),
+						slog.String("target", record.Target),
+						slog.String("error", err.Error()),
+					)
+				} else {
+					managed = rememberRecordMember(managed, record)
+				}
+			}
+			actions = append(actions, action)
+			continue
+		}
+
+		action := memberAction(ActionSkip, StatusSkipped, instance, record, errRecordAlreadyExists)
+		if mayManage && !r.isDryRun() {
+			if err := r.ensureMemberOwnership(ctx, instance, record, cache); err != nil {
+				action.Status = StatusFailed
+				action.Error = fmt.Sprintf("creating member ownership: %v", err)
+				desiredWritesSucceeded = false
+				legacyUpgradeComplete = false
+				r.logger.Warn("failed to create member ownership record",
+					slog.String("provider", instance.Name()),
+					slog.String("hostname", record.Hostname),
+					slog.String("target", record.Target),
+					slog.String("error", err.Error()),
+				)
+			}
+		} else if hasLegacyOwnership {
+			legacyUpgradeComplete = false
+		}
+		actions = append(actions, action)
+	}
+
+	if allowRemovals && desiredWritesSucceeded && instance.Mode.AllowsDelete() {
+		for i, existing := range sameType {
+			if matchedExisting[i] || !r.mayDeleteMember(instance, existing, cache, previous, false) {
+				continue
+			}
+			action, _ := r.deleteSetMember(ctx, instance, existing, cache)
+			actions = append(actions, action)
+			if action.Status == StatusSuccess && !r.isDryRun() {
+				managed = forgetRecordMember(managed, existing)
+			}
+		}
+		actions = append(actions, r.cleanupAbsentMemberClaims(ctx, set, cache)...)
+	}
+
+	if legacyUpgradeComplete && !r.isDryRun() {
+		legacy, found := cache.legacyOwnershipRecord(instance.Name(), set.Key.Hostname, instance.InstanceID)
+		if found {
+			if err := instance.DeleteMember(ctx, legacy); err != nil {
+				r.logger.Warn("failed to remove upgraded legacy ownership record",
+					slog.String("provider", instance.Name()),
+					slog.String("hostname", set.Key.Hostname),
+					slog.String("error", err.Error()),
+				)
+			}
+		}
+	}
+
+	return actions, managed
+}
+
+// A crash can remove an answer before retiring its marker. Complete discovery
+// may withdraw that exact local claim when neither desired nor DNS data contains
+// the member. Foreign and ambiguous hostname-level claims remain untouched.
+func (r *Reconciler) cleanupAbsentMemberClaims(ctx context.Context, set *desiredRecordSet, cache *recordCache) []Action {
+	instance := set.Instance
+	// The legacy provider path intentionally retains absent-answer markers.
+	// Shared ownership stores support exact claim withdrawal and fresh validation.
+	if _, supported := instance.Provider.(provider.SharedOwnership); !supported {
+		return nil
+	}
+	if r.isDryRun() || !r.config.OwnershipTracking || !instance.Provider.Capabilities().SupportsOwnershipTXT {
+		return nil
+	}
+	data, _ := cache.getExistingRecords(instance.Name(), set.Key.Hostname, set.Key.RecordType)
+	var actions []Action
+	for _, marker := range cache.ownershipRecords(instance.Name(), set.Key.Hostname) {
+		owned, owner, member, _ := provider.ParseMemberOwnershipValue(marker.Target)
+		if !owned || owner != instance.InstanceID || member == nil || member.Type != set.Key.RecordType || recordMemberPresent(data, *member) {
+			continue
+		}
+		desired := false
+		for _, claim := range set.Members {
+			desired = desired || provider.SameRecordMember(*member, claim.Record)
+		}
+		if desired {
+			continue
+		}
+		member.Hostname = set.Key.Hostname
+		action := memberAction(ActionSkip, StatusSuccess, instance, *member, "absent member ownership retired")
+		if err := instance.DeleteMember(ctx, marker); err != nil && !errors.Is(err, provider.ErrNotFound) {
+			action.Status = StatusFailed
+			action.Error = fmt.Sprintf("retiring absent member ownership: %v", err)
+		} else {
+			cache.removeRecord(instance.Name(), marker)
+		}
+		actions = append(actions, action)
+	}
+	return actions
+}
+
+func rememberRecordMember(records []provider.Record, record provider.Record) []provider.Record {
+	for _, existing := range records {
+		if provider.SameRecordMember(existing, record) {
+			return records
+		}
+	}
+	return append(records, record)
+}
+
+func forgetRecordMember(records []provider.Record, record provider.Record) []provider.Record {
+	kept := records[:0]
+	for _, existing := range records {
+		if !provider.SameRecordMember(existing, record) {
+			kept = append(kept, existing)
+		}
+	}
+	return kept
+}
+
+func (r *Reconciler) mayDeleteMember(instance *provider.ProviderInstance, record provider.Record, cache *recordCache, previous []provider.Record, adopt bool) bool {
+	if !instance.Mode.AllowsDelete() {
+		return false
+	}
+	if record.Type == provider.RecordTypeTXT {
+		_, compact := instance.Provider.(provider.SharedOwnership)
+		if !compact && cache.foreignMemberOwnership(instance.Name(), record, instance.InstanceID) {
+			return false
+		}
+		_, owned := cache.memberOwnershipRecord(instance.Name(), record, instance.InstanceID)
+		return owned || recordMemberPresent(previous, record)
+	}
+
+	if !instance.Mode.RequiresOwnership() || !r.config.OwnershipTracking || adopt {
+		return true
+	}
+	if _, owned := cache.memberOwnershipRecord(instance.Name(), record, instance.InstanceID); owned {
+		return true
+	}
+	if instance.Provider.Capabilities().SupportsOwnershipTXT {
+		return false
+	}
+	for _, prior := range previous {
+		if provider.SameRecordMember(prior, record) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Reconciler) deleteSetMember(ctx context.Context, instance *provider.ProviderInstance, record provider.Record, cache *recordCache) (Action, bool) {
+	action := memberAction(ActionDelete, StatusSuccess, instance, record, "")
+	if r.isDryRun() {
+		return action, true
+	}
+	if sharing, ok := instance.Provider.(provider.SharedOwnership); ok {
+		retained, err := sharing.ReleaseSharedOwnership(ctx, record)
+		if err != nil {
+			action.Status = StatusFailed
+			action.Error = err.Error()
+			return action, false
+		}
+		if retained {
+			if marker, owned := cache.memberOwnershipRecord(instance.Name(), record, instance.InstanceID); owned {
+				cache.removeRecord(instance.Name(), marker)
+			}
+			action.Type = ActionSkip
+			action.Error = "ownership released; DNS member retained for another owner"
+			return action, true
+		}
+	}
+	if err := instance.DeleteMember(ctx, record); err != nil && !errors.Is(err, provider.ErrNotFound) {
+		action.Status = StatusFailed
+		action.Error = err.Error()
+		return action, false
+	}
+	cache.removeRecord(instance.Name(), record)
+	if marker, owned := cache.memberOwnershipRecord(instance.Name(), record, instance.InstanceID); owned {
+		if err := instance.DeleteMember(ctx, marker); err != nil && !errors.Is(err, provider.ErrNotFound) {
+			r.logger.Warn("failed to delete member ownership record",
+				slog.String("provider", instance.Name()),
+				slog.String("hostname", record.Hostname),
+				slog.String("target", record.Target),
+				slog.String("error", err.Error()),
+			)
+		} else {
+			cache.removeRecord(instance.Name(), marker)
+		}
+	}
+	return action, true
+}
+
+func (r *Reconciler) ensureMemberOwnership(ctx context.Context, instance *provider.ProviderInstance, record provider.Record, cache *recordCache) error {
+	if !r.config.OwnershipTracking || !instance.Provider.Capabilities().SupportsOwnershipTXT {
+		return nil
+	}
+	desired := provider.MemberOwnershipRecord(record.Hostname, instance.TTL, instance.InstanceID, record, record.Metadata)
+	existing, found := cache.memberOwnershipRecord(instance.Name(), record, instance.InstanceID)
+	if found && existing.Target == desired.Target {
+		return nil
+	}
+	if err := instance.CreateMemberOwnershipRecord(ctx, record, record.Metadata); err != nil {
+		return err
+	}
+	cache.addRecord(instance.Name(), desired)
+	if found {
+		if err := instance.DeleteMember(ctx, existing); err != nil && !errors.Is(err, provider.ErrNotFound) {
+			return fmt.Errorf("deleting stale member ownership marker: %w", err)
+		}
+	}
+	return nil
+}
+
+func memberAction(actionType ActionType, status ActionStatus, instance *provider.ProviderInstance, record provider.Record, actionError string) Action {
+	return Action{
+		Type:       actionType,
+		Status:     status,
+		Provider:   instance.Name(),
+		Hostname:   record.Hostname,
+		RecordType: string(record.Type),
+		Target:     record.Target,
+		Error:      actionError,
+	}
+}
+
+func setAllowsAdoption(r *Reconciler, set *desiredRecordSet) bool {
+	for _, member := range set.Members {
+		if r.effectiveAdoptExisting(member.Claim, set.Instance) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Reconciler) updateSingleValueMember(
+	ctx context.Context,
+	set *desiredRecordSet,
+	existing provider.Record,
+	cache *recordCache,
+	previous []provider.Record,
+	actions []Action,
+	managed []provider.Record,
+	hasLegacyOwnership bool,
+) ([]Action, []provider.Record) {
+	instance := set.Instance
+	desiredMember := set.Members[0]
+	desired := desiredMember.Record
+	_, hasMemberOwnership := cache.memberOwnershipRecord(instance.Name(), existing, instance.InstanceID)
+	managedInMemory := recordMemberPresent(previous, existing)
+	adopt := r.effectiveAdoptExisting(desiredMember.Claim, instance)
+	mayManage := !r.config.OwnershipTracking || !instance.Mode.RequiresOwnership() ||
+		hasMemberOwnership || adopt || hasLegacyOwnership ||
+		(!instance.Provider.Capabilities().SupportsOwnershipTXT && managedInMemory)
+	if !mayManage || (instance.Mode == provider.ModeAdditive && !instance.Provider.Capabilities().SupportsNativeUpdate) {
+		return append(actions, memberAction(ActionSkip, StatusSkipped, instance, desired, errRecordAlreadyExists)), managed
+	}
+
+	action := memberAction(ActionUpdate, StatusSuccess, instance, desired, "")
+	if r.isDryRun() {
+		return append(actions, action), managed
+	}
+
+	var newMarker provider.Record
+	markerCreated := false
+	if r.config.OwnershipTracking && instance.Provider.Capabilities().SupportsOwnershipTXT {
+		if _, exists := cache.memberOwnershipRecord(instance.Name(), desired, instance.InstanceID); !exists {
+			newMarker = provider.MemberOwnershipRecord(desired.Hostname, instance.TTL, instance.InstanceID, desired, desired.Metadata)
+			if err := instance.CreateMemberOwnershipRecord(ctx, desired, desired.Metadata); err != nil {
+				action.Status = StatusFailed
+				action.Error = fmt.Sprintf("creating replacement ownership marker: %v", err)
+				return append(actions, action), managed
+			}
+			markerCreated = true
+		}
+	}
+
+	if err := instance.UpdateRecord(ctx, existing, desired); err != nil {
+		action.Status = StatusFailed
+		action.Error = err.Error()
+		if markerCreated {
+			if cleanupErr := instance.DeleteMember(ctx, newMarker); cleanupErr != nil && !errors.Is(cleanupErr, provider.ErrNotFound) {
+				r.logger.Warn("failed to roll back replacement ownership marker",
+					slog.String("provider", instance.Name()),
+					slog.String("hostname", desired.Hostname),
+					slog.String("error", cleanupErr.Error()),
+				)
+			}
+		}
+		return append(actions, action), managed
+	}
+
+	managed = forgetRecordMember(managed, existing)
+	managed = rememberRecordMember(managed, desired)
+	if oldMarker, exists := cache.memberOwnershipRecord(instance.Name(), existing, instance.InstanceID); exists {
+		if err := instance.DeleteMember(ctx, oldMarker); err != nil && !errors.Is(err, provider.ErrNotFound) {
+			r.logger.Warn("failed to remove replaced member ownership record",
+				slog.String("provider", instance.Name()),
+				slog.String("hostname", desired.Hostname),
+				slog.String("error", err.Error()),
+			)
+		}
+	} else if legacy, exists := cache.legacyOwnershipRecord(instance.Name(), existing.Hostname, instance.InstanceID); exists {
+		if err := instance.DeleteMember(ctx, legacy); err != nil && !errors.Is(err, provider.ErrNotFound) {
+			r.logger.Warn("failed to remove upgraded legacy ownership record",
+				slog.String("provider", instance.Name()),
+				slog.String("hostname", desired.Hostname),
+				slog.String("error", err.Error()),
+			)
+		}
+	}
+	return append(actions, action), managed
+}
+
+func recordMemberPresent(records []provider.Record, record provider.Record) bool {
+	for _, existing := range records {
+		if provider.SameRecordMember(existing, record) {
+			return true
+		}
+	}
+	return false
+}
+
+// legacyOwnershipCovers reports whether a hostname-level marker written before
+// member ownership can vouch for a record of this type. Those releases never
+// managed MX or NS, so their markers grant no authority over such records.
+func legacyOwnershipCovers(recordType provider.RecordType) bool {
+	return recordType != provider.RecordTypeMX && recordType != provider.RecordTypeNS
+}

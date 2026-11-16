@@ -30,8 +30,8 @@ import (
 	"log/slog"
 	"strings"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
+	"github.com/maxfield-allison/dnsweaver/pkg/source"
+	"github.com/maxfield-allison/dnsweaver/pkg/workload"
 )
 
 const sourceName = "dnsweaver"
@@ -106,17 +106,23 @@ func (d *DNSWeaver) Extract(ctx context.Context, w workload.Workload) ([]source.
 		// Copy record hints if present
 		if e.HasHints() {
 			h.RecordHints = &source.RecordHints{
-				Type:     e.Type,
-				Target:   e.Target,
-				TTL:      e.TTL,
-				Provider: e.Provider,
-				Metadata: e.Metadata,
+				Type:          e.Type,
+				Target:        e.Target,
+				TTL:           e.TTL,
+				Provider:      e.Provider,
+				AdoptExisting: e.AdoptExisting,
+				Metadata:      e.Metadata,
 			}
 			if e.SRV != nil {
 				h.RecordHints.SRV = &source.SRVHints{
 					Port:     e.SRV.Port,
 					Priority: e.SRV.Priority,
 					Weight:   e.SRV.Weight,
+				}
+			}
+			if e.MX != nil {
+				h.RecordHints.MX = &source.MXHints{
+					Preference: e.MX.Preference,
 				}
 			}
 		}

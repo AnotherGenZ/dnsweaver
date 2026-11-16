@@ -1,3 +1,8 @@
+---
+title: Docker Swarm Source
+description: Automate DNS records for Docker Swarm services with dnsweaver — cluster-wide service discovery with multi-instance-safe ownership tracking.
+---
+
 # Docker Swarm
 
 Docker Swarm mode provides service discovery across a cluster. dnsweaver integrates with Swarm to manage DNS for services.
@@ -139,6 +144,87 @@ When a Swarm service is updated:
 3. Removes records for deleted hostnames
 4. Creates records for new hostnames
 5. Updates records if target changes
+
+## Per-Entrypoint Routing
+
+When the same Traefik router is bound to multiple `entrypoints`, dnsweaver
+emits one extraction per `(host, entrypoint)` pair. Combined with the
+per-instance `DNSWEAVER_{NAME}_ENTRYPOINTS` filter, this lets you point
+each Traefik entrypoint at a different DNS target — useful for
+split-horizon LAN/VPN setups, or any scenario where one router needs to
+resolve to different IPs depending on which listener it was published on.
+
+### Example: Split LAN / VPN Targets
+
+Two entrypoints (`webA`, `webB`) on the same Traefik router need to
+resolve `web.example.com` to different IPs:
+
+```yaml
+services:
+  reverse-proxy:
+    image: traefik:v3
+    command:
+      - "--entrypoints.webA.address=:80"
+      - "--entrypoints.webB.address=:8080"
+
+  myapp:
+    image: myapp:latest
+    labels:
+      - "traefik.http.routers.myapp.rule=Host(`web.example.com`)"
+      - "traefik.http.routers.myapp.entrypoints=webA,webB"
+
+  dnsweaver:
+    image: maxamill/dnsweaver:latest
+    environment:
+      - DNSWEAVER_INSTANCES=lan,vpn
+      # LAN instance answers only routers bound to webA -> 10.0.0.10
+      - DNSWEAVER_LAN_TYPE=technitium
+      - DNSWEAVER_LAN_TARGET=10.0.0.10
+      - DNSWEAVER_LAN_DOMAINS=*.example.com
+      - DNSWEAVER_LAN_ENTRYPOINTS=webA
+      # VPN instance answers only routers bound to webB -> 10.99.0.10
+      - DNSWEAVER_VPN_TYPE=technitium
+      - DNSWEAVER_VPN_TARGET=10.99.0.10
+      - DNSWEAVER_VPN_DOMAINS=*.example.com
+      - DNSWEAVER_VPN_ENTRYPOINTS=webB
+```
+
+### Matching Semantics
+
+- `DNSWEAVER_{NAME}_ENTRYPOINTS` accepts a comma-separated allowlist
+  (`webA,webB`). Whitespace is trimmed; empty values are ignored.
+- A router with **no** `entrypoints` label produces a wildcard extraction
+  that matches every instance regardless of `ENTRYPOINTS` filter
+  (preserves pre-1.4 behavior).
+- A router with `entrypoints=webA,webB` produces two distinct
+  extractions; each instance only receives the ones whose entrypoint is
+  in its allowlist.
+- The same `(host, entrypoint)` pair declared in multiple
+  containers/files is deduplicated.
+
+### Traefik `asDefault` Entrypoints
+
+Traefik supports flagging entrypoints as
+[`asDefault = true`](https://doc.traefik.io/traefik/reference/install-configuration/entrypoints/#opt-asdefault).
+When set, routers without an explicit `entryPoints` declaration bind
+**only** to the `asDefault` entrypoints — not to all entrypoints.
+
+dnsweaver cannot read Traefik's static config, so the wildcard behavior
+above will silently over-publish records for unlabeled routers in this
+case. If you use `asDefault`, declare the same defaults to dnsweaver via
+the source-level setting:
+
+```yaml
+environment:
+  - DNSWEAVER_SOURCE_TRAEFIK_DEFAULT_ENTRYPOINTS=webA,webC
+```
+
+With this set, an unlabeled router fans out one extraction per default
+entrypoint — exactly mirroring what Traefik itself does — and per-instance
+`ENTRYPOINTS` filters then claim each pair as usual. Routers with explicit
+`entrypoints` labels are unaffected.
+
+Unset (default) preserves pre-1.4.2 wildcard behavior.
 
 ## Troubleshooting
 

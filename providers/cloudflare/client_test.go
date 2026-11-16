@@ -1,10 +1,14 @@
 package cloudflare
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -57,8 +61,8 @@ func TestClient_WithAPIEndpoint(t *testing.T) {
 
 func TestClient_Ping_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/user/tokens/verify" {
-			t.Errorf("unexpected path: %s", r.URL.Path)
+		if r.URL.Path != "/zones/zone-123" || r.URL.RawQuery != "" {
+			t.Errorf("unexpected request: %s", r.URL.RequestURI())
 		}
 
 		authHeader := r.Header.Get("Authorization")
@@ -68,14 +72,13 @@ func TestClient_Ping_Success(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(successResponse(map[string]interface{}{
-			"id":     "token-id",
-			"status": "active",
+			"id": "zone-123", "name": "example.com",
 		}))
 	}))
 	defer server.Close()
 
 	client := NewClient("test-token", WithAPIEndpoint(server.URL))
-	err := client.Ping(context.Background())
+	err := client.Ping(context.Background(), "zone-123")
 
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -91,7 +94,7 @@ func TestClient_Ping_InvalidToken(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient("bad-token", WithAPIEndpoint(server.URL))
-	err := client.Ping(context.Background())
+	err := client.Ping(context.Background(), "zone-123")
 
 	if err == nil {
 		t.Error("expected error, got nil")
@@ -143,50 +146,6 @@ func TestClient_GetZoneID_NotFound(t *testing.T) {
 
 	if err == nil {
 		t.Error("expected error for missing zone, got nil")
-	}
-}
-
-func TestClient_GetAccountIDFromZoneID_Success(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/zones/zone-123" {
-			t.Errorf("unexpected path: %s", r.URL.Path)
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(successResponse(map[string]interface{}{
-			"id":   "zone-123",
-			"name": "example.com",
-			"account": map[string]interface{}{
-				"id": "acct-456",
-			},
-		}))
-	}))
-	defer server.Close()
-
-	client := NewClient("test-token", WithAPIEndpoint(server.URL))
-	accountID, err := client.GetAccountIDFromZoneID(context.Background(), "zone-123")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if accountID != "acct-456" {
-		t.Errorf("expected account ID acct-456, got %s", accountID)
-	}
-}
-
-func TestClient_GetAccountIDFromZoneID_MissingAccount(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(successResponse(map[string]interface{}{
-			"id":   "zone-123",
-			"name": "example.com",
-		}))
-	}))
-	defer server.Close()
-
-	client := NewClient("test-token", WithAPIEndpoint(server.URL))
-	_, err := client.GetAccountIDFromZoneID(context.Background(), "zone-123")
-	if err == nil {
-		t.Error("expected error, got nil")
 	}
 }
 
@@ -309,6 +268,95 @@ func TestClient_DeleteRecord_Success(t *testing.T) {
 	}
 }
 
+func TestClient_UpdateRecord_UsesReturnedState(t *testing.T) {
+	tests := []struct {
+		name            string
+		result          map[string]interface{}
+		wantWarning     bool
+		wantDifferences []string
+	}{
+		{
+			name: "matching response",
+			result: map[string]interface{}{
+				"id": "rec-1", "type": "A", "name": "app.example.com",
+				"content": "203.0.113.1", "ttl": 120, "proxied": true,
+			},
+		},
+		{
+			name: "Cloudflare normalized fields",
+			result: map[string]interface{}{
+				"id": "rec-1", "type": "A", "name": "app.example.com",
+				"content": "203.0.113.1", "ttl": 1, "proxied": false,
+			},
+			wantWarning:     true,
+			wantDifferences: []string{"ttl", "proxied"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPatch {
+					t.Errorf("method = %s, want PATCH", r.Method)
+				}
+				if r.URL.Path != "/zones/zone-123/dns_records/rec-1" {
+					t.Errorf("path = %s, want update endpoint", r.URL.Path)
+				}
+
+				var body createRecordRequest
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				if body.Type != "A" || body.Name != "app.example.com" || body.Content != "203.0.113.1" || body.TTL != 120 || !body.Proxied {
+					t.Errorf("unexpected request: %+v", body)
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(successResponse(tt.result))
+			}))
+			defer server.Close()
+
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&logs, nil))
+			client := NewClient("test-token", WithAPIEndpoint(server.URL), WithLogger(logger))
+			err := client.UpdateRecord(context.Background(), "zone-123", "rec-1", "A", "app.example.com", "203.0.113.1", 120, true)
+			if err != nil {
+				t.Fatalf("UpdateRecord() error = %v", err)
+			}
+
+			gotWarning := strings.Contains(logs.String(), "Cloudflare update response differs from request")
+			if gotWarning != tt.wantWarning {
+				t.Errorf("warning present = %v, want %v; logs: %s", gotWarning, tt.wantWarning, logs.String())
+			}
+			for _, difference := range tt.wantDifferences {
+				if !strings.Contains(logs.String(), difference) {
+					t.Errorf("logs do not name %q difference: %s", difference, logs.String())
+				}
+			}
+			if !strings.Contains(logs.String(), "ttl="+strconv.Itoa(tt.result["ttl"].(int))) {
+				t.Errorf("final info log does not contain returned TTL: %s", logs.String())
+			}
+			if !strings.Contains(logs.String(), "proxied="+strconv.FormatBool(tt.result["proxied"].(bool))) {
+				t.Errorf("final info log does not contain returned proxy state: %s", logs.String())
+			}
+		})
+	}
+}
+
+func TestClient_UpdateRecord_RejectsMissingResult(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(successResponse(map[string]interface{}{}))
+	}))
+	defer server.Close()
+
+	client := NewClient("test-token", WithAPIEndpoint(server.URL))
+	err := client.UpdateRecord(context.Background(), "zone-123", "rec-1", "A", "app.example.com", "203.0.113.1", 120, true)
+	if err == nil || !strings.Contains(err.Error(), "missing record ID") {
+		t.Fatalf("UpdateRecord() error = %v, want missing record ID", err)
+	}
+}
+
 func TestClient_FindRecord_Found(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
@@ -372,7 +420,7 @@ func TestClient_RateLimiting(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient("test-token", WithAPIEndpoint(server.URL))
-	err := client.Ping(context.Background())
+	err := client.Ping(context.Background(), "zone-123")
 
 	// First call should fail with rate limit error
 	if err == nil {

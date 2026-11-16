@@ -13,8 +13,8 @@ import (
 	"net/url"
 	"strings"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/httputil"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/httputil"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
 )
 
 // piholeRecord represents a DNS record from Pi-hole's API.
@@ -25,7 +25,7 @@ type piholeRecord struct {
 }
 
 // customDNSResponse represents Pi-hole's custom DNS list response.
-// The API returns: {"data": [["10.0.0.1", "host1.local"], ["10.0.0.2", "host2.local"]]}
+// The v5 API returns domain first: {"data": [["host1.local", "10.0.0.1"], ["host2.local", "10.0.0.2"]]}
 type customDNSResponse struct {
 	Data [][]string `json:"data"`
 }
@@ -83,13 +83,21 @@ func NewAPIClient(baseURL, password, zone string, opts ...APIClientOption) *APIC
 	return c
 }
 
-// hashPassword creates a double-SHA256 hash of the password.
-// Pi-hole uses this format for API authentication.
+// hashPassword returns the credential Pi-hole v5 accepts in the auth
+// parameter: the WEBPASSWORD value from setupVars.conf. Pi-hole computes it as
+// SHA-256 over the hex encoding of the password's SHA-256, not over the raw
+// digest bytes.
 func (c *APIClient) hashPassword() string {
-	// Pi-hole v5.x uses double SHA256 hash
 	first := sha256.Sum256([]byte(c.password))
-	second := sha256.Sum256(first[:])
+	second := sha256.Sum256([]byte(hex.EncodeToString(first[:])))
 	return hex.EncodeToString(second[:])
+}
+
+// redactCredential removes the v5 credential from err before callers can log
+// it. Pi-hole v5 authenticates through the auth query parameter, and Go's
+// transport errors and some API or proxy error bodies include the request URL.
+func (c *APIClient) redactCredential(err error) error {
+	return httputil.RedactRequestError(err, c.hashPassword(), c.password)
 }
 
 // buildURL constructs an API URL with authentication.
@@ -99,7 +107,9 @@ func (c *APIClient) buildURL(params url.Values) string {
 }
 
 // Ping checks connectivity to Pi-hole's API.
-func (c *APIClient) Ping(ctx context.Context) error {
+func (c *APIClient) Ping(ctx context.Context) (err error) {
+	defer func() { err = c.redactCredential(err) }()
+
 	// Use the summary endpoint as a health check
 	params := url.Values{}
 	params.Set("summary", "")
@@ -117,14 +127,16 @@ func (c *APIClient) Ping(ctx context.Context) error {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := httputil.ReadBody(resp, 0)
-		return fmt.Errorf("Pi-hole returned status %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("pi-hole returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	return nil
 }
 
 // List returns all custom DNS records from Pi-hole.
-func (c *APIClient) List(ctx context.Context) ([]piholeRecord, error) {
+func (c *APIClient) List(ctx context.Context) (_ []piholeRecord, err error) {
+	defer func() { err = c.redactCredential(err) }()
+
 	var records []piholeRecord
 
 	// Get A/AAAA records from customdns
@@ -195,8 +207,8 @@ func (c *APIClient) listCustomDNS(ctx context.Context) ([]piholeRecord, error) {
 		if len(entry) < 2 {
 			continue
 		}
-		ip := entry[0]
-		hostname := entry[1]
+		hostname := entry[0]
+		ip := entry[1]
 
 		// Determine record type from IP format
 		parsedIP := net.ParseIP(ip)
@@ -272,7 +284,9 @@ func (c *APIClient) listCNAME(ctx context.Context) ([]piholeRecord, error) {
 }
 
 // Create adds a DNS record via Pi-hole's API.
-func (c *APIClient) Create(ctx context.Context, record piholeRecord) error {
+func (c *APIClient) Create(ctx context.Context, record piholeRecord) (err error) {
+	defer func() { err = c.redactCredential(err) }()
+
 	switch record.Type {
 	case provider.RecordTypeA, provider.RecordTypeAAAA:
 		return c.createCustomDNS(ctx, record)
@@ -395,7 +409,9 @@ func (c *APIClient) createCNAME(ctx context.Context, record piholeRecord) error 
 }
 
 // Delete removes a DNS record via Pi-hole's API.
-func (c *APIClient) Delete(ctx context.Context, record piholeRecord) error {
+func (c *APIClient) Delete(ctx context.Context, record piholeRecord) (err error) {
+	defer func() { err = c.redactCredential(err) }()
+
 	switch record.Type {
 	case provider.RecordTypeA, provider.RecordTypeAAAA:
 		return c.deleteCustomDNS(ctx, record)

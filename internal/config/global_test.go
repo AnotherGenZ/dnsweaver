@@ -20,20 +20,21 @@ func clearGlobalEnv(t *testing.T) {
 		"DNSWEAVER_DRY_RUN",
 		"DNSWEAVER_CLEANUP_ORPHANS",
 		"DNSWEAVER_OWNERSHIP_TRACKING",
+		"DNSWEAVER_OWNERSHIP_STORAGE",
 		"DNSWEAVER_ADOPT_EXISTING",
-		"DNSWEAVER_DETACHED_CLEANUP_ALLOW_MASS_DELETE",
-		"DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD",
-		"DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES",
-		"DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES",
 		"DNSWEAVER_DEFAULT_TTL",
 		"DNSWEAVER_RECONCILE_INTERVAL",
 		"DNSWEAVER_SHUTDOWN_TIMEOUT",
 		"DNSWEAVER_HEALTH_PORT",
+		"DNSWEAVER_HEALTH_ADDRESS",
+		"DNSWEAVER_HEALTH_ALLOW_NETWORK",
 		"DNSWEAVER_DOCKER_HOST",
 		"DNSWEAVER_DOCKER_MODE",
+		"DNSWEAVER_DOCKER_CONNECT_TIMEOUT",
 		"DNSWEAVER_SOURCES",
 		"DNSWEAVER_SOURCE",
 		"DNSWEAVER_INSTANCE_ID",
+		"DNSWEAVER_PLATFORM",
 	}
 	for _, v := range envVars {
 		os.Unsetenv(v)
@@ -83,18 +84,6 @@ func TestLoadGlobalConfig_Defaults(t *testing.T) {
 	if cfg.AdoptExisting != DefaultAdoptExisting {
 		t.Errorf("AdoptExisting = %v, want %v", cfg.AdoptExisting, DefaultAdoptExisting)
 	}
-	if cfg.DetachedCleanupRatioThreshold != DefaultDetachedCleanupRatioThreshold {
-		t.Errorf("DetachedCleanupRatioThreshold = %v, want %v", cfg.DetachedCleanupRatioThreshold, DefaultDetachedCleanupRatioThreshold)
-	}
-	if cfg.DetachedCleanupRatioMinHostnames != DefaultDetachedCleanupRatioMinHostnames {
-		t.Errorf("DetachedCleanupRatioMinHostnames = %d, want %d", cfg.DetachedCleanupRatioMinHostnames, DefaultDetachedCleanupRatioMinHostnames)
-	}
-	if cfg.DetachedCleanupAbsoluteMaxHostnames != DefaultDetachedCleanupAbsoluteMaxHostnames {
-		t.Errorf("DetachedCleanupAbsoluteMaxHostnames = %d, want %d", cfg.DetachedCleanupAbsoluteMaxHostnames, DefaultDetachedCleanupAbsoluteMaxHostnames)
-	}
-	if cfg.DetachedCleanupAllowMassDelete != DefaultDetachedCleanupAllowMassDelete {
-		t.Errorf("DetachedCleanupAllowMassDelete = %v, want %v", cfg.DetachedCleanupAllowMassDelete, DefaultDetachedCleanupAllowMassDelete)
-	}
 	if cfg.DefaultTTL != DefaultTTL {
 		t.Errorf("DefaultTTL = %d, want %d", cfg.DefaultTTL, DefaultTTL)
 	}
@@ -107,11 +96,17 @@ func TestLoadGlobalConfig_Defaults(t *testing.T) {
 	if cfg.HealthPort != DefaultHealthPort {
 		t.Errorf("HealthPort = %d, want %d", cfg.HealthPort, DefaultHealthPort)
 	}
+	if cfg.HealthAddress != DefaultHealthAddress || cfg.HealthAllowNetwork != DefaultHealthAllowNetwork {
+		t.Errorf("health listener = %s allow=%v, want %s allow=%v", cfg.HealthAddress, cfg.HealthAllowNetwork, DefaultHealthAddress, DefaultHealthAllowNetwork)
+	}
 	if cfg.DockerHost != DefaultDockerHost {
 		t.Errorf("DockerHost = %q, want %q", cfg.DockerHost, DefaultDockerHost)
 	}
 	if cfg.DockerMode != DefaultDockerMode {
 		t.Errorf("DockerMode = %q, want %q", cfg.DockerMode, DefaultDockerMode)
+	}
+	if cfg.DockerConnectTimeout != DefaultDockerConnectTimeout {
+		t.Errorf("DockerConnectTimeout = %v, want %v", cfg.DockerConnectTimeout, DefaultDockerConnectTimeout)
 	}
 	if cfg.Source != DefaultSource {
 		t.Errorf("Source = %q, want %q", cfg.Source, DefaultSource)
@@ -136,18 +131,17 @@ func TestLoadGlobalConfig_CustomValues(t *testing.T) {
 	os.Setenv("DNSWEAVER_DEFAULT_TTL", "600")
 	os.Setenv("DNSWEAVER_RECONCILE_INTERVAL", "5m")
 	os.Setenv("DNSWEAVER_HEALTH_PORT", "9090")
+	os.Setenv("DNSWEAVER_HEALTH_ADDRESS", "0.0.0.0")
+	os.Setenv("DNSWEAVER_HEALTH_ALLOW_NETWORK", "true")
 	os.Setenv("DNSWEAVER_DOCKER_HOST", "tcp://localhost:2375")
 	os.Setenv("DNSWEAVER_DOCKER_MODE", "swarm")
+	os.Setenv("DNSWEAVER_DOCKER_CONNECT_TIMEOUT", "45s")
 	os.Setenv("DNSWEAVER_LOG_FILE", "/var/log/dnsweaver.log")
 	os.Setenv("DNSWEAVER_LOG_MAX_SIZE", "50")
 	os.Setenv("DNSWEAVER_LOG_MAX_BACKUPS", "3")
 	os.Setenv("DNSWEAVER_LOG_MAX_AGE", "14")
 	os.Setenv("DNSWEAVER_LOG_COMPRESS", "false")
 	os.Setenv("DNSWEAVER_SHUTDOWN_TIMEOUT", "45s")
-	os.Setenv("DNSWEAVER_DETACHED_CLEANUP_ALLOW_MASS_DELETE", "true")
-	os.Setenv("DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD", "0.7")
-	os.Setenv("DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES", "25")
-	os.Setenv("DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES", "250")
 	// Note: DNSWEAVER_SOURCE is deprecated; GlobalConfig.Source is now always the default.
 	// Source list is controlled by DNSWEAVER_SOURCES via parseSources().
 
@@ -193,26 +187,20 @@ func TestLoadGlobalConfig_CustomValues(t *testing.T) {
 	if cfg.HealthPort != 9090 {
 		t.Errorf("HealthPort = %d, want %d", cfg.HealthPort, 9090)
 	}
+	if cfg.HealthAddress != "0.0.0.0" || !cfg.HealthAllowNetwork {
+		t.Errorf("health listener = %s allow=%v, want 0.0.0.0 allow=true", cfg.HealthAddress, cfg.HealthAllowNetwork)
+	}
 	if cfg.DockerHost != "tcp://localhost:2375" {
 		t.Errorf("DockerHost = %q, want %q", cfg.DockerHost, "tcp://localhost:2375")
 	}
 	if cfg.DockerMode != "swarm" {
 		t.Errorf("DockerMode = %q, want %q", cfg.DockerMode, "swarm")
 	}
+	if cfg.DockerConnectTimeout != 45*time.Second {
+		t.Errorf("DockerConnectTimeout = %v, want %v", cfg.DockerConnectTimeout, 45*time.Second)
+	}
 	if cfg.Source != DefaultSource {
 		t.Errorf("Source = %q, want %q (deprecated DNSWEAVER_SOURCE should not set GlobalConfig.Source)", cfg.Source, DefaultSource)
-	}
-	if !cfg.DetachedCleanupAllowMassDelete {
-		t.Error("DetachedCleanupAllowMassDelete = false, want true")
-	}
-	if cfg.DetachedCleanupRatioThreshold != 0.7 {
-		t.Errorf("DetachedCleanupRatioThreshold = %v, want %v", cfg.DetachedCleanupRatioThreshold, 0.7)
-	}
-	if cfg.DetachedCleanupRatioMinHostnames != 25 {
-		t.Errorf("DetachedCleanupRatioMinHostnames = %d, want %d", cfg.DetachedCleanupRatioMinHostnames, 25)
-	}
-	if cfg.DetachedCleanupAbsoluteMaxHostnames != 250 {
-		t.Errorf("DetachedCleanupAbsoluteMaxHostnames = %d, want %d", cfg.DetachedCleanupAbsoluteMaxHostnames, 250)
 	}
 }
 
@@ -324,48 +312,6 @@ func TestLoadGlobalConfig_InvalidValues(t *testing.T) {
 			envVar:   "DNSWEAVER_SHUTDOWN_TIMEOUT",
 			value:    "500ms",
 			errMatch: "SHUTDOWN_TIMEOUT",
-		},
-		{
-			name:     "invalid detached ratio threshold not a number",
-			envVar:   "DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD",
-			value:    "abc",
-			errMatch: "DETACHED_CLEANUP_RATIO_THRESHOLD",
-		},
-		{
-			name:     "invalid detached ratio threshold zero",
-			envVar:   "DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD",
-			value:    "0",
-			errMatch: "DETACHED_CLEANUP_RATIO_THRESHOLD",
-		},
-		{
-			name:     "invalid detached ratio threshold greater than one",
-			envVar:   "DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD",
-			value:    "1.1",
-			errMatch: "DETACHED_CLEANUP_RATIO_THRESHOLD",
-		},
-		{
-			name:     "invalid detached ratio min hostnames not a number",
-			envVar:   "DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES",
-			value:    "abc",
-			errMatch: "DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES",
-		},
-		{
-			name:     "invalid detached ratio min hostnames zero",
-			envVar:   "DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES",
-			value:    "0",
-			errMatch: "DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES",
-		},
-		{
-			name:     "invalid detached absolute max hostnames not a number",
-			envVar:   "DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES",
-			value:    "abc",
-			errMatch: "DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES",
-		},
-		{
-			name:     "invalid detached absolute max hostnames zero",
-			envVar:   "DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES",
-			value:    "0",
-			errMatch: "DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES",
 		},
 	}
 

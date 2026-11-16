@@ -41,7 +41,7 @@ labels:
   - "dnsweaver.hostnames=app1.example.com,app2.example.com,app3.example.com"
 ```
 
-Whitespace around commas is trimmed and empty values are skipped. This can be combined with `dnsweaver.ttl` and `dnsweaver.proxied`, which apply to all hostnames in the list.
+Whitespace around commas is trimmed and empty values are skipped. This can be combined with `dnsweaver.ttl`, `dnsweaver.proxied`, and `dnsweaver.adopt`, which apply to all hostnames in the list.
 
 Both `dnsweaver.hostname` (singular) and `dnsweaver.hostnames` (plural) can be used together — all hostnames are processed.
 
@@ -61,7 +61,6 @@ labels:
 labels:
   - "dnsweaver.hostname=myapp.example.com"
   - "dnsweaver.ttl=600"  # Override default TTL
-  - "dnsweaver.provider=internal"  # Route all hostnames from this workload to one instance
   - "dnsweaver.enabled=true"  # Explicit enable (default)
 ```
 
@@ -80,9 +79,12 @@ labels:
 |-------|---------|-------------|
 | `dnsweaver.hostname` | - | Single hostname to create |
 | `dnsweaver.hostnames` | - | Comma-separated list of hostnames |
+| `dnsweaver.instances` | all matching providers | Comma-separated provider instance names for all hostnames on the workload, including other sources. See [workload selection](../configuration/multi-instance.md#workload-provider-selection). |
+| `dnsweaver.provider` | – | **Fork.** Alias of `dnsweaver.instances` (the fork's 1.x name). If both are set they must agree. |
 | `dnsweaver.enabled` | `true` | Enable/disable processing |
 | `dnsweaver.ttl` | - | Override TTL for this container |
-| `dnsweaver.provider` | _(auto-matched)_ | Route all hostnames on this workload to one or more provider instances (comma-separated) |
+| `dnsweaver.proxied` | provider default | Cloudflare proxy (orange-cloud) override — `true` or `false`. Applies to every hostname on the container. Ignored by non-Cloudflare providers. |
+| `dnsweaver.adopt` | provider/global policy | Enable or disable existing-record adoption for every hostname discovered from this workload, including hostnames found by Traefik. Enabling requires the matching provider's `ADOPT_EXISTING_ALLOW_OVERRIDES` gate. Disabling is always honored. |
 
 ### Named Record Labels
 
@@ -91,14 +93,46 @@ For advanced use cases, use the named record format: `dnsweaver.records.<name>.<
 | Label Pattern | Default | Description |
 |---------------|---------|-------------|
 | `dnsweaver.records.<name>.hostname` | - | Hostname for this record (required) |
-| `dnsweaver.records.<name>.type` | `A` | Record type: `A`, `AAAA`, `CNAME`, `SRV`, `TXT` |
+| `dnsweaver.records.<name>.type` | `A` | Record type: `A`, `AAAA`, `CNAME`, `SRV`, `MX`, `NS`, `TXT` |
 | `dnsweaver.records.<name>.target` | - | Override target (IP or hostname) |
-| `dnsweaver.records.<name>.provider` | - | Target specific provider instance |
+| `dnsweaver.records.<name>.provider` | - | Override the workload selection for this record; the instance must still match the configured domain and workload filters |
 | `dnsweaver.records.<name>.ttl` | - | TTL for this specific record |
 | `dnsweaver.records.<name>.port` | - | Port (for SRV records) |
-| `dnsweaver.records.<name>.priority` | - | Priority (for SRV records) |
+| `dnsweaver.records.<name>.priority` | `0` for MX | Priority (for SRV records) or preference (for MX records) |
 | `dnsweaver.records.<name>.weight` | - | Weight (for SRV records) |
 | `dnsweaver.records.<name>.enabled` | `true` | Enable/disable this record |
+| `dnsweaver.records.<name>.proxied` | provider default | Cloudflare proxy (orange-cloud) override for this record — `true` or `false`. Ignored by non-Cloudflare providers. |
+| `dnsweaver.records.<name>.adopt` | workload/provider/global policy | Override existing-record adoption for this named record. Enabling requires the matching provider's `ADOPT_EXISTING_ALLOW_OVERRIDES` gate. Disabling is always honored. |
+| `dnsweaver.records.<name>.meta.<key>` | - | Arbitrary provider metadata passed through to the target provider (advanced). |
+
+An explicit provider hint narrows routing; it does not bypass that provider's domain patterns, exclusions or workload-metadata filters. If an existing named record stops matching after an upgrade, correct the operator's provider scope rather than granting access through a workload label.
+
+### Existing-record adoption
+
+```yaml
+services:
+  app:
+    labels:
+      - "traefik.http.routers.app.rule=Host(`app.example.com`)"
+      - "dnsweaver.adopt=true"
+```
+
+The workload label applies even when Traefik, rather than the native source,
+discovers the hostname. The matching provider must explicitly allow the
+request:
+
+```bash
+DNSWEAVER_PUBLIC_ADOPT_EXISTING_ALLOW_OVERRIDES=true
+```
+
+Use a named record to narrow or override the workload setting:
+
+```yaml
+labels:
+  - "dnsweaver.adopt=true"
+  - "dnsweaver.records.manual.hostname=manual.example.com"
+  - "dnsweaver.records.manual.adopt=false"
+```
 
 ## Examples
 
@@ -142,6 +176,77 @@ services:
       - "dnsweaver.records.mc.priority=10"
       - "dnsweaver.records.mc.weight=100"
 ```
+
+### MX Record (Mail Delivery)
+
+Point a domain's mail at a hosted mailbox provider. `target` is the mail
+exchanger hostname and `priority` is the MX preference (lower is tried first);
+it defaults to `0` when omitted.
+
+```yaml
+services:
+  mail-config:
+    image: alpine
+    labels:
+      - "dnsweaver.records.mx.hostname=example.com"
+      - "dnsweaver.records.mx.type=MX"
+      - "dnsweaver.records.mx.target=mail.protonmail.ch"
+      - "dnsweaver.records.mx.priority=10"
+```
+
+Declare one `dnsweaver.records.<name>` block per mail exchanger to publish
+several MX records on the same hostname. Each one is a separate member, so a
+changed preference replaces only that record.
+
+### NS Record (Delegation)
+
+Delegate a subdomain to another set of nameservers:
+
+```yaml
+labels:
+  - "dnsweaver.records.deleg.hostname=sub.example.com"
+  - "dnsweaver.records.deleg.type=NS"
+  - "dnsweaver.records.deleg.target=ns1.example.net"
+```
+
+### Cloudflare Proxy Override (Per-Host)
+
+When a hostname is served by a [Cloudflare provider](../providers/cloudflare.md),
+the `proxied` label overrides that provider's `PROXIED` default on a per-host
+basis. This is the typical "most services proxied, a few DNS-only" pattern —
+keep the provider default proxied and flip individual hosts off.
+
+Simple hostname form (applies to every hostname on the container):
+
+```yaml
+labels:
+  - "dnsweaver.hostname=ssh.example.com"
+  - "dnsweaver.proxied=false"  # DNS-only, bypass Cloudflare's proxy
+```
+
+Named-record form (mix proxied and DNS-only on one service):
+
+```yaml
+labels:
+  - "dnsweaver.records.app.hostname=app.example.com"
+  - "dnsweaver.records.app.proxied=true"   # orange-cloud
+
+  - "dnsweaver.records.ssh.hostname=ssh.example.com"
+  - "dnsweaver.records.ssh.proxied=false"  # DNS-only
+
+  - "dnsweaver.records.vpn.hostname=vpn.example.com"
+  - "dnsweaver.records.vpn.proxied=false"  # DNS-only
+```
+
+When a record does not set `proxied`, the Cloudflare instance's
+`DNSWEAVER_{NAME}_PROXIED` value (default `true`) is used as the fallback. The
+label is ignored by providers that have no concept of proxying.
+
+Adding, changing or removing the label updates a record that already exists:
+on the next reconciliation dnsweaver compares the record's proxied state with
+what the label (or the instance default) now asks for and updates it in place
+when they differ. The same applies when `DNSWEAVER_{NAME}_PROXIED` itself is
+changed.
 
 ### Combine with Traefik Labels
 

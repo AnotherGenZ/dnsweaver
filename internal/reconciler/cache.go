@@ -6,8 +6,8 @@ import (
 	"context"
 	"log/slog"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/source"
 )
 
 // recordCache holds a snapshot of DNS records from all providers.
@@ -18,6 +18,12 @@ type recordCache struct {
 	// records maps provider name -> normalized hostname -> list of records
 	records map[string]map[string][]provider.Record
 	logger  *slog.Logger
+}
+
+type cachedOwnedMember struct {
+	Member   provider.Record
+	Marker   provider.Record
+	Metadata map[string]string
 }
 
 // newRecordCache creates a new record cache by querying all providers.
@@ -59,11 +65,12 @@ func newRecordCache(ctx context.Context, providers *provider.Registry, logger *s
 }
 
 // getExistingRecords returns cached DNS records for a hostname from a specific provider.
-// Returns A, AAAA, CNAME, and SRV records (excludes TXT ownership records).
+// Returns DNS data records, including ordinary TXT only for a TXT desired set.
+// Ownership marker names are always excluded from TXT matching.
 // Returns nil if the provider cache is unavailable (failed to load).
 // Returns empty slice if cached but no records exist for this hostname.
 // Hostname lookup is case-insensitive per RFC 1035.
-func (c *recordCache) getExistingRecords(providerName, hostname string) ([]provider.Record, bool) {
+func (c *recordCache) getExistingRecords(providerName, hostname string, desiredType ...provider.RecordType) ([]provider.Record, bool) {
 	byHostname, exists := c.records[providerName]
 	if !exists || byHostname == nil {
 		// Provider not cached or failed to load
@@ -77,10 +84,12 @@ func (c *recordCache) getExistingRecords(providerName, hostname string) ([]provi
 	var filtered []provider.Record
 	for _, r := range records {
 		switch r.Type {
-		case provider.RecordTypeA, provider.RecordTypeAAAA, provider.RecordTypeCNAME, provider.RecordTypeSRV, provider.RecordTypeHTTPS:
+		case provider.RecordTypeA, provider.RecordTypeAAAA, provider.RecordTypeCNAME, provider.RecordTypeSRV, provider.RecordTypeHTTPS, provider.RecordTypeMX, provider.RecordTypeNS:
 			filtered = append(filtered, r)
 		case provider.RecordTypeTXT:
-			// Skip TXT records (ownership markers)
+			if len(desiredType) > 0 && desiredType[0] == provider.RecordTypeTXT && !provider.IsOwnershipRecord(r.Hostname) {
+				filtered = append(filtered, r)
+			}
 		}
 	}
 
@@ -106,7 +115,7 @@ func (c *recordCache) getAllRecordsForHostname(providerName, hostname string) ([
 	var filtered []provider.Record
 	for _, r := range records {
 		switch r.Type {
-		case provider.RecordTypeA, provider.RecordTypeAAAA, provider.RecordTypeCNAME, provider.RecordTypeSRV, provider.RecordTypeHTTPS:
+		case provider.RecordTypeA, provider.RecordTypeAAAA, provider.RecordTypeCNAME, provider.RecordTypeSRV, provider.RecordTypeHTTPS, provider.RecordTypeMX, provider.RecordTypeNS:
 			filtered = append(filtered, r)
 		case provider.RecordTypeTXT:
 			// Skip TXT records (ownership markers)
@@ -136,5 +145,96 @@ func (c *recordCache) hasOwnershipRecord(providerName, hostname, instanceID stri
 		}
 	}
 
+	return false
+}
+
+func (c *recordCache) memberOwnershipRecord(providerName string, member provider.Record, instanceID string) (provider.Record, bool) {
+	for _, ownership := range c.ownershipRecords(providerName, member.Hostname) {
+		if provider.MatchesMemberOwnership(ownership.Target, instanceID, member) {
+			return ownership, true
+		}
+	}
+	return provider.Record{}, false
+}
+
+func (c *recordCache) legacyOwnershipRecord(providerName, hostname, instanceID string) (provider.Record, bool) {
+	for _, ownership := range c.ownershipRecords(providerName, hostname) {
+		if provider.MatchesLegacyOwnership(ownership.Target, instanceID) {
+			return ownership, true
+		}
+	}
+	return provider.Record{}, false
+}
+
+func (c *recordCache) ownershipRecords(providerName, hostname string) []provider.Record {
+	byHostname, exists := c.records[providerName]
+	if !exists || byHostname == nil {
+		return nil
+	}
+	normalized := source.NormalizeHostname(provider.OwnershipRecordName(hostname))
+	var ownership []provider.Record
+	for _, record := range byHostname[normalized] {
+		if record.Type == provider.RecordTypeTXT {
+			ownership = append(ownership, record)
+		}
+	}
+	return ownership
+}
+
+func (c *recordCache) providerAvailable(providerName string) bool {
+	records, exists := c.records[providerName]
+	return exists && records != nil
+}
+
+func (c *recordCache) ownedMembers(providerName, instanceID string) []cachedOwnedMember {
+	byHostname, exists := c.records[providerName]
+	if !exists || byHostname == nil {
+		return nil
+	}
+	var owned []cachedOwnedMember
+	for _, records := range byHostname {
+		for _, marker := range records {
+			if marker.Type != provider.RecordTypeTXT || !provider.IsOwnershipRecord(marker.Hostname) {
+				continue
+			}
+			isOwned, markerInstance, member, metadata := provider.ParseMemberOwnershipValue(marker.Target)
+			if !isOwned || markerInstance != instanceID || member == nil {
+				continue
+			}
+			member.Hostname = provider.ExtractHostnameFromOwnership(marker.Hostname)
+			if member.Hostname == "" {
+				continue
+			}
+			owned = append(owned, cachedOwnedMember{Member: *member, Marker: marker, Metadata: metadata})
+		}
+	}
+	return owned
+}
+
+// Record successful writes in the cycle snapshot so another type's cleanup
+// cannot act on data already removed by a replacement.
+func (c *recordCache) addRecord(name string, record provider.Record) {
+	if !c.providerAvailable(name) {
+		return
+	}
+	host := source.NormalizeHostname(record.Hostname)
+	c.records[name][host] = rememberRecordMember(c.records[name][host], record)
+}
+
+func (c *recordCache) removeRecord(name string, record provider.Record) {
+	if !c.providerAvailable(name) {
+		return
+	}
+	host := source.NormalizeHostname(record.Hostname)
+	c.records[name][host] = forgetRecordMember(c.records[name][host], record)
+}
+
+func (c *recordCache) foreignMemberOwnership(name string, member provider.Record, instanceID string) bool {
+	for _, marker := range c.ownershipRecords(name, member.Hostname) {
+		owned, id, _, _ := provider.ParseMemberOwnershipValue(marker.Target)
+		if owned && id != instanceID && provider.MatchesMemberOwnership(marker.Target, id, member) {
+			return true
+		}
+	}
 	return false
 }

@@ -38,7 +38,8 @@
 #   TOKEN, API_KEY, AUTH_TOKEN, PASSWORD, TSIG_SECRET, SSH_PASSWORD
 #
 # Non-secret fields (env var override only, no _FILE):
-#   URL, ZONE, ZONE_ID, API_EMAIL, TARGET, TTL, MODE
+#   URL, ZONE, ZONE_ID, API_EMAIL, TARGET, TTL, MODE, ADOPT_EXISTING,
+#   ADOPT_EXISTING_ALLOW_OVERRIDES
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Logging configuration
@@ -53,11 +54,8 @@ reconciler:
   cleanup_orphans: true   # Delete records for removed containers
   cleanup_on_stop: true   # Delete records when containers stop (not just remove)
   ownership_tracking: true # Use TXT records to track record ownership
+  ownership_storage: legacy # opt in to compact after upgrading every zone writer
   adopt_existing: false   # Adopt pre-existing DNS records by creating TXT records
-  detached_cleanup_allow_mass_delete: false # Bypass detached cleanup circuit breaker for planned migrations
-  detached_cleanup_ratio_threshold: 0.5 # Ratio threshold (0 < value <= 1)
-  detached_cleanup_ratio_min_hostnames: 10 # Minimum hostnames before ratio breaker applies
-  detached_cleanup_absolute_max_hostnames: 100 # Absolute detached hostname cap per cycle
 
 # Multi-instance coordination
 # Unique identifier for this dnsweaver instance (for shared zone management)
@@ -88,6 +86,8 @@ kubernetes:
 # Health and metrics server
 server:
   port: 8080  # Port for /health, /ready, and /metrics endpoints
+  address: 127.0.0.1  # Loopback-only by default
+  allow_network: false # Required for non-loopback; also restrict access at the network layer
 
 # Hostname sources
 # Order matters: first source with matching hostname wins
@@ -113,11 +113,12 @@ providers:
     domains:
       - "*.internal.example.com"
       - "*.home.example.com"
-    # match_labeled_only: true   # Optional: only create records when workload explicitly targets this instance
     record_type: A        # A, AAAA, or CNAME
     target: 192.0.2.100    # Where to point DNS records (your load balancer/gateway IP)
     ttl: 300              # TTL in seconds
     mode: managed         # managed, authoritative, or additive
+    adopt_existing: false # Override the global adoption policy for this provider
+    adopt_existing_allow_overrides: false # Allow workload labels to enable adoption
     config:
       url: http://dns.example.com:5380
       token: ${TECHNITIUM_TOKEN}        # env var interpolation

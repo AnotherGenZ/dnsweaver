@@ -3,7 +3,7 @@ package resources
 import (
 	networkingv1 "k8s.io/api/networking/v1"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
+	"github.com/maxfield-allison/dnsweaver/pkg/workload"
 )
 
 // ConvertIngress converts a networking.k8s.io/v1 Ingress to a workload.Workload.
@@ -43,7 +43,7 @@ func ConvertIngress(ing *networkingv1.Ingress) workload.Workload {
 		Kind:        workload.KindIngress,
 		Hostnames:   hostnames,
 		Metadata: map[string]string{
-			"resourceVersion": ing.ResourceVersion,
+			metaKeyResourceVersion: ing.ResourceVersion,
 		},
 	}
 }

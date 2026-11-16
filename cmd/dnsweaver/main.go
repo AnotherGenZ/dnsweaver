@@ -12,21 +12,25 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
-	"gitlab.bluewillows.net/root/dnsweaver/internal/config"
-	"gitlab.bluewillows.net/root/dnsweaver/internal/docker"
-	"gitlab.bluewillows.net/root/dnsweaver/internal/health"
-	k8s "gitlab.bluewillows.net/root/dnsweaver/internal/kubernetes"
-	"gitlab.bluewillows.net/root/dnsweaver/internal/metrics"
-	"gitlab.bluewillows.net/root/dnsweaver/internal/reconciler"
-	"gitlab.bluewillows.net/root/dnsweaver/internal/watcher"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
+	"github.com/maxfield-allison/dnsweaver/internal/config"
+	"github.com/maxfield-allison/dnsweaver/internal/docker"
+	"github.com/maxfield-allison/dnsweaver/internal/health"
+	incusclient "github.com/maxfield-allison/dnsweaver/internal/incus"
+	k8s "github.com/maxfield-allison/dnsweaver/internal/kubernetes"
+	"github.com/maxfield-allison/dnsweaver/internal/metrics"
+	proxmoxclient "github.com/maxfield-allison/dnsweaver/internal/proxmox"
+	"github.com/maxfield-allison/dnsweaver/internal/reconciler"
+	"github.com/maxfield-allison/dnsweaver/internal/watcher"
+	"github.com/maxfield-allison/dnsweaver/pkg/httputil"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/source"
+	"github.com/maxfield-allison/dnsweaver/pkg/workload"
 )
 
 // Version and BuildDate are set via ldflags during build.
@@ -41,6 +45,8 @@ func main() {
 	configPath := flag.String("config", "", "Path to YAML configuration file")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	validateOnly := flag.Bool("validate", false, "Validate configuration and exit")
+	healthcheckOnly := flag.Bool("healthcheck", false, "Probe the running health endpoint and exit")
+	readycheckOnly := flag.Bool("readycheck", false, "Probe the running readiness endpoint and exit")
 	flag.Parse()
 
 	if *showVersion {
@@ -56,6 +62,27 @@ func main() {
 			os.Exit(1)
 		}
 	}
+
+	if *healthcheckOnly {
+		if err := runHealthcheck(); err != nil {
+			fmt.Fprintf(os.Stderr, "Health check failed: %s\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	if *readycheckOnly {
+		if err := runReadinessCheck(); err != nil {
+			fmt.Fprintf(os.Stderr, "Readiness check failed: %s\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
+	// Surface environment variables with a misspelled DNSWEAVER prefix (e.g.
+	// DNSWEVAER_...) before loading config. Such variables are silently ignored
+	// and otherwise show up only as a confusing "required but not set" error for
+	// the value the user thought they had set.
+	config.WarnOnMisspelledEnvPrefixes(slog.Default())
 
 	// Also check DNSWEAVER_VALIDATE_ONLY env var for container-based validation
 	if parseBoolEnv("DNSWEAVER_VALIDATE_ONLY") {
@@ -98,6 +125,8 @@ func runValidate() error {
 	fmt.Printf("  Reconcile Interval: %s\n", cfg.ReconcileInterval())
 	fmt.Printf("  Shutdown Timeout:   %s\n", cfg.ShutdownTimeout())
 	fmt.Printf("  Health Port:        %d\n", cfg.HealthPort())
+	fmt.Printf("  Health Address:     %s\n", cfg.HealthAddress())
+	fmt.Printf("  Ownership storage:  %s\n", cfg.Global.OwnershipStorage)
 	if cfg.InstanceID() != "" {
 		fmt.Printf("  Instance ID:        %s\n", cfg.InstanceID())
 	}
@@ -171,6 +200,7 @@ func run() error {
 			docker.WithMode(parseDockerMode(cfg.DockerMode())),
 			docker.WithLogger(logger),
 			docker.WithCleanupOnStop(cfg.CleanupOnStop()),
+			docker.WithConnectTimeout(cfg.DockerConnectTimeout()),
 		)
 		if err != nil {
 			return fmt.Errorf("creating docker client: %w", err)
@@ -192,6 +222,9 @@ func run() error {
 	// The manager handles graceful initialization - providers that fail to connect
 	// are retried in the background instead of causing a fatal error.
 	providerRegistry := provider.NewRegistry(logger)
+	if cfg.OwnershipTracking() {
+		providerRegistry.SetOwnershipStorage(cfg.Global.OwnershipStorage)
+	}
 	registerProviderFactories(providerRegistry)
 
 	// Set instance ID for multi-instance coordination (#84)
@@ -208,6 +241,12 @@ func run() error {
 	if err := initializeProviders(providerManager, cfg); err != nil {
 		return fmt.Errorf("initializing providers: %w", err)
 	}
+
+	// Surface backend identity collisions once at startup. When two instances
+	// share the same provider identity + record type they will race over the
+	// same physical records; the reconciler resolves this via first-match-wins
+	// (issue #86) but the user should be told their config is ambiguous.
+	providerRegistry.WarnDuplicateIdentities()
 
 	// Log provider status summary (manager background retry starts later, after health server)
 	if providerManager.PendingCount() > 0 {
@@ -226,17 +265,13 @@ func run() error {
 
 	// Initialize reconciler
 	reconcilerCfg := reconciler.Config{
-		DryRun:                              cfg.DryRun(),
-		CleanupOrphans:                      cfg.CleanupOrphans(),
-		OwnershipTracking:                   cfg.OwnershipTracking(),
-		AdoptExisting:                       cfg.AdoptExisting(),
-		DetachedCleanupAllowMassDelete:      cfg.DetachedCleanupAllowMassDelete(),
-		DetachedCleanupRatioThreshold:       cfg.DetachedCleanupRatioThreshold(),
-		DetachedCleanupRatioMinHostnames:    cfg.DetachedCleanupRatioMinHostnames(),
-		DetachedCleanupAbsoluteMaxHostnames: cfg.DetachedCleanupAbsoluteMaxHostnames(),
-		ReconcileInterval:                   cfg.ReconcileInterval(),
-		Enabled:                             true,
-		InstanceID:                          cfg.InstanceID(),
+		DryRun:            cfg.DryRun(),
+		CleanupOrphans:    cfg.CleanupOrphans(),
+		OwnershipTracking: cfg.OwnershipTracking(),
+		AdoptExisting:     cfg.AdoptExisting(),
+		ReconcileInterval: cfg.ReconcileInterval(),
+		Enabled:           true,
+		InstanceID:        cfg.InstanceID(),
 	}
 
 	// Build workload listers for each enabled platform
@@ -272,8 +307,141 @@ func run() error {
 		)
 	}
 
+	// Initialize Proxmox VE lister when DNSWEAVER_PROXMOX_URL is set.
+	if cfg.UseProxmox() {
+		pveClient, err := proxmoxclient.NewClient(proxmoxclient.ClientConfig{
+			BaseURL:     cfg.ProxmoxURL(),
+			TokenID:     cfg.ProxmoxTokenID(),
+			TokenSecret: cfg.ProxmoxTokenSecret(),
+			// Intentional use of deprecated accessor: we pass both the legacy
+			// bool and the unified TLS config so operators on the old env var
+			// still work. The proxmox client prefers TLS when set.
+			VerifyTLS: cfg.ProxmoxVerifyTLS(), //nolint:staticcheck // SA1019: see comment above
+			TLS:       cfg.ProxmoxTLS(),
+			Logger:    logger,
+		})
+		if err != nil {
+			return fmt.Errorf("creating proxmox client: %w", err)
+		}
+		proxmoxLister := proxmoxclient.NewWorkloadListerAdapter(pveClient, proxmoxclient.AdapterConfig{
+			NodeFilter:          cfg.ProxmoxNodeFilter(),
+			TagFilter:           cfg.ProxmoxTagFilter(),
+			StateFilter:         cfg.ProxmoxStateFilter(),
+			InterfacePreference: cfg.ProxmoxInterfaceTagPrefix(),
+			AllowedInterfaces:   cfg.ProxmoxAllowedInterfaces(),
+			IPVersion:           proxmoxIPVersion(cfg),
+		}, logger)
+		listers = append(listers, proxmoxLister)
+		logger.Info("proxmox lister configured",
+			slog.String("url", cfg.ProxmoxURL()),
+			slog.String("node_filter", cfg.ProxmoxNodeFilter()),
+			slog.String("tag_filter", cfg.ProxmoxTagFilter()),
+			slog.String("ip_version", string(proxmoxIPVersion(cfg))),
+		)
+	}
+
+	// Initialize Incus lister(s) when DNSWEAVER_INCUS_URL or _SOCKET_PATH is set.
+	// Project scope is controlled by DNSWEAVER_INCUS_ALL_PROJECTS (watch every
+	// project via all-projects mode), DNSWEAVER_INCUS_PROJECTS (an explicit list,
+	// one client per project), or DNSWEAVER_INCUS_PROJECT (a single project).
+	var incusClients []*incusclient.Client
+	if cfg.UseIncus() {
+		incusTLS := cfg.IncusTLS()
+
+		// Resolve the client certificate: reuse a persisted keypair, enroll a
+		// new one via a trust token, or fall back to configured cert/key files
+		// (#134). Only applies to remote HTTPS endpoints; socket mode needs no
+		// client certificate.
+		if cfg.IncusURL() != "" {
+			var fallbackCert, fallbackKey string
+			if incusTLS != nil {
+				fallbackCert, fallbackKey = incusTLS.CertFile, incusTLS.KeyFile
+			}
+			cc, err := incusclient.EnsureClientCert(ctx, incusclient.EnrollConfig{
+				BaseURL:   cfg.IncusURL(),
+				Token:     cfg.IncusTrustToken(),
+				CertStore: cfg.IncusCertStore(),
+				Projects:  cfg.IncusProjects(),
+				TLS:       incusTLS,
+				Logger:    logger,
+			}, fallbackCert, fallbackKey)
+			if err != nil {
+				return fmt.Errorf("resolving incus client certificate: %w", err)
+			}
+			if cc.CertFile != "" || cc.KeyFile != "" {
+				if incusTLS == nil {
+					incusTLS = &httputil.TLSConfig{}
+				}
+				incusTLS.CertFile = cc.CertFile
+				incusTLS.KeyFile = cc.KeyFile
+			}
+			// Pin the server's leaf certificate (from the trust token or the
+			// persisted store) so ongoing lister/watcher connections verify
+			// without a CA file, matching the enrollment handshake (#146).
+			if cc.PinnedSHA256 != "" {
+				if incusTLS == nil {
+					incusTLS = &httputil.TLSConfig{}
+				}
+				incusTLS.PinnedSHA256 = cc.PinnedSHA256
+			}
+		}
+
+		baseCfg := incusclient.ClientConfig{
+			BaseURL:    cfg.IncusURL(),
+			SocketPath: cfg.IncusSocketPath(),
+			TLS:        incusTLS,
+			Logger:     logger,
+		}
+
+		var clientCfgs []incusclient.ClientConfig
+		var scope string
+		switch {
+		case cfg.IncusAllProjects():
+			c := baseCfg
+			c.AllProjects = true
+			clientCfgs = append(clientCfgs, c)
+			scope = "all-projects"
+		case len(cfg.IncusProjects()) > 0:
+			for _, p := range cfg.IncusProjects() {
+				c := baseCfg
+				c.Project = p
+				clientCfgs = append(clientCfgs, c)
+			}
+			scope = strings.Join(cfg.IncusProjects(), ",")
+		default:
+			c := baseCfg
+			c.Project = cfg.IncusProject()
+			clientCfgs = append(clientCfgs, c)
+			if scope = cfg.IncusProject(); scope == "" {
+				scope = "default"
+			}
+		}
+
+		for _, cc := range clientCfgs {
+			incusClient, err := incusclient.NewClient(cc)
+			if err != nil {
+				return fmt.Errorf("creating incus client: %w", err)
+			}
+			incusClients = append(incusClients, incusClient)
+			incusLister := incusclient.NewWorkloadListerAdapter(incusClient, incusclient.AdapterConfig{
+				StateFilter: cfg.IncusStateFilter(),
+			}, logger)
+			listers = append(listers, incusLister)
+		}
+		logger.Info("incus lister configured",
+			slog.String("endpoint", incusEndpoint(cfg)),
+			slog.String("projects", scope),
+		)
+	}
+
+	if len(listers) == 0 && len(sourceRegistry.DiscoverableSources()) == 0 {
+		return fmt.Errorf("no workload listers or discovery sources configured: set DNSWEAVER_PLATFORM to docker, kubernetes, or both; set DNSWEAVER_PROXMOX_URL for Proxmox VE; set DNSWEAVER_INCUS_URL/DNSWEAVER_INCUS_SOCKET_PATH for Incus; or, when running standalone (DNSWEAVER_PLATFORM=none), configure a file-discovery source such as DNSWEAVER_SOURCE_TRAEFIK_FILE_PATHS")
+	}
+
 	if len(listers) == 0 {
-		return fmt.Errorf("no platform watchers configured: set DNSWEAVER_PLATFORM to docker, kubernetes, or both")
+		logger.Info("running in standalone mode with file discovery only (no workload listers)",
+			slog.String("platform", cfg.Platform()),
+		)
 	}
 
 	rec := reconciler.New(listers, sourceRegistry, providerRegistry,
@@ -357,6 +525,18 @@ func run() error {
 		)
 	}
 
+	// Initialize Incus event watcher(s) for near-instant DNS updates (#132).
+	// One watcher per Incus client (one per project, or a single all-projects
+	// watcher).
+	var incusWatchers []*incusclient.WorkloadWatcher
+	for _, incusClient := range incusClients {
+		incusWatchers = append(incusWatchers,
+			incusclient.NewWatcher(incusClient, triggerReconcile,
+				incusclient.WithWatcherLogger(logger),
+			),
+		)
+	}
+
 	// Initialize file watcher for sources with file discovery (#22)
 	var fileWatcher *source.FileWatcher
 	if cfg.HasFileDiscovery() {
@@ -373,9 +553,15 @@ func run() error {
 		)
 	}
 
+	// Build dynamic target refreshers for provider instances configured with
+	// DNSWEAVER_{NAME}_TARGET_MODE (#130). Not started until the reconcile
+	// trigger is wired and providers are ready (below).
+	targetRefreshers := buildTargetRefreshers(cfg, providerRegistry, triggerReconcile, logger)
+
 	// Start health server with provider manager status (#10, #125)
 	healthServer := health.New(cfg.HealthPort(),
 		health.WithLogger(logger),
+		health.WithAddress(cfg.HealthAddress()),
 	)
 
 	// Register provider health checkers for /ready endpoint
@@ -435,11 +621,21 @@ func run() error {
 		}
 	}
 
+	for _, incusWatcher := range incusWatchers {
+		if err := incusWatcher.Start(ctx); err != nil {
+			return fmt.Errorf("starting incus watcher: %w", err)
+		}
+	}
+
 	if fileWatcher != nil {
 		if err := fileWatcher.Start(ctx); err != nil {
 			return fmt.Errorf("starting file watcher: %w", err)
 		}
 	}
+
+	// Start dynamic target refreshers. Their initial resolution is synchronous,
+	// so dynamic targets are set before the first reconcile runs.
+	startTargetRefreshers(ctx, targetRefreshers)
 
 	// Run initial reconciliation
 	logger.Info("running initial reconciliation")
@@ -476,6 +672,7 @@ func run() error {
 		slog.Int("sources", sourceRegistry.Count()),
 		slog.Int("providers", providerRegistry.Count()),
 		slog.Int("health_port", cfg.HealthPort()),
+		slog.String("health_address", cfg.HealthAddress()),
 	)
 
 	// Handle shutdown signals
@@ -508,9 +705,19 @@ func run() error {
 		k8sWatcher.Stop()
 		logger.Debug("kubernetes watcher stopped")
 	}
+	for _, incusWatcher := range incusWatchers {
+		incusWatcher.Stop()
+	}
+	if len(incusWatchers) > 0 {
+		logger.Debug("incus watchers stopped")
+	}
 	if fileWatcher != nil {
 		fileWatcher.Stop()
 		logger.Debug("file watcher stopped")
+	}
+	stopTargetRefreshers(targetRefreshers)
+	if len(targetRefreshers) > 0 {
+		logger.Debug("target refreshers stopped")
 	}
 
 	// Step 3: Cancel context to stop periodic reconciliation goroutine
@@ -543,4 +750,15 @@ func run() error {
 
 	logger.Info("dnsweaver shutdown complete")
 	return nil
+}
+
+// proxmoxIPVersion resolves the Proxmox address families from config.
+// Validation happens during config load — this returns the default for any
+// unrecognized value to keep the adapter strict-typed.
+func proxmoxIPVersion(cfg *config.Config) proxmoxclient.IPVersion {
+	version, err := proxmoxclient.ParseIPVersion(cfg.ProxmoxIPVersion())
+	if err != nil {
+		return proxmoxclient.IPVersionIPv4
+	}
+	return version
 }

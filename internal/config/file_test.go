@@ -203,10 +203,7 @@ server:
 func TestToGlobalConfig(t *testing.T) {
 	dryRun := true
 	cleanup := false
-	allowMassDelete := true
-	ratioThreshold := 0.75
-	ratioMin := 20
-	absoluteMax := 250
+	allowNetwork := true
 
 	fileCfg := &FileConfig{
 		Logging: &FileLoggingConfig{
@@ -214,20 +211,18 @@ func TestToGlobalConfig(t *testing.T) {
 			Format: "json",
 		},
 		Reconciler: &FileReconcilerConfig{
-			Interval:                            "5m",
-			DryRun:                              &dryRun,
-			CleanupOrphans:                      &cleanup,
-			DetachedCleanupAllowMassDelete:      &allowMassDelete,
-			DetachedCleanupRatioThreshold:       &ratioThreshold,
-			DetachedCleanupRatioMinHostnames:    &ratioMin,
-			DetachedCleanupAbsoluteMaxHostnames: &absoluteMax,
+			Interval:       "5m",
+			DryRun:         &dryRun,
+			CleanupOrphans: &cleanup,
 		},
 		Docker: &FileDockerConfig{
 			Host: "tcp://docker:2375",
 			Mode: "standalone",
 		},
 		Server: &FileServerConfig{
-			Port: 8081,
+			Port:         8081,
+			Address:      "0.0.0.0",
+			AllowNetwork: &allowNetwork,
 		},
 	}
 
@@ -245,18 +240,6 @@ func TestToGlobalConfig(t *testing.T) {
 	if global.CleanupOrphans {
 		t.Error("CleanupOrphans should be false")
 	}
-	if !global.DetachedCleanupAllowMassDelete {
-		t.Error("DetachedCleanupAllowMassDelete should be true")
-	}
-	if global.DetachedCleanupRatioThreshold != ratioThreshold {
-		t.Errorf("DetachedCleanupRatioThreshold = %v, want %v", global.DetachedCleanupRatioThreshold, ratioThreshold)
-	}
-	if global.DetachedCleanupRatioMinHostnames != ratioMin {
-		t.Errorf("DetachedCleanupRatioMinHostnames = %d, want %d", global.DetachedCleanupRatioMinHostnames, ratioMin)
-	}
-	if global.DetachedCleanupAbsoluteMaxHostnames != absoluteMax {
-		t.Errorf("DetachedCleanupAbsoluteMaxHostnames = %d, want %d", global.DetachedCleanupAbsoluteMaxHostnames, absoluteMax)
-	}
 	if global.ReconcileInterval.String() != "5m0s" {
 		t.Errorf("ReconcileInterval = %s, want 5m0s", global.ReconcileInterval)
 	}
@@ -268,6 +251,9 @@ func TestToGlobalConfig(t *testing.T) {
 	}
 	if global.HealthPort != 8081 {
 		t.Errorf("HealthPort = %d, want %d", global.HealthPort, 8081)
+	}
+	if global.HealthAddress != "0.0.0.0" || !global.HealthAllowNetwork {
+		t.Errorf("health listener = %s allow=%v, want 0.0.0.0 allow=true", global.HealthAddress, global.HealthAllowNetwork)
 	}
 }
 

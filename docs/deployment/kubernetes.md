@@ -130,6 +130,7 @@ dnsweaver supports per-resource annotation overrides using the `dnsweaver.dev/` 
 | `dnsweaver.dev/ttl` | seconds (e.g., `300`) | Override the TTL |
 | `dnsweaver.dev/provider` | provider name | Route to a specific provider |
 | `dnsweaver.dev/proxied` | `true` / `false` | Enable Cloudflare proxy |
+| `dnsweaver.dev/adopt` | `true` / `false` | Enable or disable existing-record adoption. Enabling requires the matching provider's `ADOPT_EXISTING_ALLOW_OVERRIDES` gate. Disabling is always honored. |
 
 ### Example: Ingress with Annotations
 
@@ -180,11 +181,13 @@ spec:
 
 ## Health Endpoints
 
+The Helm chart and Kustomize base bind the management listener to pod loopback and use local exec probes. No network listener is needed for normal liveness or readiness checks.
+
 | Path | Description |
 | :--- | :---------- |
 | `/health` | Liveness probe — returns 200 when the process is running |
 | `/ready` | Readiness probe — returns 200 when watchers are synced |
-| `/metrics` | Prometheus metrics (when enabled) |
+| `/metrics` | Prometheus metrics (local-only by default) |
 
 ## Monitoring
 
@@ -192,10 +195,18 @@ Enable the ServiceMonitor for Prometheus scraping:
 
 ```yaml
 # Helm values
+config:
+  server:
+    address: 0.0.0.0
+    allowNetwork: true
 serviceMonitor:
   enabled: true
   interval: 60s
 ```
+
+This explicit opt-in is not authentication. Apply a NetworkPolicy that permits port 8080 only from the monitoring namespace (or an equivalent network restriction). The chart rejects a ServiceMonitor with its managed loopback configuration. With `existingConfigMap`, set `server.address` and `server.allow_network` in that ConfigMap because Helm cannot validate it.
+
+For Kustomize, make the same two server changes in the ConfigMap and add a restrictive NetworkPolicy overlay. Keep the default exec probes; they remain compatible with either listener mode.
 
 ## Troubleshooting
 

@@ -5,9 +5,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
 )
 
 // companionHTTPSSvcPriority is the SvcPriority used for auto-created companion HTTPS records.
@@ -18,15 +19,76 @@ const companionHTTPSSvcPriority = 1
 // "." means the record's owner name (self-referential), per RFC 9460 Section 2.5.
 const companionHTTPSTargetName = "."
 
+const companionStateKey = "technitium.companion_https"
+const protectedCompanionState = "protected"
+
+// companionHTTPS identifies only the format dnsweaver generates. Multiple,
+// disabled or customized HTTPS records are left under their existing control.
+func companionHTTPS(records []apiRecord, hostname string) (*apiRecord, bool) {
+	var companion *apiRecord
+	for _, record := range records {
+		if record.Type != "HTTPS" || !strings.EqualFold(strings.TrimSuffix(record.Name, "."), strings.TrimSuffix(hostname, ".")) {
+			continue
+		}
+		params := string(record.RData.SvcParams)
+		if companion != nil || record.Disabled || record.RData.SvcPriority != companionHTTPSSvcPriority ||
+			record.RData.SvcTargetName != companionHTTPSTargetName ||
+			!strings.HasPrefix(params, "alpn|") || len(params) == len("alpn|") ||
+			strings.Count(params, "|") != 1 || strings.ContainsAny(params, " \t\r\n") {
+			return nil, true
+		}
+		companion = &record
+	}
+	return companion, false
+}
+
+func companionState(record *apiRecord) string {
+	if record == nil {
+		return "missing"
+	}
+	return strconv.Itoa(record.TTL) + ":" + string(record.RData.SvcParams)
+}
+
+// RecordNeedsUpdate exposes companion drift to the normal ownership-gated
+// update path, including when the parent address itself has not changed.
+func (p *Provider) RecordNeedsUpdate(existing, desired provider.Record) bool {
+	if !p.autoHTTPSRecords || !needsCompanionHTTPS(desired.Type) {
+		return false
+	}
+	state, known := existing.Metadata[companionStateKey]
+	if !known || state == protectedCompanionState {
+		return false
+	}
+	ttl := desired.TTL
+	if ttl <= 0 {
+		ttl = p.ttl
+	}
+	return state != strconv.Itoa(ttl)+":"+buildSvcParams(p.autoHTTPSALPN)
+}
+
 // needsCompanionHTTPS returns true if the given record type should trigger
-// companion HTTPS record creation (A, AAAA, or CNAME).
+// companion HTTPS record creation (A or AAAA).
+//
+// CNAME is deliberately excluded: a CNAME is exclusive and cannot share an
+// owner name with an HTTPS record (RFC 1034 §3.6.2, RFC 2181 §10.1). Technitium
+// rejects the companion outright in that case, so attempting it only produced a
+// warning on every reconcile (issue #165). Hosts fronted by a CNAME inherit the
+// HTTPS record of the name they point at.
 func needsCompanionHTTPS(recordType provider.RecordType) bool {
 	switch recordType {
-	case provider.RecordTypeA, provider.RecordTypeAAAA, provider.RecordTypeCNAME:
+	case provider.RecordTypeA, provider.RecordTypeAAAA:
 		return true
 	default:
 		return false
 	}
+}
+
+// hadCompanionHTTPS returns true if a record of the given type may have a
+// companion HTTPS record left over from an earlier dnsweaver release, which
+// created companions for CNAME records too. Deletion stays broader than
+// creation so those leftovers are still cleaned up when the record is removed.
+func hadCompanionHTTPS(recordType provider.RecordType) bool {
+	return needsCompanionHTTPS(recordType) || recordType == provider.RecordTypeCNAME
 }
 
 // createCompanionHTTPS creates a companion HTTPS record for the given hostname.
@@ -38,8 +100,11 @@ func needsCompanionHTTPS(recordType provider.RecordType) bool {
 //
 // Skips creation if:
 //   - Auto HTTPS records are disabled
-//   - The record type doesn't need a companion (not A/AAAA/CNAME)
-//   - An HTTPS record already exists for the hostname (avoids overwriting manual records)
+//   - The record type doesn't need a companion (not A/AAAA)
+//   - A customized or ambiguous HTTPS record exists for the hostname
+//
+// An existing record matching the generated format is reconciled with the
+// configured ALPN and TTL. Callers must hold management authority for the parent.
 func (p *Provider) createCompanionHTTPS(ctx context.Context, hostname string, recordType provider.RecordType, ttl int) error {
 	if !p.autoHTTPSRecords {
 		return nil
@@ -48,24 +113,30 @@ func (p *Provider) createCompanionHTTPS(ctx context.Context, hostname string, re
 		return nil
 	}
 
-	// Check if an HTTPS record already exists for this hostname
-	// to avoid overwriting manually-created records
-	exists, err := p.hasHTTPSRecord(ctx, hostname)
+	// Re-read before mutation so a stale snapshot cannot overwrite a newly
+	// customized or ambiguous HTTPS RRset.
+	records, err := p.client.GetRecords(ctx, p.zone, hostname)
 	if err != nil {
-		p.logger.Warn("failed to check existing HTTPS records, skipping companion creation",
-			slog.String("hostname", hostname),
-			slog.String("error", err.Error()),
-		)
-		return nil
+		return fmt.Errorf("checking companion HTTPS record for %s: %w", hostname, err)
 	}
-	if exists {
-		p.logger.Debug("HTTPS record already exists, skipping companion creation",
+	existing, protected := companionHTTPS(records, hostname)
+	if protected {
+		p.logger.Debug("custom HTTPS records exist, skipping companion reconciliation",
 			slog.String("hostname", hostname),
 		)
 		return nil
 	}
 
 	svcParams := buildSvcParams(p.autoHTTPSALPN)
+	if existing != nil {
+		if existing.TTL == ttl && string(existing.RData.SvcParams) == svcParams {
+			return nil
+		}
+		return p.client.UpdateHTTPSRecord(ctx, p.zone, *existing, apiRecord{
+			Name: hostname, Type: "HTTPS", TTL: ttl,
+			RData: apiRData{SvcPriority: companionHTTPSSvcPriority, SvcTargetName: companionHTTPSTargetName, SvcParams: svcParamsValue(svcParams)},
+		})
+	}
 	if err := p.client.AddHTTPSRecord(ctx, p.zone, hostname, companionHTTPSSvcPriority, companionHTTPSTargetName, svcParams, ttl); err != nil {
 		// If Technitium reports conflict, treat as non-fatal (record already exists)
 		if strings.Contains(err.Error(), "record already exists") || strings.Contains(err.Error(), "Identical record") {
@@ -85,38 +156,59 @@ func (p *Provider) createCompanionHTTPS(ctx context.Context, hostname string, re
 }
 
 // deleteCompanionHTTPS removes the companion HTTPS record for the given hostname.
-// Only deletes records that match the auto-created format (priority 1, target ".", same ALPN).
+// Only deletes records that match the auto-created format (priority 1, target
+// ".", ALPN only). The observed ALPN may predate the current configuration.
 func (p *Provider) deleteCompanionHTTPS(ctx context.Context, hostname string, recordType provider.RecordType) error {
 	if !p.autoHTTPSRecords {
 		return nil
 	}
-	if !needsCompanionHTTPS(recordType) {
+	if !hadCompanionHTTPS(recordType) {
 		return nil
 	}
+	if needsCompanionHTTPS(recordType) {
+		hasAddress, err := p.hasAddressRecord(ctx, hostname)
+		if err != nil {
+			return err
+		}
+		if hasAddress {
+			p.logger.Debug("keeping companion HTTPS record for remaining address member",
+				slog.String("hostname", hostname),
+			)
+			return nil
+		}
+	}
 
-	svcParams := buildSvcParams(p.autoHTTPSALPN)
+	records, err := p.client.GetRecords(ctx, p.zone, hostname)
+	if err != nil {
+		return fmt.Errorf("checking companion HTTPS record for deletion: %w", err)
+	}
+	existing, protected := companionHTTPS(records, hostname)
+	if protected || existing == nil {
+		return nil
+	}
+	svcParams := string(existing.RData.SvcParams)
 	if err := p.client.DeleteHTTPSRecord(ctx, p.zone, hostname, companionHTTPSSvcPriority, companionHTTPSTargetName, svcParams); err != nil {
 		return fmt.Errorf("deleting companion HTTPS record for %s: %w", hostname, err)
 	}
 
 	p.logger.Info("deleted companion HTTPS record",
 		slog.String("hostname", hostname),
-		slog.String("alpn", p.autoHTTPSALPN),
+		slog.String("alpn", extractALPN(svcParams)),
 	)
 
 	return nil
 }
 
-// hasHTTPSRecord checks whether any HTTPS record exists for the given hostname.
-// Used to avoid overwriting manually-created HTTPS records.
-func (p *Provider) hasHTTPSRecord(ctx context.Context, hostname string) (bool, error) {
+// hasAddressRecord reports whether an A or AAAA member remains at hostname.
+// Companion HTTPS records belong to the address RRsets as a whole, so deleting
+// one round-robin member must not remove the companion while a sibling remains.
+func (p *Provider) hasAddressRecord(ctx context.Context, hostname string) (bool, error) {
 	records, err := p.client.GetRecords(ctx, p.zone, hostname)
 	if err != nil {
-		return false, fmt.Errorf("checking HTTPS records for %s: %w", hostname, err)
+		return false, fmt.Errorf("checking remaining address records for %s: %w", hostname, err)
 	}
-
-	for _, r := range records {
-		if r.Type == "HTTPS" {
+	for _, record := range records {
+		if record.Type == string(provider.RecordTypeA) || record.Type == string(provider.RecordTypeAAAA) {
 			return true, nil
 		}
 	}

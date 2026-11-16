@@ -11,6 +11,13 @@ const (
 	Namespace = "dnsweaver"
 )
 
+// Prometheus label names shared across multiple metric vectors below.
+const (
+	labelStatus    = "status"
+	labelProvider  = "provider"
+	labelOperation = "operation"
+)
+
 // Build info metric - set via SetBuildInfo on startup.
 var BuildInfo = promauto.NewGaugeVec(
 	prometheus.GaugeOpts{
@@ -30,7 +37,7 @@ var (
 			Name:      "reconciliations_total",
 			Help:      "Total number of reconciliation runs.",
 		},
-		[]string{"status"}, // "success", "error"
+		[]string{labelStatus}, // "success", "error"
 	)
 
 	// ReconciliationDuration tracks reconciliation duration in seconds.
@@ -60,6 +67,28 @@ var (
 			Help:      "Number of hostnames discovered in the last reconciliation.",
 		},
 	)
+
+	// DesiredRecordMembers counts distinct provider-routed DNS members.
+	DesiredRecordMembers = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: Namespace,
+			Name:      "desired_record_members",
+			Help:      "Number of distinct provider-routed DNS record members in the last reconciliation.",
+		},
+	)
+)
+
+// Ownership storage metrics.
+var (
+	// OwnershipStorageMode reports the configured DNS ownership representation.
+	OwnershipStorageMode = promauto.NewGaugeVec(prometheus.GaugeOpts{Namespace: Namespace, Name: "ownership_storage_mode", Help: "Effective DNS ownership storage mode (1=enabled)."}, []string{labelProvider, "mode"})
+	// OwnershipStateValid reports the last ownership snapshot validation result.
+	OwnershipStateValid = promauto.NewGaugeVec(prometheus.GaugeOpts{Namespace: Namespace, Name: "ownership_state_valid", Help: "Whether the last ownership snapshot was complete and valid."}, []string{labelProvider})
+	// OwnershipEntries counts committed compact claims for this process's owner.
+	OwnershipEntries = promauto.NewGaugeVec(prometheus.GaugeOpts{Namespace: Namespace, Name: "ownership_entries", Help: "Committed compact ownership entries for the local logical owner."}, []string{labelProvider})
+	// OwnershipStateRecords counts observed local ownership TXT records, including
+	// predecessor manifests, legacy markers and discoverable staged pages.
+	OwnershipStateRecords = promauto.NewGaugeVec(prometheus.GaugeOpts{Namespace: Namespace, Name: "ownership_state_records", Help: "Observed physical ownership TXT records for the local logical owner."}, []string{labelProvider})
 )
 
 // Record operation metrics.
@@ -71,7 +100,7 @@ var (
 			Name:      "records_created_total",
 			Help:      "Total number of DNS records created.",
 		},
-		[]string{"provider"},
+		[]string{labelProvider},
 	)
 
 	// RecordsDeletedTotal counts DNS records deleted.
@@ -81,7 +110,7 @@ var (
 			Name:      "records_deleted_total",
 			Help:      "Total number of DNS records deleted.",
 		},
-		[]string{"provider"},
+		[]string{labelProvider},
 	)
 
 	// RecordsSkippedTotal counts skipped record operations.
@@ -101,7 +130,7 @@ var (
 			Name:      "records_failed_total",
 			Help:      "Total number of failed record operations.",
 		},
-		[]string{"provider", "operation"}, // operation: "create", "delete"
+		[]string{labelProvider, labelOperation}, // operation: "create", "delete"
 	)
 )
 
@@ -114,7 +143,7 @@ var (
 			Name:      "provider_api_requests_total",
 			Help:      "Total number of API requests to DNS providers.",
 		},
-		[]string{"provider", "operation", "status"}, // operation: "ping", "list", "create", "delete"; status: "success", "error"
+		[]string{labelProvider, labelOperation, labelStatus}, // operation: "ping", "list", "create", "delete"; status: "success", "error"
 	)
 
 	// ProviderAPIDuration tracks provider API request duration.
@@ -125,7 +154,7 @@ var (
 			Help:      "Duration of provider API requests in seconds.",
 			Buckets:   prometheus.DefBuckets,
 		},
-		[]string{"provider", "operation"},
+		[]string{labelProvider, labelOperation},
 	)
 
 	// ProviderHealthy tracks provider health status (1=healthy, 0=unhealthy).
@@ -135,7 +164,7 @@ var (
 			Name:      "provider_healthy",
 			Help:      "Provider health status (1=healthy, 0=unhealthy).",
 		},
-		[]string{"provider"},
+		[]string{labelProvider},
 	)
 
 	// ProviderAvailable tracks provider availability status (1=ready, 0=pending initialization).
@@ -156,7 +185,7 @@ var (
 			Name:      "provider_init_retries_total",
 			Help:      "Total number of provider initialization retry attempts.",
 		},
-		[]string{"provider", "status"}, // status: "success", "failed"
+		[]string{labelProvider, labelStatus}, // status: "success", "failed"
 	)
 
 	// ProvidersReady tracks the number of ready providers.
@@ -227,6 +256,29 @@ var (
 			Namespace: Namespace,
 			Name:      "docker_watcher_reconnects_total",
 			Help:      "Total number of Docker watcher reconnections.",
+		},
+	)
+)
+
+// Incus watcher metrics.
+var (
+	// IncusEventsProcessed counts Incus events processed, labeled by lifecycle
+	// action (e.g. "instance-started") or event type when no action is present.
+	IncusEventsProcessed = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: Namespace,
+			Name:      "incus_events_processed_total",
+			Help:      "Total number of Incus events processed.",
+		},
+		[]string{"action"},
+	)
+
+	// IncusWatcherReconnects counts Incus event watcher reconnections.
+	IncusWatcherReconnects = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: Namespace,
+			Name:      "incus_watcher_reconnects_total",
+			Help:      "Total number of Incus watcher reconnections.",
 		},
 	)
 )

@@ -8,12 +8,13 @@ import (
 	"net/http"
 	"time"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
 )
 
 // Provider implements provider.Provider for webhook-based DNS.
 type Provider struct {
 	name       string
+	url        string // Webhook base URL (recorded for Identity reporting)
 	client     *Client
 	httpClient *http.Client // Custom HTTP client (optional)
 	logger     *slog.Logger
@@ -54,6 +55,7 @@ func New(name string, config *Config, opts ...ProviderOption) (*Provider, error)
 
 	p := &Provider{
 		name:   name,
+		url:    config.URL,
 		logger: slog.Default(),
 	}
 
@@ -142,6 +144,17 @@ func (p *Provider) Name() string {
 // Type returns "webhook".
 func (p *Provider) Type() string {
 	return "webhook"
+}
+
+// Identity returns the backend identity for this provider instance.
+// Webhook providers have no inherent "zone" — two webhook instances are
+// considered the same backend when they target the same URL
+// (see provider.ProviderIdentity, issue #88).
+func (p *Provider) Identity() provider.ProviderIdentity {
+	return provider.ProviderIdentity{
+		Type:     "webhook",
+		Endpoint: p.url,
+	}
 }
 
 // Capabilities returns the provider's feature support.
@@ -252,7 +265,15 @@ func (p *Provider) Create(ctx context.Context, record provider.Record) error {
 
 // Delete removes a DNS record via the webhook.
 func (p *Provider) Delete(ctx context.Context, record provider.Record) error {
-	err := p.client.Delete(ctx, record.Hostname, string(record.Type))
+	var srv *SRVData
+	if record.SRV != nil {
+		srv = &SRVData{
+			Priority: record.SRV.Priority,
+			Weight:   record.SRV.Weight,
+			Port:     record.SRV.Port,
+		}
+	}
+	err := p.client.Delete(ctx, record.Hostname, string(record.Type), record.Target, srv)
 	if err != nil {
 		return fmt.Errorf("deleting %s record: %w", record.Type, err)
 	}

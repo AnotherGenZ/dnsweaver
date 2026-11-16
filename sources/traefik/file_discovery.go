@@ -35,12 +35,6 @@ func (p *Parser) DiscoverFromFiles(ctx context.Context, paths []string, pattern 
 	for _, path := range paths {
 		info, err := os.Stat(path)
 		if err != nil {
-			if os.IsNotExist(err) {
-				p.logger.Warn("traefik config path does not exist",
-					"path", path,
-				)
-				continue
-			}
 			return nil, fmt.Errorf("stat %s: %w", path, err)
 		}
 
@@ -66,7 +60,11 @@ func (p *Parser) DiscoverFromFiles(ctx context.Context, paths []string, pattern 
 
 	// Parse each file
 	var allExtractions []HostnameExtraction
-	seen := make(map[string]struct{}) // Deduplicate across files
+	type seenKey struct {
+		hostname   string
+		entrypoint string
+	}
+	seen := make(map[seenKey]struct{}) // Deduplicate (hostname, entrypoint) across files
 
 	for _, file := range allFiles {
 		select {
@@ -77,16 +75,13 @@ func (p *Parser) DiscoverFromFiles(ctx context.Context, paths []string, pattern 
 
 		extractions, err := p.parseConfigFile(file)
 		if err != nil {
-			p.logger.Warn("failed to parse traefik config file",
-				"file", file,
-				"error", err.Error(),
-			)
-			continue
+			return nil, fmt.Errorf("reading traefik config %s: %w", file, err)
 		}
 
 		for _, e := range extractions {
-			if _, exists := seen[e.Hostname]; !exists {
-				seen[e.Hostname] = struct{}{}
+			k := seenKey{hostname: e.Hostname, entrypoint: e.EntryPoint}
+			if _, exists := seen[k]; !exists {
+				seen[k] = struct{}{}
 				allExtractions = append(allExtractions, e)
 			}
 		}
@@ -186,6 +181,12 @@ func (p *Parser) parseTOMLFile(path string) ([]HostnameExtraction, error) {
 }
 
 // extractFromConfig extracts hostnames from a parsed Traefik config.
+//
+// Routers that declare `entryPoints: [webA, webB]` fan out into one
+// extraction per (host, entrypoint) pair so per-instance entrypoint
+// filtering can claim each pair independently. Routers without
+// entrypoints produce a single extraction with EntryPoint="" — wildcard
+// semantics that match any DNSWEAVER_{NAME}_ENTRYPOINTS filter.
 func (p *Parser) extractFromConfig(config *traefikFileConfig, path string) ([]HostnameExtraction, error) {
 	var extractions []HostnameExtraction
 
@@ -200,16 +201,39 @@ func (p *Parser) extractFromConfig(config *traefikFileConfig, path string) ([]Ho
 		}
 
 		hosts := extractHostsFromRule(router.Rule)
+		eps := router.EntryPoints
+		// If router declared no entrypoints and the source was configured
+		// with DefaultEntryPoints (Traefik `asDefault` mirror), fan out across
+		// those defaults instead of treating the router as wildcard.
+		if len(eps) == 0 && len(p.defaultEntryPoints) > 0 {
+			eps = p.defaultEntryPoints
+		}
 		for _, hostname := range hosts {
-			extractions = append(extractions, HostnameExtraction{
-				Hostname: hostname,
-				Router:   routerName,
-			})
-			p.logger.Debug("extracted hostname from file",
-				"hostname", hostname,
-				"router", routerName,
-				"file", path,
-			)
+			if len(eps) == 0 {
+				extractions = append(extractions, HostnameExtraction{
+					Hostname: hostname,
+					Router:   routerName,
+				})
+				p.logger.Debug("extracted hostname from file",
+					"hostname", hostname,
+					"router", routerName,
+					"file", path,
+				)
+				continue
+			}
+			for _, ep := range eps {
+				extractions = append(extractions, HostnameExtraction{
+					Hostname:   hostname,
+					Router:     routerName,
+					EntryPoint: ep,
+				})
+				p.logger.Debug("extracted hostname from file",
+					"hostname", hostname,
+					"router", routerName,
+					"entrypoint", ep,
+					"file", path,
+				)
+			}
 		}
 	}
 
@@ -229,6 +253,7 @@ type traefikHTTPConfig struct {
 }
 
 type traefikRouter struct {
-	Rule string `yaml:"rule" toml:"rule"`
-	// EntryPoints, Service, Middlewares, etc. are intentionally ignored
+	Rule        string   `yaml:"rule" toml:"rule"`
+	EntryPoints []string `yaml:"entryPoints" toml:"entryPoints"`
+	// Service, Middlewares, etc. are intentionally ignored
 }

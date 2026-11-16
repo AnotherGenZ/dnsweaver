@@ -1,15 +1,20 @@
+---
+title: FAQ
+description: Frequently asked questions about dnsweaver — how it compares to external-dns, supported providers and platforms, ownership tracking, and troubleshooting.
+---
+
 # Frequently Asked Questions
 
 ## General
 
 ### What's the difference between dnsweaver and external-dns?
 
-external-dns is primarily designed for Kubernetes and cloud DNS providers. dnsweaver supports both Docker and Kubernetes with:
+external-dns is primarily designed for Kubernetes and cloud DNS providers. dnsweaver reads from seven sources and writes to twelve providers:
 
-- First-class Docker Swarm and Kubernetes support
-- Self-hosted DNS provider focus (Technitium, Pi-hole, dnsmasq)
+- Seven sources as peers: Traefik, Caddy, nginx-proxy, native labels, Kubernetes, Proxmox VE, and Incus
+- Self-hosted DNS provider focus (Technitium, Pi-hole, AdGuard Home, dnsmasq, OPNsense, pfSense, UniFi Network)
 - Multi-provider for split-horizon DNS
-- Platform-agnostic design (Docker, Kubernetes, or both simultaneously)
+- Run any combination of sources simultaneously, set with `DNSWEAVER_SOURCES`
 - Simpler configuration via environment variables or YAML
 
 ### Do I need to run dnsweaver on every Docker host?
@@ -24,6 +29,10 @@ dnsweaver watches Kubernetes resources (Ingress, IngressRoute, HTTPRoute, Servic
 
 Yes! Set `DNSWEAVER_PLATFORM=both` to watch Docker events and Kubernetes resources simultaneously. This is useful for mixed environments or gradual migrations between platforms.
 
+### Can I run dnsweaver without Docker or Kubernetes?
+
+Yes. Set `DNSWEAVER_PLATFORM=none` (alias `standalone`) to run dnsweaver as a bare binary on a host, VM, or LXC with no container runtime. No Docker or Kubernetes client is created, so it won't fail with `Cannot connect to the Docker daemon`. You must configure at least one non-container source — a Proxmox VE source (`DNSWEAVER_PROXMOX_URL`), an Incus source (`DNSWEAVER_INCUS_URL`/`DNSWEAVER_INCUS_SOCKET_PATH`), or a file-discovery source (e.g. `DNSWEAVER_SOURCE_TRAEFIK_FILE_PATHS`). See [Standalone](configuration/environment.md#standalone-no-docker-or-kubernetes) for a full example.
+
 ### Can dnsweaver manage existing DNS records?
 
 By default, dnsweaver only manages records it creates (tracked via ownership TXT records). To adopt existing records:
@@ -34,6 +43,10 @@ By default, dnsweaver only manages records it creates (tracked via ownership TXT
 
 !!! warning
     This will modify existing records. Test with `DRY_RUN=true` first.
+
+You can override the policy for one provider or workload. Workload labels may
+only enable adoption when the matching provider explicitly allows it. See
+[Existing-record adoption](configuration/environment.md#existing-record-adoption).
 
 ## Configuration
 
@@ -119,7 +132,7 @@ In addition to the standard provider configuration, Kubernetes-specific options 
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DNSWEAVER_PLATFORM` | Platform to watch: `docker`, `kubernetes`, or `both` | `docker` |
+| `DNSWEAVER_PLATFORM` | Platform to watch: `docker`, `kubernetes`, `both`, or `none` | `docker` |
 | `DNSWEAVER_KUBE_NAMESPACES` | Comma-separated list of namespaces to watch | All namespaces |
 | `DNSWEAVER_KUBE_LABEL_SELECTOR` | Label selector to filter watched resources | None |
 
@@ -206,7 +219,7 @@ docker exec dnsweaver ls -la /var/run/docker.sock
 ```
 
 !!! tip
-    If running on Kubernetes only, set `DNSWEAVER_PLATFORM=kubernetes` to skip the Docker connection entirely.
+    If running on Kubernetes only, set `DNSWEAVER_PLATFORM=kubernetes` to skip the Docker connection entirely. If running with no container runtime at all (e.g. a bare host or LXC using only the Proxmox or a file-discovery source), set `DNSWEAVER_PLATFORM=none`.
 
 ### "Failed to create Kubernetes watcher"
 
@@ -228,13 +241,38 @@ Verify credentials:
 
 ### "TLS certificate verification failed"
 
-For self-signed certificates:
+For servers using a private/internal CA, supply the CA bundle so the chain
+validates normally:
 
 ```yaml
-- DNSWEAVER_{INSTANCE}_INSECURE_SKIP_VERIFY=true
+- DNSWEAVER_{INSTANCE}_TLS_CA_FILE=/run/secrets/internal_ca.pem
 ```
 
-Or add the CA certificate to dnsweaver's trust store.
+For mutual-TLS (server requires a client certificate):
+
+```yaml
+- DNSWEAVER_{INSTANCE}_TLS_CA_FILE=/run/secrets/internal_ca.pem
+- DNSWEAVER_{INSTANCE}_TLS_CERT_FILE=/run/secrets/dnsweaver.crt
+- DNSWEAVER_{INSTANCE}_TLS_KEY_FILE=/run/secrets/dnsweaver.key
+```
+
+If you connect by IP but the certificate is issued for a hostname, override
+the SNI / verification name:
+
+```yaml
+- DNSWEAVER_{INSTANCE}_TLS_SERVER_NAME=dns.internal.example.com
+```
+
+As a last resort for self-signed certificates that cannot be supplied as a CA
+bundle, you can disable verification entirely — this removes MITM protection
+and is **not recommended for production**:
+
+```yaml
+- DNSWEAVER_{INSTANCE}_TLS_SKIP_VERIFY=true
+```
+
+The legacy `INSECURE_SKIP_VERIFY` variable still works but emits a deprecation
+warning and will be removed in a future major release.
 
 ### Records created but not resolving
 

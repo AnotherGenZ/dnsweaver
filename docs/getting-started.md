@@ -1,3 +1,8 @@
+---
+title: Getting Started
+description: Install dnsweaver and set up automatic DNS records for containers, VMs and clusters in minutes. First provider configuration and your first auto-created record.
+---
+
 # Getting Started
 
 This guide walks you through installing dnsweaver and setting up your first DNS provider on Docker or Kubernetes.
@@ -227,6 +232,27 @@ For production deployments, avoid passing credentials as plain environment varia
 
 See [Secrets Management](configuration/secrets.md) for more details.
 
+## How It Works
+
+Once dnsweaver is running, DNS records track the lifecycle of your workloads
+automatically:
+
+```mermaid
+sequenceDiagram
+    participant C as Container / Resource
+    participant D as dnsweaver
+    participant P as DNS provider
+    C->>D: starts with a hostname label / annotation
+    D->>D: extract hostname, match domain patterns
+    D->>P: create record (A / CNAME / ...)
+    Note over D,P: record stays in sync while the workload runs
+    C->>D: stops or is deleted
+    D->>P: delete record (ownership-tracked)
+```
+
+Records that dnsweaver created are tracked so it only ever modifies or removes
+its own entries — DNS you manage by hand is never touched.
+
 ## Verify It's Working
 
 === "Docker"
@@ -238,13 +264,12 @@ See [Secrets Management](configuration/secrets.md) for more details.
 
     2. **Check health endpoint:**
        ```bash
-       curl http://localhost:8080/health
+       docker exec dnsweaver /usr/local/bin/dnsweaver --healthcheck
        ```
 
-    3. **View metrics:**
-       ```bash
-       curl http://localhost:8080/metrics
-       ```
+    3. **View metrics:** Metrics are local to the container by default. See
+       [Network access](observability.md#network-access) before publishing the
+       management port for a restricted monitoring client.
 
     4. **Start a container with Traefik labels:**
        ```bash
@@ -269,8 +294,8 @@ See [Secrets Management](configuration/secrets.md) for more details.
 
     3. **Check health endpoint:**
        ```bash
-       kubectl port-forward -n dnsweaver svc/dnsweaver 8080:8080
-       curl http://localhost:8080/health
+       kubectl exec -n dnsweaver deploy/dnsweaver -- \
+         /usr/local/bin/dnsweaver --healthcheck
        ```
 
     4. **Create a test Ingress:**

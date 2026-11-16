@@ -1,13 +1,16 @@
 ---
-title: Automatic DNS for Docker & Kubernetes
-description: dnsweaver automatically manages DNS records for Docker containers and Kubernetes workloads with multi-provider support
+title: Automatic DNS records for containers, VMs & clusters
+description: dnsweaver reads hostnames from seven sources (Traefik, Caddy, nginx-proxy, native labels, Kubernetes, Proxmox VE, Incus) and writes records to twelve DNS providers, with split-horizon out of the box.
 ---
 
 # dnsweaver
 
-**Automatic DNS management for Docker and Kubernetes workloads with multi-provider support.**
+**Automatic DNS records for containers, VMs & clusters.**
 
-dnsweaver watches Docker events and Kubernetes resources to automatically create and delete DNS records. Unlike single-provider or single-platform tools, dnsweaver supports **split-horizon DNS**, **multiple DNS providers** simultaneously, and works across **Docker**, **Docker Swarm**, and **Kubernetes** — or all of them at once.
+dnsweaver reads hostnames from seven sources and writes records to twelve DNS providers. A container starts with a Traefik label or a Proxmox VM boots, and the record appears; when they go away, so does it. Internal and external records come from the same labels, so **split-horizon** costs nothing extra.
+
+![Seven sources feed dnsweaver, which writes to twelve DNS providers](assets/brand/flow-light.svg#only-light){ .dnsw-flow }
+![Seven sources feed dnsweaver, which writes to twelve DNS providers](assets/brand/flow-dark.svg#only-dark){ .dnsw-flow }
 
 ---
 
@@ -19,7 +22,7 @@ dnsweaver watches Docker events and Kubernetes resources to automatically create
 
     ---
 
-    Route different domains to different DNS providers. Technitium, Cloudflare, Pi-hole, dnsmasq, and webhook—all at once.
+    Route different domains to different DNS providers. Twelve providers: Technitium, Cloudflare, OVHcloud, AdGuard Home, RFC 2136, PowerDNS, OPNsense, pfSense, UniFi Network, Pi-hole, dnsmasq, and webhook.
 
     [:octicons-arrow-right-24: Providers](providers/index.md)
 
@@ -31,13 +34,29 @@ dnsweaver watches Docker events and Kubernetes resources to automatically create
 
     [:octicons-arrow-right-24: Split-Horizon Guide](deployment/split-horizon.md)
 
--   :material-docker:{ .lg .middle } **Docker, Swarm & Kubernetes**
+-   :material-source-branch:{ .lg .middle } **Seven Sources**
 
     ---
 
-    First-class support for Docker, Docker Swarm, and Kubernetes. Run on one platform or all three simultaneously.
+    Traefik, Caddy, nginx-proxy, native labels, Kubernetes, Proxmox VE, and Incus. All peers. Enable any combination with `DNSWEAVER_SOURCES`.
 
     [:octicons-arrow-right-24: Sources Overview](sources/index.md)
+
+-   :material-server:{ .lg .middle } **Proxmox VE**
+
+    ---
+
+    Auto-creates A records for VMs and LXC containers by polling the PVE API. Filter by node, tag, or VM state.
+
+    [:octicons-arrow-right-24: Proxmox Source](sources/proxmox.md)
+
+-   :material-cube-outline:{ .lg .middle } **Incus**
+
+    ---
+
+    Auto-creates A records for Incus system containers and VMs over a local socket or remote HTTPS.
+
+    [:octicons-arrow-right-24: Incus Source](sources/incus.md)
 
 -   :material-chart-line:{ .lg .middle } **Observable**
 
@@ -53,9 +72,29 @@ dnsweaver watches Docker events and Kubernetes resources to automatically create
 
 ```mermaid
 flowchart LR
-    A["Docker Events"] --> B["dnsweaver<br/>(matching)"]
-    D["Kubernetes Resources"] --> B
-    B --> C["DNS Providers<br/>(A/CNAME/SRV)"]
+    subgraph sources["Sources"]
+        direction TB
+        A["Docker / Swarm<br/>Traefik · Caddy · nginx labels"]
+        D["Kubernetes<br/>Ingress · HTTPRoute · Service"]
+        P["Proxmox VE · Incus<br/>VMs · LXC"]
+    end
+
+    subgraph engine["dnsweaver"]
+        direction TB
+        W["Watch<br/>events"] --> M["Match hostname<br/>to domain patterns"] --> R["Reconcile<br/>desired vs. live"]
+    end
+
+    subgraph providers["DNS providers · split-horizon"]
+        direction TB
+        INT["Internal<br/>Technitium · Pi-hole · AdGuard"]
+        EXT["External<br/>Cloudflare · OVH · RFC 2136"]
+    end
+
+    A --> W
+    D --> W
+    P --> W
+    R -->|create / update / delete| INT
+    R -->|create / update / delete| EXT
 ```
 
 === "Docker / Swarm"
@@ -67,7 +106,7 @@ flowchart LR
           - "traefik.http.routers.myapp.rule=Host(`myapp.home.example.com`)" # (1)!
         ```
 
-        1. dnsweaver extracts hostnames from Traefik, Caddy, and native labels
+        1. dnsweaver extracts hostnames from Traefik router labels and native `dnsweaver.*` labels
 
     2. dnsweaver extracts the hostname and matches it against configured provider domain patterns
 
@@ -101,6 +140,40 @@ flowchart LR
 
     4. When the resource is deleted, the DNS record is automatically cleaned up
 
+=== "Proxmox VE"
+
+    1. A VM or LXC container is running with a QEMU guest agent (or LXC network configured):
+
+        ```bash
+        # VM example: qm set 100 --name myvm --tags web # (1)!
+        ```
+
+        1. dnsweaver polls the PVE API and discovers VMs via QEMU guest agent IPs or LXC container IPs from net0 config
+
+    2. dnsweaver extracts the VM or LXC hostname and IP, then matches against configured provider domain patterns
+
+    3. The matching provider creates the DNS record:
+        - **A record**: `myvm.home.example.com → 192.0.2.10`
+
+    4. When the VM or LXC is stopped or deleted, the DNS record is automatically cleaned up
+
+=== "Incus"
+
+    1. An Incus system container or VM is running with a resolvable IP:
+
+        ```bash
+        # Example: incus launch images:debian/12 myinstance # (1)!
+        ```
+
+        1. dnsweaver polls the Incus API (local socket or remote HTTPS) and discovers instances via their network state
+
+    2. dnsweaver extracts the instance hostname and IP, then matches against configured provider domain patterns
+
+    3. The matching provider creates the DNS record:
+        - **A record**: `myinstance.home.example.com → 192.0.2.20`
+
+    4. When the instance is stopped or deleted, the DNS record is automatically cleaned up
+
 ## Quick Start
 
 === "Docker Compose"
@@ -125,7 +198,7 @@ flowchart LR
     ```
 
     1. Comma-separated list of provider instance names
-    2. Provider type: `technitium`, `cloudflare`, `pihole`, `dnsmasq`, `rfc2136`, or `webhook`
+    2. Provider type: `technitium`, `cloudflare`, `pihole`, `adguard`, `unifi`, `dnsmasq`, `rfc2136`, or `webhook`
     3. Target IP for A records (or CNAME target hostname)
     4. Domain patterns to match—wildcards supported
 
@@ -161,10 +234,14 @@ flowchart LR
 | Provider | Record Types | Notes |
 | :------- | :----------- | :---- |
 | [Technitium](providers/technitium.md) | A, AAAA, CNAME, SRV, TXT | Full-featured self-hosted DNS |
-| [Cloudflare](providers/cloudflare.md) | A, AAAA, CNAME, TXT | With optional proxy support |
+| [Cloudflare](providers/cloudflare.md) | A, AAAA, CNAME, SRV, TXT | With optional proxy support |
+| [OVHcloud](providers/ovh.md) | A, AAAA, CNAME, SRV, TXT | Public DNS for OVH-hosted domains |
 | [RFC 2136](providers/rfc2136.md) | A, AAAA, CNAME, SRV, TXT | BIND, Windows DNS, PowerDNS, Knot |
-| [Pi-hole](providers/pihole.md) | A, AAAA, CNAME | API or file mode |
-| [dnsmasq](providers/dnsmasq.md) | A, AAAA, CNAME | File-based configuration |
+| [PowerDNS](providers/powerdns.md) | A, AAAA, CNAME, SRV, TXT | Native Authoritative HTTP API |
+| [Pi-hole](providers/pihole.md) | A, CNAME | API or file mode |
+| [AdGuard Home](providers/adguard.md) | A, AAAA, CNAME | DNS rewrite management |
+| [UniFi Network](providers/unifi.md) | A, AAAA, CNAME, SRV, TXT | Official Integration API (Network 10.6+, served by a UniFi gateway) |
+| [dnsmasq](providers/dnsmasq.md) | A, CNAME | File-based configuration |
 | [Webhook](providers/webhook.md) | A, AAAA, CNAME, TXT | Custom integrations |
 
 </div>
@@ -177,6 +254,8 @@ flowchart LR
 | :--- | :---: | :---: | :---: |
 | Docker support | :material-check: | :material-close: | :material-check: |
 | Kubernetes support | :material-check: | :material-check: | :material-close: |
+| Proxmox VE support | :material-check: | :material-close: | :material-close: |
+| Incus support | :material-check: | :material-close: | :material-close: |
 | Multiple providers | :material-check: | :material-close: | :material-close: |
 | Split-horizon DNS | :material-check: | :material-close: | :material-close: |
 | Self-hosted DNS focus | :material-check: | :material-close: | :material-close: |

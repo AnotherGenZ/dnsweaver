@@ -1,14 +1,14 @@
 # Release Checklist
 
-Pre-release testing protocol for dnsweaver. Every item must pass before tagging a release.
+Release verification for dnsweaver. Complete the source checks before tagging, then qualify the versioned images before publication. Record evidence or an explicit limitation for each applicable item. The [release procedure](../contributing/releases.md) defines the publication and recovery steps.
 
 ## Quick Reference
 
 ```bash
 # Run the full pre-release validation locally
-gofmt -w . && gofmt -l .
-golangci-lint run ./...
-go test ./... -count=1 -race
+test -z "$(gofmt -l .)"
+golangci-lint run --config .golangci.yml
+go test -race -count=1 ./...
 go build ./...
 make test-integration  # Requires test environment
 ```
@@ -17,7 +17,7 @@ make test-integration  # Requires test environment
 
 ## 1. Automated CI Checks
 
-These checks run automatically in the GitLab CI pipeline. Verify all pass on the release branch.
+GitHub Actions runs source checks on pull requests and main. GitLab also checks qualifying source changes and version tags. Complete source checks on the exact merged commit before tagging. Then complete image qualification and release assembly for the exact tag before publication.
 
 | Check | Command | Pass Criteria |
 |-------|---------|---------------|
@@ -27,8 +27,13 @@ These checks run automatically in the GitLab CI pipeline. Verify all pass on the
 | ☐ Race detection | `go test ./... -race` | No data races detected |
 | ☐ Build | `go build ./...` | Clean build, no errors |
 | ☐ Docker build | `docker build .` | Image builds successfully |
-| ☐ SBOM generation | CI artifact | SBOM generated for release |
-| ☐ Security scan | `gitleaks detect` | No secret leaks |
+| ☐ Dependency gate | `./scripts/govulncheck-gate.sh` | Structured scan completes; every finding is fixed or has a current accepted exception |
+| ☐ Secret scan | GitLab `security:gitleaks` | Checked-out tree has no detected secret |
+| ☐ Native image qualification | GitLab `docker:build:amd64` and `docker:build:arm64` | Each exact digest passes version, health, listener and readiness checks on its native architecture |
+| ☐ Image scans | GitLab `security:container:amd64` and `security:container:arm64` | Each qualified digest passes the reviewed HIGH/CRITICAL vulnerability policy and has a matching SBOM |
+| ☐ Release assembly | GitLab `release:assemble` | Index contains exactly the two qualified architecture digests; provenance, SBOMs and checksums match |
+
+The publication job promotes the qualified digests without rebuilding. Review the retained evidence for the exact tag and inspect public assets for private data before publication. Provenance is an unsigned declared build record, not a signed attestation. A green branch pipeline does not qualify a later squash commit or a different embedded release version.
 
 ## 2. Manual Integration Tests
 
@@ -91,17 +96,21 @@ For each source enabled in the test environment:
 | ☐ CHANGELOG.md has release date and version header | |
 | ☐ Git tag follows SemVer (`vMAJOR.MINOR.PATCH`) | |
 | ☐ Docker image tagged and pushed to registry | |
-| ☐ GitHub release created (if public) | |
-| ☐ SBOM attached to release | |
+| ☐ Versioned amd64/arm64 images qualified before public promotion | |
+| ☐ Explicit publication approval recorded before the manual `github:release` job | |
+| ☐ GitHub Release published by the manual job | |
+| ☐ Both SBOMs, unsigned provenance and SHA256SUMS attached and verified | |
 
 ## 5. Post-Release Verification
 
 | Check | Status |
 |-------|--------|
-| ☐ Docker image pulls successfully | |
+| ☐ Public images pull by digest from GHCR and Docker Hub; both platforms and embedded versions match | |
+| ☐ Intended version/latest aliases and GitHub latest-release pointer read back | |
+| ☐ Downloaded release assets match SHA256SUMS | |
 | ☐ Fresh deployment with example config works | |
 | ☐ GitLab pipeline for tag completed successfully | |
-| ☐ GitHub mirror release (if applicable) synced | |
+| ☐ GitHub Release published, notes match CHANGELOG.md | |
 
 ---
 
@@ -117,48 +126,15 @@ See the [CHANGELOG](https://github.com/maxfield-allison/dnsweaver/blob/main/CHAN
 
 ## Release Workflow
 
-```bash
-# 1. Ensure develop is clean and all checks pass
-git checkout develop
-git pull origin develop
-gofmt -w . && golangci-lint run ./... && go test ./... -count=1 -race && go build ./...
+GitHub is the public source. The `Sync to GitLab` workflow mirrors merged `main` commits and version tags. A tag starts qualification; publication waits for the manual `github:release` job and maintainer approval.
 
-# 2. Merge to main
-git checkout main
-git pull origin main
-git merge develop --no-edit
-
-# 3. Tag the release
-git tag -a v1.0.0 -m "v1.0.0 - Description of release"
-
-# 4. Push
-git push origin main --tags
-
-# 5. Verify CI pipeline runs release jobs
-# GitLab CI will: build Docker image, push to registry, create release, mirror to GitHub
-```
+1. Verify the merged commit on both forges and complete its source checks. Use an isolated checkout; preserve any unrelated local work.
+2. Prepare and merge a version/changelog PR. Include migration instructions, update the Helm chart's version and default application image tag, and review the release notes. The publication job draws its notes from the versioned changelog section.
+3. With approval for the exact commit and version, create and push the public tag. Confirm that the mirror starts the tag pipeline.
+4. Inspect both native architecture jobs, image scans, the assembled index, SBOMs, unsigned provenance and checksums. Branch-version images do not substitute for tag-version qualification.
+5. With publication approval, run the manual `github:release` job. Follow the [release procedure](../contributing/releases.md) for retry and rollback; never move an existing tag to conceal a mismatch.
+6. Verify the public registries, assets and intended aliases. Deployment is a separate action.
 
 ## Hotfix Workflow
 
-For critical fixes that can't wait for the next release:
-
-```bash
-# 1. Branch from main
-git checkout -b hotfix/v1.0.1 main
-
-# 2. Apply fix, run all checks
-gofmt -w . && golangci-lint run ./... && go test ./... -count=1
-
-# 3. Update CHANGELOG.md
-
-# 4. Merge to main and tag
-git checkout main
-git merge hotfix/v1.0.1
-git tag -a v1.0.1 -m "v1.0.1 - Hotfix: description"
-git push origin main --tags
-
-# 5. Backport to develop
-git checkout develop
-git merge hotfix/v1.0.1
-git push origin develop
-```
+A hotfix follows the same sequence: merge a focused fix against `main`, prepare the patch version and changelog, qualify the exact tag, then publish with approval. A smaller source change does not remove the artifact verification or post-publication checks.

@@ -6,10 +6,10 @@ import (
 	"os"
 	"sync"
 
-	"gitlab.bluewillows.net/root/dnsweaver/internal/matcher"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
+	"github.com/maxfield-allison/dnsweaver/internal/matcher"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/source"
+	"github.com/maxfield-allison/dnsweaver/pkg/workload"
 )
 
 // =============================================================================
@@ -70,6 +70,12 @@ type testMockProvider struct {
 	createFn     func(ctx context.Context, r provider.Record) error
 	deleteFn     func(ctx context.Context, r provider.Record) error
 	capabilities *provider.Capabilities // nil = default (supports everything)
+
+	// identity, when non-nil, is returned from Identity() so the mock
+	// participates in per-identity precedence (issue #88). When nil the
+	// mock falls back to provider.IdentityOf's type-only identity, which
+	// keeps legacy first-match-wins behavior for tests that don't care.
+	identity *provider.ProviderIdentity
 }
 
 func newTestMockProvider(name string) *testMockProvider {
@@ -85,6 +91,16 @@ func newTestMockProvider(name string) *testMockProvider {
 func (m *testMockProvider) Name() string { return m.name }
 func (m *testMockProvider) Type() string { return m.typeName }
 
+// Identity satisfies provider.Identifiable when m.identity is set, allowing
+// tests to exercise per-identity precedence (issue #88). When unset the
+// mock falls back to provider.IdentityOf's type-only identity.
+func (m *testMockProvider) Identity() provider.ProviderIdentity {
+	if m.identity != nil {
+		return *m.identity
+	}
+	return provider.ProviderIdentity{Type: m.typeName}
+}
+
 func (m *testMockProvider) Capabilities() provider.Capabilities {
 	if m.capabilities != nil {
 		return *m.capabilities
@@ -98,6 +114,8 @@ func (m *testMockProvider) Capabilities() provider.Capabilities {
 			provider.RecordTypeCNAME,
 			provider.RecordTypeSRV,
 			provider.RecordTypeTXT,
+			provider.RecordTypeMX,
+			provider.RecordTypeNS,
 		},
 	}
 }
@@ -149,7 +167,7 @@ func (m *testMockProvider) Delete(ctx context.Context, r provider.Record) error 
 	// Remove from records
 	newRecords := make([]provider.Record, 0, len(m.records))
 	for _, rec := range m.records {
-		if rec.Hostname != r.Hostname || rec.Type != r.Type || rec.Target != r.Target {
+		if rec.Hostname != r.Hostname || !provider.SameRecordMember(rec, r) {
 			newRecords = append(newRecords, rec)
 		}
 	}
@@ -225,6 +243,7 @@ func (m *testMockProvider) GetCreatedOwnershipRecords() []provider.Record {
 type testMockSource struct {
 	name      string
 	hostnames []source.Hostname
+	err       error
 }
 
 //nolint:unused // Reserved for future Reconcile() function tests
@@ -240,7 +259,7 @@ func (m *testMockSource) Name() string { return m.name }
 
 //nolint:unused // Reserved for future Reconcile() function tests
 func (m *testMockSource) Extract(_ context.Context, _ workload.Workload) ([]source.Hostname, error) {
-	return m.hostnames, nil
+	return m.hostnames, m.err
 }
 
 //nolint:unused // Reserved for future Reconcile() function tests

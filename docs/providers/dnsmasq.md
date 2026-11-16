@@ -1,3 +1,8 @@
+---
+title: dnsmasq DNS Provider
+description: Automatically manage dnsmasq A and CNAME records from Docker and Kubernetes with dnsweaver through file-based configuration.
+---
+
 # dnsmasq
 
 dnsmasq is a lightweight DNS/DHCP server commonly used in routers and containers. dnsweaver manages dnsmasq through configuration files.
@@ -6,6 +11,8 @@ dnsmasq is a lightweight DNS/DHCP server commonly used in routers and containers
 
 - Write access to dnsmasq's configuration directory
 - Ability to signal dnsmasq to reload (or dnsmasq configured to watch files)
+- A regular managed file, not a symlink. Writes create a temporary file in the same directory and replace the managed file atomically, so mount the directory rather than a single file and allow file creation and rename there.
+- For SSH mode, an SFTP server with the OpenSSH `posix-rename@openssh.com` extension. Updates fail when this extension is unavailable; dnsweaver does not fall back to a non-atomic remote overwrite.
 
 ## Basic Configuration
 
@@ -32,7 +39,7 @@ volumes:
 | `RELOAD_COMMAND` | No | `systemctl reload dnsmasq` | Command to reload dnsmasq |
 | `ZONE` | No | - | DNS zone for record filtering |
 | `TTL` | No | `300` | Record TTL in seconds |
-| `RECORD_TYPE` | Yes | - | `A`, `AAAA`, or `CNAME` |
+| `RECORD_TYPE` | Yes | - | `A` or `CNAME` |
 | `TARGET` | Yes | - | Record value |
 | `DOMAINS` | Yes | - | Glob patterns to match |
 | `EXCLUDE_DOMAINS` | No | - | Patterns to exclude |
@@ -48,12 +55,16 @@ When managing a remote dnsmasq instance, add these variables to enable SSH mode:
 | `SSH_USER` | Yes* | - | SSH username |
 | `SSH_KEY_FILE` | No† | - | Path to SSH private key file |
 | `SSH_PASSWORD` | No† | - | SSH password |
+| `SSH_KNOWN_HOSTS_FILE` | Yes‡ | - | Path to an OpenSSH `known_hosts` file used to verify the server's host key |
+| `SSH_STRICT_HOST_KEY_CHECKING` | No | `true` | Verify the server host key against `SSH_KNOWN_HOSTS_FILE`. Set to `false` to disable verification (**insecure**) |
 
 \* Required when SSH mode is enabled (any SSH variable is set).
 
 † At least one authentication method is required: `SSH_KEY_FILE` or `SSH_PASSWORD`. Key-based authentication is strongly recommended.
 
-`SSH_KEY_FILE` and `SSH_PASSWORD` support the `_FILE` suffix for [Docker secrets](../configuration/secrets.md). For example, use `SSH_KEY_FILE_FILE` to read the private key path from a secret, or `SSH_PASSWORD_FILE` to read the password from a secret.
+‡ Required when `SSH_STRICT_HOST_KEY_CHECKING` is `true` (the default). Either provide a `known_hosts` file, or explicitly set `SSH_STRICT_HOST_KEY_CHECKING=false` to opt out of verification.
+
+`SSH_KEY_FILE`, `SSH_PASSWORD`, and `SSH_KNOWN_HOSTS_FILE` support the `_FILE` suffix for [Docker secrets](../configuration/secrets.md). For example, use `SSH_KEY_FILE_FILE` to read the private key path from a secret, or `SSH_PASSWORD_FILE` to read the password from a secret.
 
 ## How It Works
 
@@ -89,18 +100,6 @@ cname=alias.home.example.com,target.home.example.com
 Produces:
 ```
 address=/hostname.example.com/192.0.2.100
-```
-
-### AAAA Records
-
-```yaml
-- DNSWEAVER_DNSMASQ_RECORD_TYPE=AAAA
-- DNSWEAVER_DNSMASQ_TARGET=2001:db8::1
-```
-
-Produces:
-```
-address=/hostname.example.com/2001:db8::1
 ```
 
 ### CNAME Records
@@ -152,7 +151,7 @@ dnsweaver can manage dnsmasq instances running on remote hosts via SSH. When SSH
 |----------|-----------|-------|
 | dnsmasq in a sidecar/shared Docker volume | No | Use volume mounts |
 | dnsmasq on a remote server or VM | **Yes** | SSH manages files remotely |
-| dnsmasq on a router (OpenWrt, DD-WRT) | **Yes** | SSH is the standard access method |
+| dnsmasq on a router (OpenWrt, DD-WRT) | **If supported** | Requires SFTP with the POSIX rename extension; SSH shell access alone is insufficient |
 | dnsmasq in a different Docker host | **Yes** | No shared filesystem |
 
 ### Basic SSH Configuration
@@ -173,6 +172,7 @@ environment:
   - DNSWEAVER_ROUTER_SSH_PORT=22
   - DNSWEAVER_ROUTER_SSH_USER=root
   - DNSWEAVER_ROUTER_SSH_KEY_FILE=/run/secrets/router_ssh_key
+  - DNSWEAVER_ROUTER_SSH_KNOWN_HOSTS_FILE=/ssh/known_hosts
 ```
 
 !!! note
@@ -180,7 +180,7 @@ environment:
 
 ### Authentication Methods
 
-SSH supports three authentication methods, in order of preference:
+SSH supports two authentication methods, in order of preference:
 
 #### 1. Key File (Recommended)
 
@@ -197,7 +197,7 @@ Or use Docker secrets:
 
 ```yaml
 environment:
-  - DNSWEAVER_ROUTER_SSH_KEY_FILE_FILE=/run/secrets/router_ssh_key
+  - DNSWEAVER_ROUTER_SSH_KEY_FILE=/run/secrets/router_ssh_key
 secrets:
   - router_ssh_key
 ```
@@ -213,8 +213,38 @@ secrets:
   - router_password
 ```
 
-!!! note
-    The dnsmasq provider uses `InsecureIgnoreHostKey` for SSH connections. This is suitable for trusted internal networks. Future versions may add configurable host key verification.
+### Host Key Verification
+
+dnsweaver verifies the remote host key against a `known_hosts` file by default, protecting SSH sessions against man-in-the-middle attacks. `SSH_STRICT_HOST_KEY_CHECKING` defaults to `true`, so a `known_hosts` file is required whenever SSH mode is enabled.
+
+Generate a `known_hosts` entry from a host you trust and mount it into the container:
+
+```yaml
+environment:
+  - DNSWEAVER_ROUTER_SSH_KNOWN_HOSTS_FILE=/ssh/known_hosts
+volumes:
+  - ./ssh_keys/known_hosts:/ssh/known_hosts:ro
+```
+
+Populate the file with `ssh-keyscan` (verify the fingerprint out-of-band before trusting it):
+
+```bash
+ssh-keyscan -t ed25519 192.168.1.1 >> ./ssh_keys/known_hosts
+```
+
+You can mount the known-hosts file as a Docker secret and point `SSH_KNOWN_HOSTS_FILE` at it:
+
+```yaml
+environment:
+  - DNSWEAVER_ROUTER_SSH_KNOWN_HOSTS_FILE=/run/secrets/router_known_hosts
+secrets:
+  - router_known_hosts
+```
+
+If the remote host key changes (rotation, reinstall, or an actual MITM), the connection fails fast at startup with a clear error rather than silently trusting the new key. Update the `known_hosts` file once you have confirmed the new key is legitimate.
+
+!!! warning "Disabling verification"
+    Setting `SSH_STRICT_HOST_KEY_CHECKING=false` skips host key verification entirely. This is **insecure** and should only be used on fully trusted networks where you accept the MITM risk. When disabled, dnsweaver logs a warning on every connection.
 
 ### Docker Compose with SSH
 
@@ -235,9 +265,11 @@ services:
       - DNSWEAVER_ROUTER_RELOAD_COMMAND=killall -HUP dnsmasq
       - DNSWEAVER_ROUTER_SSH_HOST=192.168.1.1
       - DNSWEAVER_ROUTER_SSH_USER=root
-      - DNSWEAVER_ROUTER_SSH_KEY_FILE_FILE=/run/secrets/router_ssh_key
+      - DNSWEAVER_ROUTER_SSH_KEY_FILE=/run/secrets/router_ssh_key
+      - DNSWEAVER_ROUTER_SSH_KNOWN_HOSTS_FILE=/ssh/known_hosts
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./ssh_keys/known_hosts:/ssh/known_hosts:ro
     secrets:
       - router_ssh_key
 
@@ -273,9 +305,9 @@ volumes:
 
 ## Router Integration
 
-For routers running dnsmasq (OpenWrt, DD-WRT, etc.), SSH mode is the recommended approach:
+For routers running dnsmasq (OpenWrt, DD-WRT, etc.), SSH mode is an option when the router's SFTP server meets the [requirements](#requirements). Check its SFTP capabilities before relying on this deployment path.
 
-### SSH Mode (Recommended)
+### SSH Mode
 
 Use SSH to manage the router's dnsmasq configuration directly:
 
@@ -287,6 +319,7 @@ environment:
   - DNSWEAVER_ROUTER_SSH_HOST=192.168.1.1
   - DNSWEAVER_ROUTER_SSH_USER=root
   - DNSWEAVER_ROUTER_SSH_KEY_FILE=/ssh/router_key
+  - DNSWEAVER_ROUTER_SSH_KNOWN_HOSTS_FILE=/ssh/known_hosts
 ```
 
 See [SSH Remote Management](#ssh-remote-management) for complete configuration details including authentication and secrets.
@@ -348,6 +381,21 @@ Verify SSH connectivity from the dnsweaver container:
 
 - **Key file:** Verify the key file is mounted correctly and readable (`chmod 600`)
 - **Password:** Confirm the remote host allows password authentication
+
+### Host Key Verification Failed
+
+By default dnsweaver verifies the remote host key against `SSH_KNOWN_HOSTS_FILE`.
+A startup error here means one of the following:
+
+- **No `known_hosts` file provided.** Strict checking is on by default. Provide
+  `SSH_KNOWN_HOSTS_FILE`, or set `SSH_STRICT_HOST_KEY_CHECKING=false` to opt out
+  (insecure).
+- **Host key not found in the file.** Add it with
+  `ssh-keyscan -t ed25519 <host> >> known_hosts` after confirming the fingerprint
+  out-of-band.
+- **Host key mismatch.** The remote key changed (rotation, reinstall) or the
+  connection is being intercepted. Confirm the new key is legitimate, then update
+  the `known_hosts` entry.
 
 ### SSH Timeout
 

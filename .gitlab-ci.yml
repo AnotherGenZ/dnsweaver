@@ -1,46 +1,55 @@
 # dnsweaver - GitLab CI/CD Pipeline
 # Streamlined from go-project-template
 
-stages: [validate, test, security, build, pages, docker, mirror, deploy, integration, github-release]
+stages: [validate, test, security, build, pages, docker, qualify, assemble, release]
 
 variables:
   GOPROXY: https://proxy.golang.org,direct
-  GOFLAGS: "-mod=readonly"
+  GOFLAGS: "-mod=readonly -p=2"
+  GOMAXPROCS: "2"
+  GOPATH: "$CI_PROJECT_DIR/.cache/go"
+  GOCACHE: "$CI_PROJECT_DIR/.cache/go-build"
+  GOLANGCI_LINT_CACHE: "$CI_PROJECT_DIR/.cache/golangci-lint"
   BINARY_NAME: "dnsweaver"
-  REGISTRY: "registry.probablyfine.dev"
-  IMAGE: "registry.probablyfine.dev/root/dnsweaver"
-  # Deploy target - set these as CI/CD variables or override here
-  # DEPLOY_HOST: "swarm-manager.example.com"
-  # DEPLOY_USER: "deploy"
 
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH =~ /^(main|develop)$/ || $CI_COMMIT_BRANCH =~ /^(feature|bugfix|hotfix|fix)\//
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH
+      when: never
+    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH =~ /^(feature|bugfix|hotfix|fix)\//
     - if: $CI_COMMIT_TAG
 
 # Rule templates
 .rules-code-changes: &rules-code-changes
   - if: $CI_COMMIT_TAG
-  - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop"
-    changes: &code-files ["{**/*.go,go.mod,go.sum}"]
-  - if: $CI_COMMIT_BRANCH =~ /^(feature|bugfix|hotfix)\//
+  - if: $CI_COMMIT_BRANCH == "main"
+    changes: &code-files ["{**/*.go,go.mod,go.sum,.golangci.yml,.gitlab-ci.yml,.github/workflows/*.yml,scripts/govulncheck-gate.sh,scripts/test-govulncheck-gate.sh,security/govulncheck-exceptions.json,scripts/ci-lint.sh,scripts/release.py,scripts/test_release.py,ci/release-inputs.json,.gitleaks.toml,Dockerfile,.dockerignore,docker/entrypoint.sh,scripts/test-image-healthcheck.sh,scripts/test-image-user.sh,testdata/image-healthcheck-config.yml,.trivyignore}"]
+  - if: $CI_COMMIT_BRANCH =~ /^(feature|bugfix|hotfix|fix)\//
     changes: *code-files
   - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     changes: *code-files
 
-# Docker builds: main, develop, tags, AND feature branches
-# Feature branch images are tagged as feature-<slug> for easy identification/cleanup
+# Docker builds: main, tags, merge requests, and feature branches.
+# Every candidate is qualified by digest before any mutable tag is advanced.
 .rules-docker: &rules-docker
   - if: $CI_COMMIT_TAG
-  - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop"
-    changes: &docker-files ["{**/*.go,go.mod,go.sum,Dockerfile,.dockerignore}"]
+  - if: $CI_COMMIT_BRANCH == "main"
+    changes: &docker-files ["{**/*.go,go.mod,go.sum,Dockerfile,.dockerignore,.gitlab-ci.yml,docker/entrypoint.sh,scripts/test-image-healthcheck.sh,scripts/test-image-user.sh,testdata/image-healthcheck-config.yml,scripts/release.py,scripts/test_release.py,ci/release-inputs.json,.trivyignore}"]
   - if: $CI_COMMIT_BRANCH =~ /^(feature|bugfix|hotfix|fix)\//
+    changes: *docker-files
+  - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     changes: *docker-files
 
 .go-base:
-  image: golang:1.25.9-alpine
+  image: golang:1.26.11-alpine3.24
+  cache:
+    key:
+      prefix: "go-1.26.11"
+      files: [go.sum]
+    paths: [.cache/go/pkg/mod, .cache/go/bin, .cache/go-build, .cache/golangci-lint]
   before_script:
+    - export PATH="$GOPATH/bin:$PATH"
     - apk add --no-cache git
     - go mod download
 
@@ -53,9 +62,9 @@ validate:branch-name:
   image: alpine:3.21
   script:
     - |
-      [ "$CI_COMMIT_BRANCH" = "main" ] || [ "$CI_COMMIT_BRANCH" = "develop" ] && exit 0
+      [ "$CI_COMMIT_BRANCH" = "main" ] && exit 0
       [ -n "$CI_COMMIT_TAG" ] && exit 0
-      echo "$CI_COMMIT_REF_NAME" | grep -qE "^(feature|bugfix|hotfix)/[0-9]+-" && echo "✅ $CI_COMMIT_REF_NAME" || echo "⚠️ Non-standard: $CI_COMMIT_REF_NAME"
+      echo "$CI_COMMIT_REF_NAME" | grep -qE "^(feature|bugfix|hotfix|fix)/[0-9]+-" && echo "✅ $CI_COMMIT_REF_NAME" || echo "⚠️ Non-standard: $CI_COMMIT_REF_NAME"
   rules:
     - if: $CI_COMMIT_BRANCH || $CI_COMMIT_TAG
   allow_failure: true
@@ -80,27 +89,32 @@ lint:
   extends: .go-base
   stage: test
   script:
-    - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-    - golangci-lint run --config .golangci.yml --timeout 5m
+    - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+    - sh scripts/ci-lint.sh
+  artifacts:
+    when: always
+    paths: [.artifacts/lint]
+    expire_in: 30 days
   rules: *rules-code-changes
-  allow_failure: true
+  allow_failure: false
 
 test:go:
   extends: .go-base
   stage: test
   script:
-    - go test -coverprofile=coverage.out ./...
+    - apk add --no-cache gcc musl-dev
+    - go test -race -coverprofile=coverage.out ./...
     - go tool cover -func=coverage.out
   coverage: '/total:\s+\(statements\)\s+(\d+\.\d+)%/'
   artifacts:
-    reports:
-      coverage_report: { coverage_format: cobertura, path: coverage.out }
+    paths: [coverage.out]
+    expire_in: 7 days
   rules: *rules-code-changes
 
 security:trivy:
   stage: security
   image:
-    name: aquasec/trivy:latest
+    name: aquasec/trivy:0.74.0
     entrypoint: [""]
   script:
     # Block on CRITICAL/HIGH Go dependency vulnerabilities
@@ -114,81 +128,31 @@ security:govulncheck:
   extends: .go-base
   stage: security
   script:
-    - go install golang.org/x/vuln/cmd/govulncheck@latest
-    # govulncheck has no ignore/suppression mechanism (unlike trivy's .trivyignore).
-    # Wrapper: pass if ONLY known-unfixed vulns are found; fail on any new ones.
-    # Known unfixed (docker/docker v28.5.2 — no fix for github.com/docker/docker module):
-    #   GO-2026-4887 - Moby AuthZ plugin bypass (oversized request bodies)
-    #   GO-2026-4883 - Moby off-by-one plugin privilege validation
-    # Risk: Low — DNSweaver uses client SDK only (container/swarm listing, events).
-    # These are Docker daemon vulns; not exploitable via client library imports.
-    # Fix exists only in moby/moby/v2 (beta). Review when v2 reaches stable.
-    - |
-      KNOWN_VULNS="GO-2026-4887|GO-2026-4883"
-      RC=0
-      govulncheck ./... > govulncheck.txt 2>&1 || RC=$?
-      cat govulncheck.txt
-      if [ "$RC" -eq 0 ]; then
-        echo "✅ No vulnerabilities found"
-        exit 0
-      fi
-      FOUND=$(grep -oE 'GO-[0-9]+-[0-9]+' govulncheck.txt | sort -u)
-      UNKNOWN=$(echo "$FOUND" | grep -vE "^($KNOWN_VULNS)$" || true)
-      if [ -n "$UNKNOWN" ]; then
-        echo "❌ NEW vulnerabilities found: $UNKNOWN"
-        exit 1
-      fi
-      echo "⚠️  Only known-unfixed vulnerabilities found (docker/docker SDK, no upstream fix):"
-      echo "$FOUND"
-      echo "Review by: 2026-07-01 or when moby/moby/v2 reaches stable release"
+    - go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+    - ./scripts/govulncheck-gate.sh
+  artifacts:
+    when: always
+    paths: [.artifacts/govulncheck]
+    expire_in: 30 days
   rules: *rules-code-changes
   allow_failure: false
 
 security:gitleaks:
   stage: security
   image:
-    name: zricethezav/gitleaks:latest
+    name: zricethezav/gitleaks:v8.30.1
     entrypoint: [""]
   script:
-    # Fetch centralized config from homelab-iac (private repo)
-    - |
-      apk add --no-cache curl
-      curl -sSf --header "PRIVATE-TOKEN: ${IAC_READ_TOKEN}" \
-        "${CI_SERVER_URL}/api/v4/projects/3/repository/files/security%2Fgitleaks.toml/raw?ref=main" \
-        -o .gitleaks.toml
-    - gitleaks detect --source . --config .gitleaks.toml --verbose --no-git
+    - gitleaks detect --source . --config .gitleaks.toml --redact --no-git
   rules: *rules-code-changes
-  allow_failure: false  # Block on secrets detection
+  allow_failure: false # Block on secrets detection
 
-# Container image vulnerability scan (runs after Docker build)
-# Must be in docker stage — needs: can't reference jobs from later stages
-# $TAG/$EXTRA are injected automatically from docker:build:amd64's dotenv artifact
-security:container-scan:
-  stage: docker
-  image:
-    name: aquasec/trivy:latest
-    entrypoint: [""]
-  needs:
-    - job: docker:build:amd64
-      artifacts: true
-  variables:
-    TRIVY_USERNAME: "$CI_REGISTRY_USER"
-    TRIVY_PASSWORD: "$CI_REGISTRY_PASSWORD"
+test:release:
+  stage: test
+  image: python:3.12-alpine
   script:
-    - echo "Scanning $IMAGE:$TAG-amd64"
-    # Block on CRITICAL/HIGH (must fix before release)
-    - trivy image --exit-code 1 --severity CRITICAL,HIGH
-        --ignore-unfixed
-        --ignorefile .trivyignore
-        --format table
-        "$IMAGE:$TAG-amd64"
-    # Warn on MEDIUM/LOW (track, don't block)
-    - trivy image --exit-code 0 --severity MEDIUM,LOW
-        --ignorefile .trivyignore
-        --format table
-        "$IMAGE:$TAG-amd64"
+    - python3 -m unittest discover -s scripts -p test_release.py -v
   rules: *rules-docker
-  allow_failure: false
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Build
@@ -234,7 +198,7 @@ pages:preview:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes: ["{docs/**/*,mkdocs.yml,README.md}"]
 
-# Main GitLab Pages deployment (develop/main only)
+# Main GitLab Pages deployment.
 pages:
   extends: .pages-base
   script:
@@ -242,7 +206,7 @@ pages:
   artifacts:
     paths: [public]
   rules:
-    - if: $CI_COMMIT_BRANCH == "develop" || $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH == "main"
       changes: ["{docs/**/*,mkdocs.yml,README.md}"]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -250,242 +214,128 @@ pages:
 # ─────────────────────────────────────────────────────────────────────────────
 
 .docker-base:
-  stage: docker
-  image: docker:cli
+  image: docker:29.8.1-cli
   variables:
     DOCKER_HOST: unix:///var/run/docker.sock
+    DOCKER_CONFIG: "$CI_PROJECT_DIR/.docker-auth"
+    REGISTRY_AUTH_FILE: "$CI_PROJECT_DIR/.docker-auth/config.json"
   before_script:
-    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin $REGISTRY
-    - |
-      if [ -n "$CI_COMMIT_TAG" ]; then TAG="$CI_COMMIT_TAG"; EXTRA="latest"
-      elif [ "$CI_COMMIT_BRANCH" = "main" ]; then TAG="edge"; EXTRA=""
-      elif [ "$CI_COMMIT_BRANCH" = "develop" ]; then TAG="dev"; EXTRA=""
-      else
-        # Feature/bugfix/hotfix branches: use sanitized branch name as tag
-        # feature/132-rfc2136-provider -> feature-132-rfc2136-provider
-        TAG=$(echo "$CI_COMMIT_BRANCH" | sed 's|/|-|g')
-        EXTRA=""
-      fi
-      echo "TAG=$TAG" > build.env && echo "EXTRA=$EXTRA" >> build.env
+    - apk add --no-cache python3 skopeo git
+    - printf '%s' "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  after_script:
+    - rm -rf "$CI_PROJECT_DIR/.docker-auth"
   rules: *rules-docker
 
 docker:build:amd64:
   extends: .docker-base
+  stage: docker
   script:
-    - source build.env
-    - docker build --pull --platform linux/amd64 --build-arg VERSION=$CI_COMMIT_SHORT_SHA --build-arg CACHE_BUST=$CI_PIPELINE_ID -t $IMAGE:$TAG-amd64 -t $IMAGE:sha-$CI_COMMIT_SHORT_SHA-amd64 .
-    - docker push $IMAGE:$TAG-amd64 && docker push $IMAGE:sha-$CI_COMMIT_SHORT_SHA-amd64
+    - python3 scripts/release.py build --arch amd64
   artifacts:
-    reports: { dotenv: build.env }
+    paths: [release/amd64]
+    expire_in: 30 days
   tags: [docker]
 
 docker:build:arm64:
   extends: .docker-base
+  stage: docker
   script:
-    - source build.env
-    - docker build --pull --platform linux/arm64 --build-arg VERSION=$CI_COMMIT_SHORT_SHA --build-arg CACHE_BUST=$CI_PIPELINE_ID -t $IMAGE:$TAG-arm64 -t $IMAGE:sha-$CI_COMMIT_SHORT_SHA-arm64 .
-    - docker push $IMAGE:$TAG-arm64 && docker push $IMAGE:sha-$CI_COMMIT_SHORT_SHA-arm64
+    - python3 scripts/release.py build --arch arm64
+  artifacts:
+    paths: [release/arm64]
+    expire_in: 30 days
   tags: [arm64]
 
-docker:manifest:
+.container-scan:
+  stage: qualify
+  image:
+    name: aquasec/trivy:0.74.0
+    entrypoint: [""]
+  variables:
+    TRIVY_USERNAME: "$CI_REGISTRY_USER"
+    TRIVY_PASSWORD: "$CI_REGISTRY_PASSWORD"
+  before_script:
+    - apk add --no-cache python3
+  artifacts:
+    when: always
+    paths: [release]
+    expire_in: 30 days
+  rules: *rules-docker
+
+security:container:amd64:
+  extends: .container-scan
+  needs: [docker:build:amd64]
+  script:
+    - python3 scripts/release.py scan --arch amd64
+
+security:container:arm64:
+  extends: .container-scan
+  needs: [docker:build:arm64]
+  script:
+    - python3 scripts/release.py scan --arch arm64
+
+release:assemble:
   extends: .docker-base
-  needs: [docker:build:amd64, docker:build:arm64]
+  stage: assemble
+  needs: [security:container:amd64, security:container:arm64]
   script:
-    - source build.env
-    - docker buildx create --name mb --use 2>/dev/null || docker buildx use mb
-    - docker buildx imagetools create -t $IMAGE:$TAG $IMAGE:$TAG-amd64 $IMAGE:$TAG-arm64
-    - docker buildx imagetools create -t $IMAGE:sha-$CI_COMMIT_SHORT_SHA $IMAGE:sha-$CI_COMMIT_SHORT_SHA-amd64 $IMAGE:sha-$CI_COMMIT_SHORT_SHA-arm64
-    - '[ -n "$EXTRA" ] && docker buildx imagetools create -t $IMAGE:$EXTRA $IMAGE:$TAG-amd64 $IMAGE:$TAG-arm64 || true'
+    - python3 scripts/release.py assemble
+  artifacts:
+    paths: [release]
+    expire_in: 30 days
   tags: [docker]
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GitHub Mirror (native push - preserves PR history)
-# ─────────────────────────────────────────────────────────────────────────────
-
-.mirror-base:
-  stage: mirror
-  image: alpine:3.21
-  needs:
-    - job: docker:manifest
-      optional: true
-  before_script:
-    - apk add --no-cache git
-    - git config --global user.email "ci@gitlab.local"
-    - git config --global user.name "GitLab CI"
-
-github:mirror:
-  extends: .mirror-base
-  variables:
-    GIT_DEPTH: 0  # Full clone for complete history
-  script:
-    - |
-      if [ "$CI_COMMIT_BRANCH" = "develop" ]; then
-        GITHUB_BRANCH="dev"
-      else
-        GITHUB_BRANCH="$CI_COMMIT_BRANCH"
-      fi
-      git remote add github "https://$GITHUB_USERNAME:$GITHUB_TOKEN@github.com/$GITHUB_REPO.git" || true
-      git fetch origin $CI_COMMIT_BRANCH --unshallow 2>/dev/null || git fetch origin $CI_COMMIT_BRANCH
-      git checkout -B $CI_COMMIT_BRANCH origin/$CI_COMMIT_BRANCH
-      git push github $CI_COMMIT_BRANCH:$GITHUB_BRANCH --force
-      echo "✅ Mirrored $CI_COMMIT_BRANCH → github:$GITHUB_BRANCH"
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main" || $CI_COMMIT_BRANCH == "develop"
-
-github:mirror:tags:
-  extends: .mirror-base
-  variables:
-    GIT_DEPTH: 0  # Full clone for complete history
-  script:
-    - |
-      git remote add github "https://$GITHUB_USERNAME:$GITHUB_TOKEN@github.com/$GITHUB_REPO.git" || true
-      git fetch origin --tags --unshallow 2>/dev/null || git fetch origin --tags
-      git push github $CI_COMMIT_TAG
-      echo "✅ Pushed tag $CI_COMMIT_TAG to GitHub"
-  rules:
-    - if: $CI_COMMIT_TAG
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Deploy
-# ─────────────────────────────────────────────────────────────────────────────
-
-.deploy-base:
-  stage: deploy
-  image: alpine:3.21
-  before_script:
-    - apk add --no-cache openssh-client
-    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
-    - echo "$SSH_PRIVATE_KEY" | tr -d '\r' > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519 || true
-    - '[ -n "$DEPLOY_HOST" ] && ssh-keyscan -p 22 $DEPLOY_HOST >> ~/.ssh/known_hosts 2>/dev/null || true'
-
-deploy:dev:
-  extends: .deploy-base
-  environment: { name: development }
-  script:
-    - |
-      [ -z "$SSH_PRIVATE_KEY" ] && echo "SSH_PRIVATE_KEY not set" && exit 0
-      [ -z "$DEPLOY_HOST" ] && echo "DEPLOY_HOST not set" && exit 0
-      ssh -o StrictHostKeyChecking=no ${DEPLOY_USER:-deploy}@$DEPLOY_HOST \
-        "docker service update --force --image $IMAGE:dev dnsweaver_dnsweaver" || echo "Service not deployed"
-  rules:
-    - if: $CI_COMMIT_BRANCH == "develop"
-      changes: *docker-files
-      when: manual
-  allow_failure: true
-
-deploy:production:
-  extends: .deploy-base
-  environment: { name: production }
-  script:
-    - |
-      [ -z "$SSH_PRIVATE_KEY" ] && echo "SSH_PRIVATE_KEY not set" && exit 0
-      [ -z "$DEPLOY_HOST" ] && echo "DEPLOY_HOST not set" && exit 0
-      [ -n "$CI_COMMIT_TAG" ] && IMG="$IMAGE:$CI_COMMIT_TAG" || IMG="$IMAGE:edge"
-      ssh -o StrictHostKeyChecking=no ${DEPLOY_USER:-deploy}@$DEPLOY_HOST \
-        "docker service update --force --image $IMG dnsweaver_dnsweaver" || echo "Service not deployed"
-  rules:
-    - if: $CI_COMMIT_BRANCH == "main"
-      changes: *docker-files
-      when: manual
-    - if: $CI_COMMIT_TAG
-      when: manual
-  allow_failure: true
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Integration Tests (post-deploy validation)
-# ─────────────────────────────────────────────────────────────────────────────
-
-integration:smoke:
-  stage: integration
-  image: alpine:3.21
-  needs:
-    - job: deploy:dev
-      optional: true
-  before_script:
-    - apk add --no-cache bash curl python3
-  script:
-    - |
-      # Verify required variables
-      [ -z "$SWARM_VIP" ] && echo "SWARM_VIP not configured" && exit 0
-      [ -z "$TECHNITIUM_HOST" ] && echo "TECHNITIUM_HOST not configured" && exit 0
-      [ -z "$TECHNITIUM_TOKEN" ] && echo "TECHNITIUM_TOKEN not configured" && exit 0
-      [ -z "$TEST_ZONE" ] && echo "TEST_ZONE not configured" && exit 0
-
-      # Run smoke tests
-      chmod +x scripts/integration-test.sh
-      bash scripts/integration-test.sh --smoke
-  rules:
-    - if: $CI_COMMIT_BRANCH == "develop"
-      when: manual
-  allow_failure: true
-
-# ─────────────────────────────────────────────────────────────────────────────
-# GitHub Release (tags only)
-# ─────────────────────────────────────────────────────────────────────────────
-
-.github-docker:
-  stage: github-release
-  image: docker:cli
-  before_script:
-    - echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_USERNAME" --password-stdin
-    - echo "$DOCKERHUB_TOKEN" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin
-  rules:
-    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+/
-
-github:build:amd64:
-  extends: .github-docker
-  script:
-    - |
-      GHCR="ghcr.io/$GITHUB_REPO"
-      DH="docker.io/$DOCKERHUB_USERNAME/dnsweaver"
-      docker build --pull --platform linux/amd64 --build-arg VERSION=$CI_COMMIT_TAG --build-arg CACHE_BUST=$CI_PIPELINE_ID \
-        --label org.opencontainers.image.source=https://github.com/$GITHUB_REPO \
-        -t $GHCR:$CI_COMMIT_TAG-amd64 -t $DH:$CI_COMMIT_TAG-amd64 .
-      docker push $GHCR:$CI_COMMIT_TAG-amd64 && docker push $DH:$CI_COMMIT_TAG-amd64
-  tags: [docker]
-
-github:build:arm64:
-  extends: .github-docker
-  script:
-    - |
-      GHCR="ghcr.io/$GITHUB_REPO"
-      DH="docker.io/$DOCKERHUB_USERNAME/dnsweaver"
-      docker build --pull --platform linux/arm64 --build-arg VERSION=$CI_COMMIT_TAG --build-arg CACHE_BUST=$CI_PIPELINE_ID \
-        --label org.opencontainers.image.source=https://github.com/$GITHUB_REPO \
-        -t $GHCR:$CI_COMMIT_TAG-arm64 -t $DH:$CI_COMMIT_TAG-arm64 .
-      docker push $GHCR:$CI_COMMIT_TAG-arm64 && docker push $DH:$CI_COMMIT_TAG-arm64
-  tags: [arm64]
-
+# Public promotion is manual and serialized. No public job rebuilds an image.
+# Existing public tags must resolve to the qualified commit before any write.
 github:release:
-  stage: github-release
+  extends: .docker-base
+  stage: release
+  needs: [release:assemble]
+  resource_group: public-release
+  variables:
+    RELEASE_PUBLISH: "yes"
+  script:
+    - printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_USERNAME" --password-stdin
+    - printf '%s' "$DOCKERHUB_TOKEN" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin
+    - python3 scripts/release.py publish
+  artifacts:
+    when: always
+    paths: [release/publication.json]
+    expire_in: 1 year
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/
+      when: manual
+      allow_failure: false
+  tags: [docker]
+
+# Sync the Docker Hub repository "Overview" (full_description) from docker/DOCKERHUB.md.
+# Manual description sync after review of the public copy.
+# Reuses the existing $DOCKERHUB_USERNAME / $DOCKERHUB_TOKEN CI variables.
+github:dockerhub-description:
+  stage: release
   image: alpine:3.21
-  needs: [github:build:amd64, github:build:arm64, github:mirror:tags]
   before_script:
-    - apk add --no-cache curl jq docker-cli
-    - echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_USERNAME" --password-stdin
-    - echo "$DOCKERHUB_TOKEN" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin
+    - apk add --no-cache curl jq
   script:
     - |
-      TAG="$CI_COMMIT_TAG"
-      GHCR="ghcr.io/$GITHUB_REPO"
-      DH="docker.io/$DOCKERHUB_USERNAME/dnsweaver"
-
-      # Create manifests
-      for R in "$GHCR" "$DH"; do
-        docker manifest create $R:$TAG $R:$TAG-amd64 $R:$TAG-arm64 && docker manifest push $R:$TAG
-        docker manifest create $R:latest $R:$TAG-amd64 $R:$TAG-arm64 && docker manifest push $R:latest
-      done
-
-      # Extract changelog
-      VER=$(echo "$TAG" | sed 's/^v//')
-      NOTES=$(awk "BEGIN{p=0} /^## \\[$VER\\]/{p=1; next} p && /^## \\[/{p=0} p" CHANGELOG.md 2>/dev/null || echo "See CHANGELOG.md")
-
-      # Create GitHub release
-      BODY=$(printf '%s\n\n## Docker Images\n```bash\ndocker pull %s:%s\ndocker pull %s:%s\n```' "$NOTES" "$GHCR" "$TAG" "$DH" "$TAG")
-      curl -sX POST "https://api.github.com/repos/$GITHUB_REPO/releases" \
-        -H "Authorization: token $GITHUB_TOKEN" \
-        -H "Content-Type: application/json" \
-        -d "$(jq -n --arg tag "$TAG" --arg name "$TAG" --arg body "$BODY" '{tag_name:$tag,name:$name,body:$body,draft:false,prerelease:false}')"
+      JWT=$(curl -s -H "Content-Type: application/json" -X POST \
+        -d "$(jq -n --arg u "$DOCKERHUB_USERNAME" --arg p "$DOCKERHUB_TOKEN" '{username:$u,password:$p}')" \
+        https://hub.docker.com/v2/users/login/ | jq -r .token)
+      if [ -z "$JWT" ] || [ "$JWT" = "null" ]; then echo "Docker Hub login failed"; exit 1; fi
+      CODE=$(curl -s -o /tmp/resp.json -w '%{http_code}' -X PATCH \
+        -H "Authorization: JWT $JWT" -H "Content-Type: application/json" \
+        --data "$(jq -n --rawfile d docker/DOCKERHUB.md --rawfile s docker/DOCKERHUB-SHORT.txt \
+          '{full_description:$d, description:($s|rtrimstr("\n"))}')" \
+        "https://hub.docker.com/v2/repositories/$DOCKERHUB_USERNAME/dnsweaver/")
+      echo "Docker Hub PATCH HTTP $CODE"
+      [ "$CODE" = "200" ] || { cat /tmp/resp.json; exit 1; }
+      echo "Synced full_description ($(wc -c < docker/DOCKERHUB.md) bytes) + description ($(tr -d '\n' < docker/DOCKERHUB-SHORT.txt | wc -c) chars)"
   rules:
-    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+/
+    - if: $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+      when: manual
+      allow_failure: true
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes: ["docker/DOCKERHUB.md", "docker/DOCKERHUB-SHORT.txt"]
+      when: manual
+      allow_failure: true
   tags: [docker]

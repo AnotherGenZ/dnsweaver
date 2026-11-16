@@ -6,8 +6,8 @@ import (
 	"context"
 	"log/slog"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/source"
 )
 
 // cleanupOrphans removes records for hostnames that are no longer in any workload.
@@ -75,157 +75,6 @@ func (r *Reconciler) cleanupOrphans(ctx context.Context, currentHostnames map[st
 	return actions
 }
 
-// cleanupDetachedProviders removes records from providers that previously handled
-// a hostname but no longer do in the current reconciliation cycle.
-// This covers configuration/routing changes where the hostname still exists
-// (so it is not an orphan) but should be removed from old providers.
-func (r *Reconciler) cleanupDetachedProviders(
-	ctx context.Context,
-	currentHostnames map[string]*source.Hostname,
-	currentProviderMapping map[string][]string,
-	currentRoutingState map[string]detachedRoutingState,
-	cache *recordCache,
-) []Action {
-	var actions []Action
-	ratioThreshold, ratioMinHostnames, absoluteMaxHostnames := r.detachedCleanupThresholds()
-
-	r.mu.RLock()
-	previousMapping := make(map[string][]string, len(r.hostnameProviders))
-	for hostname, providers := range r.hostnameProviders {
-		copied := make([]string, len(providers))
-		copy(copied, providers)
-		previousMapping[hostname] = copied
-	}
-	r.mu.RUnlock()
-
-	type detachedCleanupCandidate struct {
-		hostname  string
-		providers []string
-	}
-	var candidates []detachedCleanupCandidate
-
-	for hostname := range currentHostnames {
-		previousProviders := previousMapping[hostname]
-		if len(previousProviders) == 0 {
-			continue
-		}
-
-		currentProviders := currentProviderMapping[hostname]
-		detachedProviders := providerDifference(previousProviders, currentProviders)
-		if len(detachedProviders) == 0 {
-			continue
-		}
-
-		// Hostname still has at least one current provider. Only detach old
-		// providers when current routing is healthy for this cycle.
-		if len(currentProviders) > 0 {
-			state := currentRoutingState[hostname]
-			if state.hasCurrentProviderError || !state.hasReadyCurrentProvider {
-				r.logger.Warn("deferring detached provider cleanup until current routing succeeds",
-					slog.String("hostname", hostname),
-					slog.Any("detached_providers", detachedProviders),
-					slog.Any("current_providers", currentProviders),
-					slog.Bool("current_provider_error", state.hasCurrentProviderError),
-					slog.Bool("has_ready_current_provider", state.hasReadyCurrentProvider),
-				)
-				continue
-			}
-		}
-
-		r.logger.Info("detected detached provider routing for hostname",
-			slog.String("hostname", hostname),
-			slog.Any("previous_providers", previousProviders),
-			slog.Any("current_providers", currentProviders),
-		)
-		candidates = append(candidates, detachedCleanupCandidate{
-			hostname:  hostname,
-			providers: detachedProviders,
-		})
-	}
-
-	// Circuit breaker for detached cleanup: prevent mass deletes from broad
-	// routing/config mistakes. Can be bypassed for planned migrations.
-	detachedHostCount := len(candidates)
-	previousHostCount := len(previousMapping)
-	if !r.config.DetachedCleanupAllowMassDelete && detachedHostCount > 0 {
-		detachedRatio := 0.0
-		if previousHostCount > 0 {
-			detachedRatio = float64(detachedHostCount) / float64(previousHostCount)
-		}
-		triggeredByRatio := detachedHostCount >= ratioMinHostnames && detachedRatio > ratioThreshold
-		triggeredByAbsolute := detachedHostCount >= absoluteMaxHostnames
-		if triggeredByRatio || triggeredByAbsolute {
-			r.logger.Error("detached cleanup circuit breaker triggered — skipping detached provider cleanup",
-				slog.Int("detached_hostnames", detachedHostCount),
-				slog.Int("previous_routed_hostnames", previousHostCount),
-				slog.Float64("detached_ratio", detachedRatio),
-				slog.Float64("ratio_threshold", ratioThreshold),
-				slog.Int("ratio_min_hostnames", ratioMinHostnames),
-				slog.Int("absolute_max_hostnames", absoluteMaxHostnames),
-			)
-			return nil
-		}
-	}
-
-	for _, candidate := range candidates {
-		for _, providerName := range candidate.providers {
-			inst, ok := r.providers.Get(providerName)
-			if !ok {
-				r.logger.Warn("detached provider no longer exists, skipping cleanup",
-					slog.String("hostname", candidate.hostname),
-					slog.String("provider", providerName),
-				)
-				continue
-			}
-
-			deleteActions := r.deleteOrphanForProvider(ctx, candidate.hostname, inst, cache)
-			actions = append(actions, deleteActions...)
-		}
-	}
-
-	return actions
-}
-
-func (r *Reconciler) detachedCleanupThresholds() (float64, int, int) {
-	ratio := r.config.DetachedCleanupRatioThreshold
-	if ratio <= 0 || ratio > 1 {
-		ratio = defaultDetachedCleanupRatioThreshold
-	}
-
-	minHostnames := r.config.DetachedCleanupRatioMinHostnames
-	if minHostnames <= 0 {
-		minHostnames = defaultDetachedCleanupRatioMinHostnames
-	}
-
-	absoluteMax := r.config.DetachedCleanupAbsoluteMaxHostnames
-	if absoluteMax <= 0 {
-		absoluteMax = defaultDetachedCleanupAbsoluteMaxHostnames
-	}
-
-	return ratio, minHostnames, absoluteMax
-}
-
-// providerDifference returns values from previous that are not present in current.
-func providerDifference(previous, current []string) []string {
-	if len(previous) == 0 {
-		return nil
-	}
-
-	currentSet := make(map[string]struct{}, len(current))
-	for _, value := range current {
-		currentSet[value] = struct{}{}
-	}
-
-	result := make([]string, 0, len(previous))
-	for _, value := range previous {
-		if _, exists := currentSet[value]; !exists {
-			result = append(result, value)
-		}
-	}
-
-	return result
-}
-
 // getOrphanProviders returns the provider instances to clean up an orphaned hostname from.
 // Uses the stored provider mapping from the previous reconciliation when available (#51),
 // falling back to domain-based matching for hostnames without historical mapping
@@ -279,7 +128,7 @@ func (r *Reconciler) deleteOrphanForProvider(ctx context.Context, hostname strin
 			Provider:   inst.Name(),
 			Hostname:   hostname,
 			RecordType: string(inst.RecordType),
-			Target:     inst.Target,
+			Target:     inst.EffectiveTarget(),
 			Status:     StatusSkipped,
 			Error:      "additive mode - deletions disabled",
 		}
@@ -340,7 +189,7 @@ func (r *Reconciler) deleteAuthoritativeForProvider(ctx context.Context, hostnam
 				Provider:   inst.Name(),
 				Hostname:   hostname,
 				RecordType: string(inst.RecordType),
-				Target:     inst.Target,
+				Target:     inst.EffectiveTarget(),
 				Status:     StatusFailed,
 				Error:      "failed to list records: " + err.Error(),
 			}}
@@ -456,7 +305,7 @@ func (r *Reconciler) deleteManagedForProvider(ctx context.Context, hostname stri
 				Provider:   inst.Name(),
 				Hostname:   hostname,
 				RecordType: string(inst.RecordType),
-				Target:     inst.Target,
+				Target:     inst.EffectiveTarget(),
 				Status:     StatusSkipped,
 				Error:      "failed to check ownership: " + err.Error(),
 			}}
@@ -473,7 +322,7 @@ func (r *Reconciler) deleteManagedForProvider(ctx context.Context, hostname stri
 			Provider:   inst.Name(),
 			Hostname:   hostname,
 			RecordType: string(inst.RecordType),
-			Target:     inst.Target,
+			Target:     inst.EffectiveTarget(),
 			Status:     StatusSkipped,
 			Error:      "no ownership record - may be manually created",
 		}}
@@ -502,7 +351,7 @@ func (r *Reconciler) deleteManagedForProvider(ctx context.Context, hostname stri
 				Provider:   inst.Name(),
 				Hostname:   hostname,
 				RecordType: string(inst.RecordType),
-				Target:     inst.Target,
+				Target:     inst.EffectiveTarget(),
 				Status:     StatusFailed,
 				Error:      "failed to list records: " + err.Error(),
 			}}
@@ -510,7 +359,7 @@ func (r *Reconciler) deleteManagedForProvider(ctx context.Context, hostname stri
 		for _, rec := range allRecords {
 			if source.NormalizeHostname(rec.Hostname) == hostname {
 				switch rec.Type {
-				case provider.RecordTypeA, provider.RecordTypeAAAA, provider.RecordTypeCNAME, provider.RecordTypeSRV, provider.RecordTypeHTTPS:
+				case provider.RecordTypeA, provider.RecordTypeAAAA, provider.RecordTypeCNAME, provider.RecordTypeSRV, provider.RecordTypeHTTPS, provider.RecordTypeMX, provider.RecordTypeNS:
 					recordsToDelete = append(recordsToDelete, rec)
 				case provider.RecordTypeTXT:
 					// Skip TXT records (ownership markers handled separately)
@@ -606,6 +455,11 @@ func (r *Reconciler) deleteManagedForProvider(ctx context.Context, hostname stri
 // instance would be incorrectly identified as owned and deleted. This is a narrow risk
 // that requires exact target match within dnsweaver's managed domain patterns.
 func (r *Reconciler) deleteTargetMatchForProvider(ctx context.Context, hostname string, inst *provider.ProviderInstance, cache *recordCache) []Action {
+	// effTarget is the instance's current target (dynamic if a target resolver
+	// is active, otherwise the static config value). Target-match ownership must
+	// compare against the value records were actually written with.
+	effTarget := inst.EffectiveTarget()
+
 	// Get actual records from cache or provider
 	var allRecords []provider.Record
 	if cache != nil {
@@ -628,7 +482,7 @@ func (r *Reconciler) deleteTargetMatchForProvider(ctx context.Context, hostname 
 				Provider:   inst.Name(),
 				Hostname:   hostname,
 				RecordType: string(inst.RecordType),
-				Target:     inst.Target,
+				Target:     effTarget,
 				Status:     StatusFailed,
 				Error:      "failed to list records: " + err.Error(),
 			}}
@@ -643,7 +497,7 @@ func (r *Reconciler) deleteTargetMatchForProvider(ctx context.Context, hostname 
 	// Filter to records matching this instance's configured type and target
 	var matched []provider.Record
 	for _, record := range allRecords {
-		if record.Type == inst.RecordType && record.Target == inst.Target {
+		if record.Type == inst.RecordType && record.Target == effTarget {
 			matched = append(matched, record)
 		}
 	}
@@ -653,7 +507,7 @@ func (r *Reconciler) deleteTargetMatchForProvider(ctx context.Context, hostname 
 			slog.String("hostname", hostname),
 			slog.String("provider", inst.Name()),
 			slog.String("expected_type", string(inst.RecordType)),
-			slog.String("expected_target", inst.Target),
+			slog.String("expected_target", effTarget),
 			slog.Int("total_records", len(allRecords)),
 		)
 		return []Action{{
@@ -661,7 +515,7 @@ func (r *Reconciler) deleteTargetMatchForProvider(ctx context.Context, hostname 
 			Provider:   inst.Name(),
 			Hostname:   hostname,
 			RecordType: string(inst.RecordType),
-			Target:     inst.Target,
+			Target:     effTarget,
 			Status:     StatusSkipped,
 			Error:      "no target-matched records found",
 		}}
@@ -740,7 +594,7 @@ func (r *Reconciler) deleteCacheOnlyForProvider(ctx context.Context, hostname st
 				Provider:   inst.Name(),
 				Hostname:   hostname,
 				RecordType: string(inst.RecordType),
-				Target:     inst.Target,
+				Target:     inst.EffectiveTarget(),
 				Status:     StatusFailed,
 				Error:      "failed to list records: " + err.Error(),
 			}}
@@ -748,7 +602,7 @@ func (r *Reconciler) deleteCacheOnlyForProvider(ctx context.Context, hostname st
 		for _, rec := range allRecords {
 			if source.NormalizeHostname(rec.Hostname) == hostname {
 				switch rec.Type {
-				case provider.RecordTypeA, provider.RecordTypeAAAA, provider.RecordTypeCNAME, provider.RecordTypeSRV, provider.RecordTypeHTTPS:
+				case provider.RecordTypeA, provider.RecordTypeAAAA, provider.RecordTypeCNAME, provider.RecordTypeSRV, provider.RecordTypeHTTPS, provider.RecordTypeMX, provider.RecordTypeNS:
 					recordsToDelete = append(recordsToDelete, rec)
 				case provider.RecordTypeTXT:
 					// Skip TXT records
@@ -822,7 +676,7 @@ func (r *Reconciler) deleteRecord(ctx context.Context, hostname string) []Action
 			Provider:   inst.Name(),
 			Hostname:   hostname,
 			RecordType: string(inst.RecordType),
-			Target:     inst.Target,
+			Target:     inst.EffectiveTarget(),
 		}
 
 		if r.isDryRun() {

@@ -1,3 +1,8 @@
+---
+title: Cloudflare DNS Provider
+description: Automate Cloudflare DNS records from Docker, Kubernetes, and Proxmox with dnsweaver — A, AAAA, CNAME, SRV, MX, NS, and TXT records with optional proxying.
+---
+
 # Cloudflare
 
 Cloudflare provides public DNS with optional proxy/CDN capabilities. dnsweaver supports Cloudflare's API for automated record management.
@@ -5,7 +10,7 @@ Cloudflare provides public DNS with optional proxy/CDN capabilities. dnsweaver s
 ## Requirements
 
 - Cloudflare account with at least one domain
-- User-owned or account-owned API token with DNS edit permissions
+- API token with DNS edit permissions
 
 ## Basic Configuration
 
@@ -30,7 +35,7 @@ environment:
 | `TOKEN_FILE` | Alt | - | Path to file containing API token |
 | `ZONE_ID` | No* | - | Cloudflare Zone ID (alternative to `ZONE`) |
 | `ZONE` | No* | - | DNS zone name for zone lookup |
-| `RECORD_TYPE` | Yes | - | `A`, `AAAA`, `CNAME`, or `TXT` |
+| `RECORD_TYPE` | Yes | - | `A`, `AAAA`, `CNAME`, `SRV`, or `TXT` |
 | `TARGET` | Yes | - | Record value |
 | `DOMAINS` | Yes | - | Glob patterns to match |
 | `EXCLUDE_DOMAINS` | No | - | Patterns to exclude |
@@ -49,10 +54,6 @@ environment:
    - **Zone Resources**: Include → Specific zone → your-domain.com
 5. Click **Continue to summary** → **Create Token**
 6. Copy the token (shown only once)
-
-dnsweaver supports both user-owned and account-owned tokens.
-When using Cloudflare's scannable token formats, `cfut_` (user token) and `cfat_` (account token)
-are detected automatically.
 
 !!! tip
     Use scoped API tokens instead of Global API Key for better security.
@@ -77,6 +78,34 @@ Point to another hostname (common for Cloudflare Tunnels):
 - DNSWEAVER_CLOUDFLARE_TARGET=abc123.cfargotunnel.com
 ```
 
+### MX Records
+
+Point a domain's mail at a mail exchanger. MX is a per-record type: declare it
+with [native labels](../sources/native-labels.md), not with `RECORD_TYPE`.
+`priority` is the MX preference (lower is tried first) and defaults to `0`.
+
+```yaml
+labels:
+  - "dnsweaver.records.mx.hostname=example.com"
+  - "dnsweaver.records.mx.type=MX"
+  - "dnsweaver.records.mx.target=mail.protonmail.ch"
+  - "dnsweaver.records.mx.priority=10"
+```
+
+A hostname may carry several MX records. Each one is a separate member with
+its own ownership marker, and changing a preference replaces only that member.
+
+### NS Records
+
+Delegate a subdomain to other nameservers. NS is a per-record type as well:
+
+```yaml
+labels:
+  - "dnsweaver.records.deleg.hostname=sub.example.com"
+  - "dnsweaver.records.deleg.type=NS"
+  - "dnsweaver.records.deleg.target=ns1.example.net"
+```
+
 ### Proxied Records
 
 Enable Cloudflare's CDN/proxy for the record:
@@ -89,6 +118,39 @@ When proxied:
 - Traffic routes through Cloudflare's network
 - Origin IP is hidden
 - Additional features available (caching, WAF, etc.)
+
+### Per-Host Proxy Override (Labels)
+
+`PROXIED` sets the default for **every** record this instance creates. To make
+individual hostnames DNS-only (grey-cloud) while the rest stay proxied, use the
+[native `proxied` label](../sources/native-labels.md#cloudflare-proxy-override-per-host)
+on the workload:
+
+```yaml
+labels:
+  # This host bypasses the Cloudflare proxy even though PROXIED=true
+  - "dnsweaver.hostname=ssh.example.com"
+  - "dnsweaver.proxied=false"
+```
+
+For several records on one service, use the named-record form
+(`dnsweaver.records.<name>.proxied`). Records that omit `proxied` fall back to
+the instance's `PROXIED` default.
+
+Changing either setting updates records that already exist: when a record's
+proxied state differs from what the label or the `PROXIED` default now asks
+for, dnsweaver updates it in place on the next reconciliation. This applies to
+records dnsweaver manages (its own records, or matching records allowed by the
+effective [adoption policy](../configuration/environment.md#existing-record-adoption)).
+Records it does not manage are left as found.
+
+After an update, dnsweaver reads the record returned by Cloudflare. If Cloudflare returns a different type, name, content, TTL, or proxy state, the accepted values are logged with a warning instead of reporting only the values that were requested.
+
+### Proxy eligibility and certificate coverage are separate
+
+A record's orange-cloud proxy setting does not prove that Cloudflare has an edge certificate for that hostname. In a normal full-zone setup, Universal SSL covers the zone apex and first-level subdomains by default; a deeper name such as `app.dev.example.com` may still be proxied but lack a matching Universal certificate. Total TLS, an advanced certificate, or a suitable custom certificate can cover deeper names. CNAME setup zones have different Universal SSL behavior.
+
+dnsweaver controls only the DNS record's `proxied` field. It does not inspect or provision Cloudflare certificate entitlements. Verify certificate coverage in Cloudflare before enabling the proxy for a hostname. See Cloudflare's current [Universal SSL limitations](https://developers.cloudflare.com/ssl/edge-certificates/universal-ssl/limitations/).
 
 ## Split-Horizon with Cloudflare
 
@@ -117,6 +179,26 @@ environment:
   - DNSWEAVER_EXTERNAL_PROXIED=true
 ```
 
+## TLS Configuration
+
+Cloudflare's public API uses publicly-trusted certificates so the defaults work out of the box. The TLS surface is still available for environments that proxy outbound traffic through an inspecting middlebox with its own CA:
+
+| Env key | Purpose |
+|---------|---------|
+| `DNSWEAVER_CLOUDFLARE_TLS_CA_FILE` | Trust an additional CA bundle (PEM) — e.g. a corporate TLS-inspecting proxy |
+| `DNSWEAVER_CLOUDFLARE_TLS_CERT_FILE` / `_TLS_KEY_FILE` | Present a client certificate (mTLS) |
+| `DNSWEAVER_CLOUDFLARE_TLS_SERVER_NAME` | Override SNI / hostname verification |
+| `DNSWEAVER_CLOUDFLARE_TLS_SKIP_VERIFY` | Disable verification (development only — **never** in production) |
+| `DNSWEAVER_CLOUDFLARE_TLS_MIN_VERSION` | `1.2` (default) or `1.3` |
+
+The legacy `DNSWEAVER_CLOUDFLARE_INSECURE_SKIP_VERIFY` variable still works but emits a deprecation warning and will be removed in a future major release.
+
+!!! warning "Mounted certs must be readable by uid/gid 1000"
+    The container drops privileges to the unprivileged `dnsweaver` user, so a
+    client key mounted `root:root 0600` yields `permission denied`. See
+    [TLS Certificate File Permissions](../configuration/environment.md#tls-certificate-file-permissions).
+
+
 ## Troubleshooting
 
 ### Authentication Error
@@ -124,16 +206,9 @@ environment:
 Verify your token:
 
 ```bash
-# User-owned token
 curl -X GET "https://api.cloudflare.com/client/v4/user/tokens/verify" \
   -H "Authorization: Bearer YOUR_TOKEN"
-
-# Account-owned token
-curl -X GET "https://api.cloudflare.com/client/v4/accounts/YOUR_ACCOUNT_ID/tokens/verify" \
-  -H "Authorization: Bearer YOUR_TOKEN"
 ```
-
-Legacy unprefixed tokens are also supported.
 
 ### Zone Not Found
 

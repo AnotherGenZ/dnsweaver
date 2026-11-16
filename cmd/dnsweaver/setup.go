@@ -9,21 +9,30 @@ import (
 
 	"gopkg.in/natefinch/lumberjack.v2"
 
-	"gitlab.bluewillows.net/root/dnsweaver/internal/config"
-	"gitlab.bluewillows.net/root/dnsweaver/internal/docker"
-	k8s "gitlab.bluewillows.net/root/dnsweaver/internal/kubernetes"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
-	"gitlab.bluewillows.net/root/dnsweaver/providers/adguard"
-	"gitlab.bluewillows.net/root/dnsweaver/providers/cloudflare"
-	"gitlab.bluewillows.net/root/dnsweaver/providers/dnsmasq"
-	"gitlab.bluewillows.net/root/dnsweaver/providers/pihole"
-	"gitlab.bluewillows.net/root/dnsweaver/providers/rfc2136"
-	"gitlab.bluewillows.net/root/dnsweaver/providers/technitium"
-	"gitlab.bluewillows.net/root/dnsweaver/providers/webhook"
-	dnsweaversource "gitlab.bluewillows.net/root/dnsweaver/sources/dnsweaver"
-	k8ssource "gitlab.bluewillows.net/root/dnsweaver/sources/kubernetes"
-	"gitlab.bluewillows.net/root/dnsweaver/sources/traefik"
+	"github.com/maxfield-allison/dnsweaver/internal/config"
+	"github.com/maxfield-allison/dnsweaver/internal/docker"
+	k8s "github.com/maxfield-allison/dnsweaver/internal/kubernetes"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/source"
+	"github.com/maxfield-allison/dnsweaver/providers/adguard"
+	"github.com/maxfield-allison/dnsweaver/providers/cloudflare"
+	"github.com/maxfield-allison/dnsweaver/providers/dnsmasq"
+	"github.com/maxfield-allison/dnsweaver/providers/opnsense"
+	"github.com/maxfield-allison/dnsweaver/providers/ovh"
+	"github.com/maxfield-allison/dnsweaver/providers/pfsense"
+	"github.com/maxfield-allison/dnsweaver/providers/pihole"
+	"github.com/maxfield-allison/dnsweaver/providers/powerdns"
+	"github.com/maxfield-allison/dnsweaver/providers/rfc2136"
+	"github.com/maxfield-allison/dnsweaver/providers/technitium"
+	"github.com/maxfield-allison/dnsweaver/providers/unifi"
+	"github.com/maxfield-allison/dnsweaver/providers/webhook"
+	"github.com/maxfield-allison/dnsweaver/sources/caddy"
+	dnsweaversource "github.com/maxfield-allison/dnsweaver/sources/dnsweaver"
+	incussource "github.com/maxfield-allison/dnsweaver/sources/incus"
+	k8ssource "github.com/maxfield-allison/dnsweaver/sources/kubernetes"
+	"github.com/maxfield-allison/dnsweaver/sources/nginxproxy"
+	proxmoxsource "github.com/maxfield-allison/dnsweaver/sources/proxmox"
+	"github.com/maxfield-allison/dnsweaver/sources/traefik"
 )
 
 // parseBoolEnv reads an environment variable and returns true if it's a truthy value.
@@ -118,10 +127,53 @@ func registerSources(registry *source.Registry, cfg *config.Config, logger *slog
 				slog.String("name", name),
 				slog.Bool("file_discovery", src.SupportsDiscovery()),
 			)
+		case "caddy":
+			src := caddy.New(caddy.WithLogger(logger))
+			if err := registry.Register(src); err != nil {
+				return fmt.Errorf("registering caddy source: %w", err)
+			}
+			logger.Info("registered source",
+				slog.String("name", name),
+				slog.Bool("file_discovery", src.SupportsDiscovery()),
+			)
+		case "nginx-proxy":
+			src := nginxproxy.New(nginxproxy.WithLogger(logger))
+			if err := registry.Register(src); err != nil {
+				return fmt.Errorf("registering nginx-proxy source: %w", err)
+			}
+			logger.Info("registered source",
+				slog.String("name", name),
+				slog.Bool("file_discovery", src.SupportsDiscovery()),
+			)
 		case "kubernetes":
 			src := k8ssource.New(k8ssource.WithLogger(logger))
 			if err := registry.Register(src); err != nil {
 				return fmt.Errorf("registering kubernetes source: %w", err)
+			}
+			logger.Info("registered source",
+				slog.String("name", name),
+			)
+		case "proxmox":
+			src := proxmoxsource.New(
+				proxmoxsource.WithDomain(cfg.ProxmoxDomainSuffix()),
+				proxmoxsource.WithHostnameTagPrefix(cfg.ProxmoxHostnameTagPrefix()),
+				proxmoxsource.WithTargetMode(proxmoxTargetMode(cfg)),
+				proxmoxsource.WithLogger(logger),
+			)
+			if err := registry.Register(src); err != nil {
+				return fmt.Errorf("registering proxmox source: %w", err)
+			}
+			logger.Info("registered source",
+				slog.String("name", name),
+			)
+		case "incus":
+			src := incussource.New(
+				incussource.WithDomain(cfg.IncusDomainSuffix()),
+				incussource.WithTargetMode(incusTargetMode(cfg)),
+				incussource.WithLogger(logger),
+			)
+			if err := registry.Register(src); err != nil {
+				return fmt.Errorf("registering incus source: %w", err)
 			}
 			logger.Info("registered source",
 				slog.String("name", name),
@@ -145,7 +197,71 @@ func registerSources(registry *source.Registry, cfg *config.Config, logger *slog
 		}
 	}
 
+	// Auto-register proxmox source when Proxmox platform is enabled.
+	// Mirrors the K8s auto-registration pattern.
+	if cfg.UseProxmox() {
+		if registry.Get("proxmox") == nil {
+			src := proxmoxsource.New(
+				proxmoxsource.WithDomain(cfg.ProxmoxDomainSuffix()),
+				proxmoxsource.WithHostnameTagPrefix(cfg.ProxmoxHostnameTagPrefix()),
+				proxmoxsource.WithTargetMode(proxmoxTargetMode(cfg)),
+				proxmoxsource.WithLogger(logger),
+			)
+			if err := registry.Register(src); err != nil {
+				return fmt.Errorf("registering proxmox source: %w", err)
+			}
+			logger.Info("auto-registered proxmox source for Proxmox platform")
+		}
+	}
+
+	// Auto-register incus source when Incus is enabled.
+	// Mirrors the Proxmox auto-registration pattern.
+	if cfg.UseIncus() {
+		if registry.Get("incus") == nil {
+			src := incussource.New(
+				incussource.WithDomain(cfg.IncusDomainSuffix()),
+				incussource.WithTargetMode(incusTargetMode(cfg)),
+				incussource.WithLogger(logger),
+			)
+			if err := registry.Register(src); err != nil {
+				return fmt.Errorf("registering incus source: %w", err)
+			}
+			logger.Info("auto-registered incus source for Incus platform")
+		}
+	}
+
 	return nil
+}
+
+// proxmoxTargetMode resolves the Proxmox target mode from config. Validation
+// happens during config load — this returns the default for any unrecognized
+// value to keep the source constructor strict-typed.
+func proxmoxTargetMode(cfg *config.Config) proxmoxsource.TargetMode {
+	mode, err := proxmoxsource.ParseTargetMode(cfg.ProxmoxTargetMode())
+	if err != nil {
+		return proxmoxsource.TargetModeGuestIP
+	}
+	return mode
+}
+
+// incusTargetMode resolves the Incus target mode from config. Validation
+// happens during config load — this returns the default for any unrecognized
+// value to keep the source constructor strict-typed.
+func incusTargetMode(cfg *config.Config) incussource.TargetMode {
+	mode, err := incussource.ParseTargetMode(cfg.IncusTargetMode())
+	if err != nil {
+		return incussource.TargetModeGuestIP
+	}
+	return mode
+}
+
+// incusEndpoint returns a human-readable description of the configured Incus
+// endpoint (remote URL or local socket path) for logging.
+func incusEndpoint(cfg *config.Config) string {
+	if url := cfg.IncusURL(); url != "" {
+		return url
+	}
+	return "unix:" + cfg.IncusSocketPath()
 }
 
 // createTraefikSource creates a Traefik label parser with optional file discovery.
@@ -161,6 +277,13 @@ func createTraefikSource(cfg *config.Config, logger *slog.Logger) *traefik.Traef
 		logger.Debug("traefik file discovery configured",
 			slog.Any("paths", srcCfg.FileDiscovery.FilePaths),
 			slog.String("pattern", srcCfg.FileDiscovery.FilePattern),
+		)
+	}
+
+	if srcCfg != nil && len(srcCfg.DefaultEntryPoints) > 0 {
+		opts = append(opts, traefik.WithDefaultEntryPoints(srcCfg.DefaultEntryPoints))
+		logger.Debug("traefik default entrypoints configured",
+			slog.Any("default_entrypoints", srcCfg.DefaultEntryPoints),
 		)
 	}
 
@@ -187,8 +310,23 @@ func registerProviderFactories(registry *provider.Registry) {
 	// Register RFC 2136 provider factory (BIND, Windows DNS, PowerDNS, etc.)
 	registry.RegisterFactory("rfc2136", rfc2136.Factory())
 
+	// Register PowerDNS provider factory (native Authoritative HTTP API)
+	registry.RegisterFactory("powerdns", powerdns.Factory())
+
 	// Register AdGuard Home provider factory (local DNS via AdGuard Home API)
 	registry.RegisterFactory("adguard", adguard.Factory())
+
+	// Register OVHcloud provider factory (public DNS)
+	registry.RegisterFactory("ovh", ovh.Factory())
+
+	// Register OPNsense provider factory (Unbound/Dnsmasq host overrides via REST API)
+	registry.RegisterFactory("opnsense", opnsense.Factory())
+
+	// Register pfSense provider factory (Unbound/Dnsmasq host overrides via REST API)
+	registry.RegisterFactory("pfsense", pfsense.Factory())
+
+	// Register UniFi provider factory (DNS policies via the Network Integration API)
+	registry.RegisterFactory("unifi", unifi.Factory())
 }
 
 // initializeProviders initializes all configured providers using the manager.

@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
 )
 
 func TestConfig_Validate(t *testing.T) {
@@ -178,8 +178,8 @@ func TestAPIClient_List(t *testing.T) {
 			name: "list A records",
 			customDNS: customDNSResponse{
 				Data: [][]string{
-					{"10.0.0.100", "app.example.com"},
-					{"10.0.0.101", "db.example.com"},
+					{"app.example.com", "10.0.0.100"},
+					{"db.example.com", "10.0.0.101"},
 				},
 			},
 			cname:        cnameResponse{Data: [][]string{}},
@@ -190,7 +190,7 @@ func TestAPIClient_List(t *testing.T) {
 			name: "list AAAA records",
 			customDNS: customDNSResponse{
 				Data: [][]string{
-					{"fd00::1", "app.example.com"},
+					{"app.example.com", "fd00::1"},
 				},
 			},
 			cname:        cnameResponse{Data: [][]string{}},
@@ -212,8 +212,8 @@ func TestAPIClient_List(t *testing.T) {
 			name: "filter by zone",
 			customDNS: customDNSResponse{
 				Data: [][]string{
-					{"10.0.0.100", "app.example.com"},
-					{"10.0.0.101", "other.different.com"},
+					{"app.example.com", "10.0.0.100"},
+					{"other.different.com", "10.0.0.101"},
 				},
 			},
 			cname:        cnameResponse{Data: [][]string{}},
@@ -497,6 +497,20 @@ func TestProvider_Mode(t *testing.T) {
 				t.Errorf("Mode() = %v, want %v", p.Mode(), tt.wantMode)
 			}
 		})
+	}
+}
+
+func TestProvider_CapabilitiesDoNotClaimTXTSupport(t *testing.T) {
+	p := &Provider{mode: ModeAPI}
+	caps := p.Capabilities()
+	if caps.SupportsOwnershipTXT {
+		t.Fatal("Pi-hole API mode claims ownership TXT support but Create and Delete skip TXT records")
+	}
+	if caps.SupportsRecordType(provider.RecordTypeTXT) {
+		t.Fatal("Pi-hole API mode advertises TXT as a supported record type")
+	}
+	if caps.SupportsNativeUpdate {
+		t.Fatal("Pi-hole API mode claims native update support but does not implement provider.Updater")
 	}
 }
 

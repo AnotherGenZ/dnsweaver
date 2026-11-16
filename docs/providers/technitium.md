@@ -1,3 +1,8 @@
+---
+title: Technitium DNS Provider
+description: Automatically manage Technitium DNS records from Docker, Kubernetes, and Proxmox with dnsweaver — A, AAAA, CNAME, SRV, and TXT support via the Technitium API.
+---
+
 # Technitium DNS
 
 Technitium is a self-hosted DNS server with a REST API. It's the most full-featured provider in dnsweaver with support for all record types.
@@ -36,7 +41,13 @@ environment:
 | `DOMAINS` | Yes | - | Glob patterns to match |
 | `EXCLUDE_DOMAINS` | No | - | Patterns to exclude |
 | `TTL` | No | `300` | Record TTL in seconds |
-| `INSECURE_SKIP_VERIFY` | No | `false` | Skip TLS certificate verification |
+| `TLS_CA_FILE` | No | — | PEM CA bundle appended to system roots (private CAs) |
+| `TLS_CERT_FILE` | No | — | PEM client cert for mutual TLS (pair with `TLS_KEY_FILE`) |
+| `TLS_KEY_FILE` | No | — | PEM client key for mutual TLS |
+| `TLS_SERVER_NAME` | No | — | SNI / verification hostname override |
+| `TLS_MIN_VERSION` | No | `1.2` | Minimum TLS protocol version (`1.2` or `1.3`) |
+| `TLS_SKIP_VERIFY` | No | `false` | Skip TLS certificate verification. Prefer `TLS_CA_FILE`. |
+| `INSECURE_SKIP_VERIFY` | No | `false` | **Deprecated** alias of `TLS_SKIP_VERIFY` (will be removed in a future major release) |
 | `AUTO_HTTPS_RECORDS` | No | `true` | Auto-create companion HTTPS records (see below) |
 | `AUTO_HTTPS_ALPN` | No | `h2` | ALPN protocol for companion HTTPS records |
 
@@ -138,18 +149,50 @@ curl "http://dns-server:5380/api/zones/list?token=YOUR_TOKEN"
 
 ### TLS Certificate Errors
 
-For self-signed certificates, either:
-
-1. Add the CA to dnsweaver's trust store
-2. Use `INSECURE_SKIP_VERIFY=true` (not recommended for production)
+For servers using a private CA (e.g. an internal step-ca or Smallstep PKI),
+provide the CA bundle so the certificate chain validates normally:
 
 ```yaml
-- DNSWEAVER_TECHNITIUM_INSECURE_SKIP_VERIFY=true
+- DNSWEAVER_TECHNITIUM_TLS_CA_FILE=/run/secrets/internal_ca.pem
 ```
+
+For mutual-TLS (server requires a client cert):
+
+```yaml
+- DNSWEAVER_TECHNITIUM_TLS_CA_FILE=/run/secrets/internal_ca.pem
+- DNSWEAVER_TECHNITIUM_TLS_CERT_FILE=/run/secrets/dnsweaver.crt
+- DNSWEAVER_TECHNITIUM_TLS_KEY_FILE=/run/secrets/dnsweaver.key
+```
+
+!!! warning "Mounted certs must be readable by uid/gid 1000"
+    The container drops privileges to the unprivileged `dnsweaver` user. A key
+    mounted `root:root 0600` produces `permission denied`. Mounting via
+    `/run/secrets/` (as above) avoids this; for bind-mounts, see
+    [TLS Certificate File Permissions](../configuration/environment.md#tls-certificate-file-permissions).
+
+If the server's certificate CN/SAN differs from the URL host (e.g. you connect
+by IP but the cert is issued for a hostname), set an SNI override:
+
+```yaml
+- DNSWEAVER_TECHNITIUM_TLS_SERVER_NAME=dns.internal.example.com
+```
+
+As a last resort for self-signed certs that cannot be supplied as a CA bundle,
+you can disable verification entirely — this removes MITM protection and is
+**not recommended for production**:
+
+```yaml
+- DNSWEAVER_TECHNITIUM_TLS_SKIP_VERIFY=true
+```
+
+The legacy `DNSWEAVER_TECHNITIUM_INSECURE_SKIP_VERIFY` variable still works
+but emits a deprecation warning and will be removed in a future major release.
 
 ## Companion HTTPS Records
 
-By default, dnsweaver automatically creates companion HTTPS (SVCB Type 65) records whenever it creates an A, AAAA, or CNAME record in Technitium. This prevents **ECH (Encrypted Client Hello) fallback errors** that commonly affect split-horizon DNS environments.
+By default, dnsweaver automatically creates companion HTTPS (SVCB Type 65) records whenever it creates an A or AAAA record in Technitium. This prevents **ECH (Encrypted Client Hello) fallback errors** that commonly affect split-horizon DNS environments.
+
+Instances configured with `RECORD_TYPE=CNAME` get no companion record: a CNAME is exclusive and cannot share a name with any other record type, so Technitium rejects the companion outright. Those hostnames inherit the HTTPS record of the name their CNAME points at.
 
 ### Why This Exists
 
@@ -159,7 +202,7 @@ The companion HTTPS record tells browsers "this host speaks HTTP/2 over TLS" wit
 
 ### What Gets Created
 
-For each A/AAAA/CNAME record, dnsweaver creates:
+For each A/AAAA record, dnsweaver creates:
 
 ```
 app.example.com  300  IN  HTTPS  1 . alpn="h2"
@@ -172,9 +215,11 @@ app.example.com  300  IN  HTTPS  1 . alpn="h2"
 ### Behavior
 
 - **Enabled by default** — no configuration needed
-- **Safe** — skips creation if an HTTPS record already exists (won't overwrite manual records)
-- **Lifecycle-managed** — companion records are deleted when the parent record is removed
-- **Idempotent** — duplicate creation attempts are handled gracefully
+- **Reconciled with the parent** — ALPN and TTL changes apply even when the address is unchanged. Missing companions are recreated.
+- **Matching format** — a single enabled HTTPS record with priority 1, target `.` and only a nonempty ALPN parameter is treated as a companion when dnsweaver manages the parent address. This includes manually created records with that same format. Different priorities, targets, extra parameters, disabled records and multiple HTTPS records are left alone.
+- **Ownership policy applies** — an existing parent must be owned or eligible for adoption before its companion can change. Dry-run makes no writes.
+- **Lifecycle-managed** — a companion is kept while any A or AAAA member remains. Final-member cleanup uses the companion's stored ALPN, even if the configured value has changed.
+- **Idempotent** — unchanged companions produce no writes. Disabling automatic companions leaves existing HTTPS records in place.
 
 ### Configuration
 

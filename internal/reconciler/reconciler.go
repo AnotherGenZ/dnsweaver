@@ -10,20 +10,26 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gitlab.bluewillows.net/root/dnsweaver/internal/metrics"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/source"
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
+	"github.com/maxfield-allison/dnsweaver/internal/metrics"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/pkg/source"
+	"github.com/maxfield-allison/dnsweaver/pkg/workload"
 )
 
 // Common error messages used in reconciliation actions.
 const (
-	errRecordAlreadyExists = "record already exists"
-	errRecordTypeConflict  = "record type conflict"
+	errRecordAlreadyExists  = "record already exists"
+	errRecordTypeConflict   = "record type conflict"
+	errNoMatchingProvider   = "no matching provider"
+	errSelfReferentialCNAME = "self-referential CNAME (target equals hostname)"
+	errMultipleCNAMEMembers = "CNAME record set cannot contain multiple members"
+	errCNAMEWithOtherTypes  = "CNAME cannot share a name with other desired record types"
+)
 
-	defaultDetachedCleanupRatioThreshold       = 0.5
-	defaultDetachedCleanupRatioMinHostnames    = 10
-	defaultDetachedCleanupAbsoluteMaxHostnames = 100
+// Reconciliation-level outcome labels used for the reconciliations_total metric.
+const (
+	reconciliationStatusSuccess = "success"
+	reconciliationStatusError   = "error"
 )
 
 // Config holds reconciler configuration options.
@@ -55,37 +61,17 @@ type Config struct {
 	// Used for multi-instance coordination to scope ownership records.
 	// Empty string means single-instance mode (legacy behavior).
 	InstanceID string
-
-	// DetachedCleanupAllowMassDelete bypasses detached-provider cleanup circuit
-	// breakers. Keep false unless performing a deliberate large migration.
-	DetachedCleanupAllowMassDelete bool
-
-	// DetachedCleanupRatioThreshold triggers detached-cleanup circuit breaker
-	// when detached hostnames exceed this ratio of previously routed hostnames.
-	DetachedCleanupRatioThreshold float64
-
-	// DetachedCleanupRatioMinHostnames is the minimum detached hostname count
-	// required before ratio-based circuit breaker logic can trigger.
-	DetachedCleanupRatioMinHostnames int
-
-	// DetachedCleanupAbsoluteMaxHostnames triggers detached-cleanup circuit
-	// breaker when detached hostname count reaches this absolute threshold.
-	DetachedCleanupAbsoluteMaxHostnames int
 }
 
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() Config {
 	return Config{
-		DryRun:                              false,
-		CleanupOrphans:                      true,
-		OwnershipTracking:                   true,
-		AdoptExisting:                       false,
-		ReconcileInterval:                   60 * time.Second,
-		Enabled:                             true,
-		DetachedCleanupAllowMassDelete:      false,
-		DetachedCleanupRatioThreshold:       defaultDetachedCleanupRatioThreshold,
-		DetachedCleanupRatioMinHostnames:    defaultDetachedCleanupRatioMinHostnames,
-		DetachedCleanupAbsoluteMaxHostnames: defaultDetachedCleanupAbsoluteMaxHostnames,
+		DryRun:            false,
+		CleanupOrphans:    true,
+		OwnershipTracking: true,
+		AdoptExisting:     false,
+		ReconcileInterval: 60 * time.Second,
+		Enabled:           true,
 	}
 }
 
@@ -111,16 +97,33 @@ type Reconciler struct {
 	enabled atomic.Bool
 	dryRun  atomic.Bool
 
-	// mu protects knownHostnames and recoveredMetadata during concurrent access
+	// mu protects knownHostnames, recoveredMetadata, and warnedOnce during
+	// concurrent access
 	mu sync.RWMutex
 	// knownHostnames tracks hostnames discovered in the last reconciliation.
 	// Used for orphan detection.
 	knownHostnames map[string]struct{}
 
+	// warnedOnce tracks conditions already reported at warn level, keyed by
+	// "<reason>|<provider>|<hostname>", so a problem that cannot resolve on its
+	// own (a self-referential CNAME, a type conflict dnsweaver may not replace)
+	// is logged once rather than on every reconciliation interval. Populated
+	// lazily; see warnOnce.
+	warnedOnce map[string]struct{}
+
 	// hostnameProviders tracks which provider(s) each hostname was routed to
 	// in the previous reconciliation. Used by orphan cleanup to delete records
 	// from the correct provider even when domain patterns have changed (#51).
 	hostnameProviders map[string][]string
+
+	// previousDesired retains the last complete provider-routed member set.
+	// Providers without durable TXT ownership use it to make safe removals
+	// during this process lifetime; it is deliberately empty after restart.
+	previousDesired     map[desiredSetKey]previousDesiredSet
+	pendingReplacements map[replacementKey]replacementRecovery
+	// A confirmed answer write whose ownership publication failed may be
+	// repaired by this process. This proof is disposable and empty after restart.
+	pendingMemberOwnership map[memberOwnershipRepairKey]memberOwnershipRepair
 
 	// reconcileMu serializes full Reconcile() calls to prevent concurrent
 	// reconciliation cycles from interleaving (e.g., periodic timer firing
@@ -132,33 +135,6 @@ type Reconciler struct {
 	// by the first reconciliation cycle. After the first cycle completes, this
 	// map is cleared — sources become the authoritative metadata source.
 	recoveredMetadata map[string]map[string]string
-}
-
-// detachedRoutingState captures whether current provider routing for a hostname
-// is healthy enough to safely clean up previously-attached providers.
-type detachedRoutingState struct {
-	hasReadyCurrentProvider bool
-	hasCurrentProviderError bool
-}
-
-func classifyDetachedRoutingAction(state *detachedRoutingState, action Action) {
-	switch action.Status {
-	case StatusFailed:
-		state.hasCurrentProviderError = true
-	case StatusSuccess:
-		state.hasReadyCurrentProvider = true
-	case StatusSkipped:
-		// A skip due to existing desired record is a healthy routed state.
-		if action.Error == errRecordAlreadyExists {
-			state.hasReadyCurrentProvider = true
-			return
-		}
-		// Other skip reasons (e.g. type conflict) are not healthy enough to
-		// safely remove the old provider mapping in this cycle.
-		state.hasCurrentProviderError = true
-	default:
-		state.hasCurrentProviderError = true
-	}
 }
 
 // Option is a functional option for configuring the Reconciler.
@@ -198,6 +174,7 @@ func New(
 		logger:            slog.Default(),
 		knownHostnames:    make(map[string]struct{}),
 		hostnameProviders: make(map[string][]string),
+		previousDesired:   make(map[desiredSetKey]previousDesiredSet),
 	}
 
 	for _, opt := range opts {
@@ -265,65 +242,139 @@ func (r *Reconciler) Reconcile(ctx context.Context) (*Result, error) {
 	}
 	result.WorkloadsScanned = len(allWorkloads)
 
-	// Step 2: Extract hostnames from each workload
-	discoveredHostnames := r.extractHostnames(ctx, allWorkloads, result)
-
-	result.HostnamesDiscovered = len(discoveredHostnames)
+	// Step 2: Extract source claims without collapsing distinct DNS members.
+	extracted := r.extractClaims(ctx, allWorkloads, result)
+	result.HostnamesDiscovered = len(extracted.Unique)
 
 	r.logger.Info("hostname extraction complete",
 		slog.Int("workloads", len(allWorkloads)),
-		slog.Int("hostnames", len(discoveredHostnames)),
+		slog.Int("hostnames", len(extracted.Unique)),
+		slog.Int("claims", len(extracted.Claims)),
+		slog.Bool("complete", extracted.Complete),
 	)
+
+	if !dryRun && r.config.OwnershipTracking {
+		for _, instance := range r.providers.All() {
+			if migrator, ok := instance.Provider.(provider.OwnershipMigrator); ok {
+				if err := migrator.MigrateOwnership(ctx); err != nil {
+					return nil, fmt.Errorf("preparing ownership for %s: %w", instance.Name(), err)
+				}
+			}
+		}
+	}
 
 	// Step 3: Build record cache for all providers (single List() call per provider).
 	// Built even in dry-run mode so orphan cleanup can report accurate record counts.
 	cache := newRecordCache(ctx, r.providers, r.logger)
 
-	// Step 4: Ensure records exist for all discovered hostnames.
-	// Track which providers each hostname is routed to for orphan cleanup (#51).
-	currentProviderMapping := make(map[string][]string, len(discoveredHostnames))
-	currentRoutingState := make(map[string]detachedRoutingState, len(discoveredHostnames))
-	for normalizedName, hostname := range discoveredHostnames {
-		actions := r.ensureRecord(ctx, hostname, cache)
+	// Step 4: Compile provider-routed desired sets, then reconcile every set
+	// once. Previous in-memory sets and durable member markers contribute empty
+	// desired sets so removed routes and post-restart orphans are handled by the
+	// same exact-member diff.
+	compiled := r.compileDesiredRecordSets(extracted.Claims)
+	result.DesiredMembers = desiredMemberCount(compiled)
+	for _, action := range compiled.Skipped {
+		result.AddAction(action)
+	}
+	// A contradictory name keeps every record it has until its sources agree,
+	// so pending recovery and repair writes at that name wait as well.
+	blockedReplacements := r.retryReplacements(ctx, cache, result, compiled.RejectedNames)
+	for key := range r.retryMemberOwnership(ctx, cache, result, compiled.RejectedNames) {
+		blockedReplacements[key] = true
+	}
+	for name := range compiled.RejectedNames {
+		blockedReplacements[name] = true
+	}
+	sets, previous := r.reconciliationSets(compiled, cache)
+	nextPrevious := make(map[desiredSetKey]previousDesiredSet, len(previous)+len(compiled.Sets))
+	for key, prior := range previous {
+		nextPrevious[key] = prior
+	}
+	complete := extracted.Complete && compiled.RoutingComplete
+	// A destination that could not be read cannot establish a safe route move.
+	// Preserve the old route until every provider snapshot is available.
+	for _, instance := range r.providers.All() {
+		complete = complete && cache.providerAvailable(instance.Name())
+	}
+	allowRemovals := r.config.CleanupOrphans && complete
+	if allowRemovals {
+		allowRemovals = r.memberRemovalsAllowed(compiled, cache, previous)
+	} else if r.config.CleanupOrphans && !complete {
+		r.logger.Warn("desired-state snapshot is partial; suppressing member removals")
+	}
+	failedDestinations := make(map[string]bool)
+	// A rejected destination publishes nothing, so its hostname's old route on
+	// another backend must not be retired as if the move had succeeded.
+	for name := range compiled.RejectedNames {
+		failedDestinations[name.Hostname] = true
+	}
+	for _, set := range sets {
+		replacement := replacementKey{set.Key.Identity, set.Key.Hostname}
+		if blockedReplacements[replacement] {
+			failedDestinations[set.Key.Hostname] = true
+			continue
+		}
+		var priorRecords []provider.Record
+		for key, prior := range previous {
+			if key.Identity == set.Key.Identity && key.Hostname == set.Key.Hostname {
+				priorRecords = append(priorRecords, prior.Records...)
+			}
+		}
+		// reconciliationSets places desired destinations before empty retired
+		// routes. Preserve the old route if a destination write was rejected,
+		// including policy skips and failed ownership-marker creation.
+		setRemovals := allowRemovals && (len(set.Members) != 0 || !failedDestinations[set.Key.Hostname])
+		actions, managed := r.reconcileDesiredSetWithState(ctx, set, cache, priorRecords, setRemovals)
+		for _, action := range actions {
+			if action.Status == StatusFailed || (action.Status == StatusSkipped && action.Error != "" && action.Error != errRecordAlreadyExists) {
+				failedDestinations[set.Key.Hostname] = true
+			}
+			if action.Status == StatusFailed {
+				blockedReplacements[replacement] = true
+			}
+		}
+		if !dryRun {
+			for _, member := range set.Members {
+				_, durable := cache.memberOwnershipRecord(set.Instance.Name(), member.Record, set.Instance.InstanceID)
+				needsDurable := r.config.OwnershipTracking && set.Instance.Mode.RequiresOwnership() && set.Instance.Provider.Capabilities().SupportsOwnershipTXT
+				if !recordMemberPresent(managed, member.Record) || (needsDurable && !durable) {
+					failedDestinations[set.Key.Hostname] = true
+				}
+			}
+		}
+		sameTypeManaged := make([]provider.Record, 0, len(managed))
+		for _, record := range managed {
+			if record.Type == set.Key.RecordType {
+				sameTypeManaged = append(sameTypeManaged, record)
+			}
+		}
+		managed = sameTypeManaged
 		for _, action := range actions {
 			result.AddAction(action)
-			if action.Provider == "" {
-				continue
-			}
-			if _, exists := r.providers.Get(action.Provider); !exists {
-				continue
-			}
-			currentProviderMapping[normalizedName] = appendUnique(currentProviderMapping[normalizedName], action.Provider)
-			state := currentRoutingState[normalizedName]
-			classifyDetachedRoutingAction(&state, action)
-			currentRoutingState[normalizedName] = state
 		}
-	}
-
-	// Step 5: Cleanup for hostnames that lost provider routing, and true orphans.
-	if r.config.CleanupOrphans {
-		// Step 5a: Hostname still exists but no longer routes to one or more providers
-		// (e.g., match filter/config changes). Clean up records from detached providers.
-		detachedActions := r.cleanupDetachedProviders(ctx, discoveredHostnames, currentProviderMapping, currentRoutingState, cache)
-		for _, action := range detachedActions {
-			result.AddAction(action)
-		}
-
-		// Step 5b: Hostname no longer exists in discovered sources.
-		orphanActions := r.cleanupOrphans(ctx, discoveredHostnames, cache)
-		for _, action := range orphanActions {
-			result.AddAction(action)
+		if !dryRun {
+			if len(managed) == 0 {
+				delete(nextPrevious, set.Key)
+			} else {
+				nextPrevious[set.Key] = previousDesiredSet{
+					ProviderName: set.Instance.Name(),
+					Records:      managed,
+				}
+			}
 		}
 	}
 
 	// Update known hostnames and provider mapping for next orphan check
 	r.mu.Lock()
-	r.knownHostnames = make(map[string]struct{}, len(discoveredHostnames))
-	for name := range discoveredHostnames {
+	r.knownHostnames = make(map[string]struct{}, len(extracted.Unique))
+	for name := range extracted.Unique {
 		r.knownHostnames[name] = struct{}{}
 	}
-	r.hostnameProviders = currentProviderMapping
+	r.hostnameProviders = compiled.HostnameProviders
 	r.mu.Unlock()
+	if complete && !dryRun {
+		r.rememberDesired(nextPrevious)
+	}
 
 	result.Complete()
 
@@ -342,89 +393,42 @@ func (r *Reconciler) Reconcile(ctx context.Context) (*Result, error) {
 	return result, nil
 }
 
-// extractHostnames extracts hostnames from workloads and file sources.
-// Returns a map of normalized hostname -> source.Hostname.
-func (r *Reconciler) extractHostnames(ctx context.Context, workloads []workload.Workload, result *Result) map[string]*source.Hostname {
-	// Track hostname -> first workload that defined it (for duplicate detection)
-	// Use map to source.Hostname to preserve RecordHints from native labels
-	discoveredHostnames := make(map[string]*source.Hostname)
-	hostnameOrigins := make(map[string]string) // hostname -> workload name
+// mergeDuplicateHostname resolves a collision between an already-selected
+// hostname and a newly discovered duplicate of the same (normalized) name.
+//
+// Precedence is explicit and independent of source registration order: the
+// candidate carrying per-record hints (RecordHints, e.g. a native dnsweaver
+// record with proxied=false) wins over one without (e.g. a Traefik router rule
+// that only yields a bare hostname). When neither or both carry hints, the
+// existing selection is kept for determinism. Instance-selection metadata from
+// the losing candidate is preserved on the winner so provider-instance
+// filtering (e.g. Traefik entrypoints) still applies. See issue #159.
+func mergeDuplicateHostname(existing, candidate *source.Hostname) *source.Hostname {
+	winner, loser := existing, candidate
+	if existing.RecordHints == nil && candidate.RecordHints != nil {
+		winner, loser = candidate, existing
+	}
+	winner.Metadata = mergeInstanceMetadata(winner.Metadata, loser.Metadata)
+	return winner
+}
 
-	for _, w := range workloads {
-		hostnames := r.sources.ExtractAll(ctx, w)
-
-		// Validate hostnames and log warnings for invalid ones
-		validation := hostnames.ValidateAll()
-		for _, inv := range validation.Invalid {
-			r.logger.Warn("skipping invalid hostname from workload",
-				slog.String("workload", w.Name),
-				slog.String("hostname", inv.Hostname.Name),
-				slog.String("source", inv.Hostname.Source),
-				slog.String("error", inv.Error.Error()),
-			)
-			result.HostnamesInvalid++
-		}
-		hostnames = validation.Valid
-
-		if len(hostnames) > 0 {
-			r.logger.Debug("extracted hostnames from workload",
-				slog.String("workload", w.Name),
-				slog.Int("count", len(hostnames)),
-				slog.Any("hostnames", hostnames.Names()),
-			)
-		}
-
-		for i := range hostnames {
-			hostname := &hostnames[i]
-			// Use normalized (lowercase) name as key for case-insensitive comparison (RFC 1035)
-			normalizedName := hostname.NormalizedName()
-			if existingWorkload, exists := hostnameOrigins[normalizedName]; exists {
-				// Duplicate hostname detected
-				r.logger.Warn("duplicate hostname found in multiple workloads",
-					slog.String("hostname", hostname.Name),
-					slog.String("first_workload", existingWorkload),
-					slog.String("duplicate_workload", w.Name),
-				)
-				result.HostnamesDuplicate++
-				// First workload wins - don't update hostnameOrigins
-			} else {
-				hostnameOrigins[normalizedName] = w.Name
-				discoveredHostnames[normalizedName] = hostname
-			}
+// mergeInstanceMetadata returns the union of two instance-selection metadata
+// maps. The winner's existing keys take precedence; the loser only fills gaps.
+// The winner map is returned (possibly newly allocated); neither input's
+// existing values are overwritten.
+func mergeInstanceMetadata(winner, loser map[string]string) map[string]string {
+	if len(loser) == 0 {
+		return winner
+	}
+	if winner == nil {
+		winner = make(map[string]string, len(loser))
+	}
+	for k, v := range loser {
+		if _, ok := winner[k]; !ok {
+			winner[k] = v
 		}
 	}
-
-	// Discover hostnames from static config files (Traefik YAML, etc.)
-	fileHostnames := r.sources.DiscoverAll(ctx)
-	if len(fileHostnames) > 0 {
-		// Validate file-discovered hostnames
-		validation := fileHostnames.ValidateAll()
-		for _, inv := range validation.Invalid {
-			r.logger.Warn("skipping invalid hostname from file",
-				slog.String("hostname", inv.Hostname.Name),
-				slog.String("source", inv.Hostname.Source),
-				slog.String("router", inv.Hostname.Router),
-				slog.String("error", inv.Error.Error()),
-			)
-			result.HostnamesInvalid++
-		}
-		fileHostnames = validation.Valid
-
-		r.logger.Debug("discovered hostnames from files",
-			slog.Int("count", len(fileHostnames)),
-			slog.Any("hostnames", fileHostnames.Names()),
-		)
-		for i := range fileHostnames {
-			hostname := &fileHostnames[i]
-			// Use normalized (lowercase) name as key for case-insensitive comparison (RFC 1035)
-			normalizedName := hostname.NormalizedName()
-			if _, exists := discoveredHostnames[normalizedName]; !exists {
-				discoveredHostnames[normalizedName] = hostname
-			}
-		}
-	}
-
-	return discoveredHostnames
+	return winner
 }
 
 // ReconcileHostname performs reconciliation for a single hostname.
@@ -657,9 +661,9 @@ func (r *Reconciler) RecoverOwnership(ctx context.Context) error {
 // recordMetrics records Prometheus metrics from a reconciliation result.
 func (r *Reconciler) recordMetrics(result *Result) {
 	// Record reconciliation outcome
-	status := "success"
+	status := reconciliationStatusSuccess
 	if result.HasErrors() {
-		status = "error"
+		status = reconciliationStatusError
 	}
 	metrics.ReconciliationsTotal.WithLabelValues(status).Inc()
 
@@ -669,21 +673,26 @@ func (r *Reconciler) recordMetrics(result *Result) {
 	// Record workload and hostname counts
 	metrics.WorkloadsScanned.Set(float64(result.WorkloadsScanned))
 	metrics.HostnamesDiscovered.Set(float64(result.HostnamesDiscovered))
+	metrics.DesiredRecordMembers.Set(float64(result.DesiredMembers))
 
 	// Record per-action metrics
 	for _, action := range result.Actions {
 		switch action.Type {
 		case ActionCreate:
-			if action.Status == StatusSuccess {
+			switch action.Status {
+			case StatusSuccess:
 				metrics.RecordsCreatedTotal.WithLabelValues(action.Provider).Inc()
-			} else if action.Status == StatusFailed {
+			case StatusFailed:
 				metrics.RecordsFailedTotal.WithLabelValues(action.Provider, "create").Inc()
+			default:
 			}
 		case ActionDelete:
-			if action.Status == StatusSuccess {
+			switch action.Status {
+			case StatusSuccess:
 				metrics.RecordsDeletedTotal.WithLabelValues(action.Provider).Inc()
-			} else if action.Status == StatusFailed {
+			case StatusFailed:
 				metrics.RecordsFailedTotal.WithLabelValues(action.Provider, "delete").Inc()
+			default:
 			}
 		case ActionUpdate:
 			// Update actions are currently not emitted, but handle for completeness
@@ -696,7 +705,7 @@ func (r *Reconciler) recordMetrics(result *Result) {
 				reason = action.Error
 			}
 			// Normalize common skip reasons
-			if reason == "no matching provider" {
+			if reason == errNoMatchingProvider {
 				reason = "no_provider"
 			}
 			metrics.RecordsSkippedTotal.WithLabelValues(reason).Inc()

@@ -1,6 +1,9 @@
 package docker
 
-import "log/slog"
+import (
+	"log/slog"
+	"time"
+)
 
 // Option is a functional option for configuring the Client.
 type Option func(*Client)
@@ -46,8 +49,8 @@ func WithLogger(logger *slog.Logger) Option {
 
 // WithCleanupOnStop controls whether stopped containers are considered orphans.
 //
-// When true (default): Only running containers are discovered. Stopped containers
-// are treated as orphans and their DNS records are cleaned up.
+// When true (default): Docker's running set is discovered, including paused and
+// restarting containers. Stopped containers are treated as orphans.
 //
 // When false: Both running and stopped containers are discovered. DNS records
 // are only cleaned up when containers are removed, not when they're stopped.
@@ -55,5 +58,21 @@ func WithLogger(logger *slog.Logger) Option {
 func WithCleanupOnStop(cleanup bool) Option {
 	return func(c *Client) {
 		c.cleanupOnStop = cleanup
+	}
+}
+
+// WithConnectTimeout sets how long NewClient retries the initial Docker
+// connection before failing hard. Zero (the default when this option is
+// omitted) means fail immediately on the first connection error.
+//
+// This exists so a label-driven socket proxy — which only authorizes
+// dnsweaver's container a few seconds after it starts — doesn't lose a startup
+// race (#125). Deterministic misconfiguration (e.g. Swarm forced but the node
+// is not a manager) still fails immediately regardless of this value.
+func WithConnectTimeout(timeout time.Duration) Option {
+	return func(c *Client) {
+		if timeout > 0 {
+			c.connectTimeout = timeout
+		}
 	}
 }

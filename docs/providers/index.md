@@ -20,6 +20,14 @@ dnsweaver supports multiple DNS providers, each with different capabilities and 
 
     [:octicons-arrow-right-24: Configuration](cloudflare.md)
 
+-   :material-cloud:{ .lg .middle } **OVHcloud**
+
+    ---
+
+    Public DNS for OVH-hosted domains. REST API.
+
+    [:octicons-arrow-right-24: Configuration](ovh.md)
+
 -   :material-dns:{ .lg .middle } **Technitium**
 
     ---
@@ -60,6 +68,14 @@ dnsweaver supports multiple DNS providers, each with different capabilities and 
 
     [:octicons-arrow-right-24: Configuration](rfc2136.md)
 
+-   :material-server-network:{ .lg .middle } **PowerDNS**
+
+    ---
+
+    PowerDNS Authoritative Server via its native HTTP API. REST API.
+
+    [:octicons-arrow-right-24: Configuration](powerdns.md)
+
 -   :material-shield-home:{ .lg .middle } **AdGuard Home**
 
     ---
@@ -68,6 +84,30 @@ dnsweaver supports multiple DNS providers, each with different capabilities and 
 
     [:octicons-arrow-right-24: Configuration](adguard.md)
 
+-   :material-firewall:{ .lg .middle } **OPNsense**
+
+    ---
+
+    Manage Unbound or Dnsmasq host overrides on OPNsense. REST API.
+
+    [:octicons-arrow-right-24: Configuration](opnsense.md)
+
+-   :material-firewall:{ .lg .middle } **pfSense**
+
+    ---
+
+    Manage Unbound or Dnsmasq host overrides on pfSense. REST API.
+
+    [:octicons-arrow-right-24: Configuration](pfsense.md)
+
+-   :material-access-point-network:{ .lg .middle } **UniFi Network**
+
+    ---
+
+    DNS policies on UniFi OS consoles and UniFi OS Server via the official Integration API. REST API.
+
+    [:octicons-arrow-right-24: Configuration](unifi.md)
+
 </div>
 
 ## Provider Comparison
@@ -75,11 +115,16 @@ dnsweaver supports multiple DNS providers, each with different capabilities and 
 | Provider | API Type | Record Types | Best For |
 | :------- | :------- | :----------- | :------- |
 | [Technitium](technitium.md) | REST API | A, AAAA, CNAME, SRV, TXT | Self-hosted, full-featured DNS |
-| [Cloudflare](cloudflare.md) | REST API | A, AAAA, CNAME, TXT | Public DNS with CDN/proxy |
+| [Cloudflare](cloudflare.md) | REST API | A, AAAA, CNAME, SRV, MX, NS, TXT | Public DNS with CDN/proxy |
+| [OVHcloud](ovh.md) | REST API | A, AAAA, CNAME, SRV, TXT | Public DNS for OVH-hosted domains |
 | [RFC 2136](rfc2136.md) | DNS Protocol | A, AAAA, CNAME, SRV, TXT | BIND, Windows DNS, PowerDNS, Knot |
-| [Pi-hole](pihole.md) | REST API or File | A, AAAA, CNAME | Existing Pi-hole setups |
+| [PowerDNS](powerdns.md) | REST API | A, AAAA, CNAME, SRV, TXT | PowerDNS via native HTTP API |
+| [Pi-hole](pihole.md) | REST API or File | A, CNAME | Existing Pi-hole setups |
 | [AdGuard Home](adguard.md) | REST API | A, AAAA, CNAME | Existing AdGuard Home setups |
-| [dnsmasq](dnsmasq.md) | File | A, AAAA, CNAME | Simple file-based DNS |
+| [OPNsense](opnsense.md) | REST API | A, AAAA | Unbound or Dnsmasq host overrides on OPNsense |
+| [pfSense](pfsense.md) | REST API | A, AAAA | Unbound or Dnsmasq host overrides on pfSense |
+| [UniFi Network](unifi.md) | REST API | A, AAAA, CNAME, SRV, TXT | UniFi OS consoles and UniFi OS Server (Network 10.6+); records are served by a UniFi gateway |
+| [dnsmasq](dnsmasq.md) | File | A, CNAME | Simple file-based DNS |
 | [Webhook](webhook.md) | HTTP Callback | Any | Custom integrations |
 
 ## Multi-Provider Architecture
@@ -160,3 +205,7 @@ To adopt existing records (and take ownership):
 ```bash
 DNSWEAVER_ADOPT_EXISTING=true
 ```
+
+The global policy can be narrowed per provider or workload. Workload requests
+to enable adoption require an explicit per-provider gate. See
+[Existing-record adoption](../configuration/environment.md#existing-record-adoption).

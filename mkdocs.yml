@@ -1,6 +1,6 @@
 site_name: dnsweaver
 site_url: https://maxfield-allison.github.io/dnsweaver/
-site_description: Automatic DNS management for Docker and Kubernetes workloads — multi-provider, split-horizon, and platform-agnostic
+site_description: Automatic DNS records for containers, VMs and clusters. Seven sources, twelve DNS providers, split-horizon out of the box.
 site_author: Maxfield Allison
 
 repo_name: maxfield-allison/dnsweaver
@@ -13,23 +13,25 @@ copyright: |
 
 theme:
   name: material
+  custom_dir: docs-theme
   palette:
     # Light mode
     - media: "(prefers-color-scheme: light)"
       scheme: default
-      primary: blue grey
-      accent: teal
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     # Dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
-      primary: blue grey
-      accent: teal
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
+  font: false
   features:
     - announce.dismiss
     - content.action.edit
@@ -54,13 +56,17 @@ theme:
     - toc.follow
   icon:
     repo: fontawesome/brands/github
-  logo: assets/logo.svg
-  # favicon uses Material theme default
+  logo: assets/brand/mark-bright.svg
+  favicon: assets/brand/favicon.svg
+
+extra_css:
+  - stylesheets/brand.css
 
 extra_javascript:
   - assets/javascripts/mermaid-init.js
 
 extra:
+  product_analytics: {"website_id":"cc65b305-04f1-412b-89ce-f66abdb1afb9","campaign_values":{"utm_source":["bluesky","facebook","linkedin","reddit","threads","viva","instagram","hackernews","github","probablyfine","newsletter"],"utm_medium":["social","referral","email"],"utm_campaign":["dnsweaver-launch"],"utm_content":["launch","megathread","policy","sample","article","followup","story","readme"]}}
   generator: false
   status:
     new: Recently added
@@ -72,9 +78,6 @@ extra:
     - icon: fontawesome/brands/docker
       link: https://hub.docker.com/r/maxamill/dnsweaver
       name: dnsweaver on Docker Hub
-    - icon: simple/gitlab
-      link: https://gitlab.bluewillows.net/root/dnsweaver
-      name: Source Repository
 
 markdown_extensions:
   - abbr
@@ -126,13 +129,19 @@ nav:
       - Operational Modes: configuration/modes.md
       - Secrets Management: configuration/secrets.md
       - Multi-Instance: configuration/multi-instance.md
+      - Ownership Storage: configuration/ownership.md
   - Providers:
       - providers/index.md
       - Technitium: providers/technitium.md
       - Cloudflare: providers/cloudflare.md
+      - OVHcloud: providers/ovh.md
       - RFC 2136: providers/rfc2136.md
+      - PowerDNS: providers/powerdns.md
       - Pi-hole: providers/pihole.md
       - AdGuard Home: providers/adguard.md
+      - OPNsense: providers/opnsense.md
+      - pfSense: providers/pfsense.md
+      - UniFi Network: providers/unifi.md
       - dnsmasq: providers/dnsmasq.md
       - Webhook: providers/webhook.md
   - Sources:
@@ -140,8 +149,12 @@ nav:
       - Docker Labels: sources/docker.md
       - Docker Swarm: sources/swarm.md
       - Traefik Files: sources/traefik-files.md
+      - Caddy Labels: sources/caddy.md
+      - nginx-proxy Labels: sources/nginx-proxy.md
       - Native Labels: sources/native-labels.md
       - Kubernetes: sources/kubernetes.md
+      - Proxmox VE: sources/proxmox.md
+      - Incus: sources/incus.md
   - Deployment:
       - deployment/index.md
       - Docker Compose: deployment/docker-compose.md
@@ -158,6 +171,10 @@ nav:
   - Contributing:
       - contributing/index.md
       - Development Setup: contributing/development.md
+      - Releases: contributing/releases.md
       - Architecture: contributing/architecture.md
+      - Ownership Format: contributing/ownership-format.md
+      - Ownership Qualification: contributing/ownership-qualification.md
       - Adding a Provider: contributing/adding-provider.md
       - Adding a Source: contributing/adding-source.md
+  - Website privacy: privacy.md

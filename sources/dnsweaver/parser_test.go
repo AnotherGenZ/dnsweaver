@@ -186,6 +186,128 @@ func TestParser_NamedRecord_SRV(t *testing.T) {
 	}
 }
 
+func TestParser_NamedRecord_MX(t *testing.T) {
+	tests := []struct {
+		name           string
+		labels         map[string]string
+		wantTarget     string
+		wantPreference uint16
+	}{
+		{
+			name: "explicit preference",
+			labels: map[string]string{
+				"dnsweaver.records.mail.hostname": "example.com",
+				"dnsweaver.records.mail.type":     "MX",
+				"dnsweaver.records.mail.target":   "mail.protonmail.ch",
+				"dnsweaver.records.mail.priority": "10",
+			},
+			wantTarget:     "mail.protonmail.ch",
+			wantPreference: 10,
+		},
+		{
+			name: "missing preference defaults to zero",
+			labels: map[string]string{
+				"dnsweaver.records.mail.hostname": "example.com",
+				"dnsweaver.records.mail.type":     "MX",
+				"dnsweaver.records.mail.target":   "mail.protonmail.ch",
+			},
+			wantTarget:     "mail.protonmail.ch",
+			wantPreference: 0,
+		},
+		{
+			name: "lowercase type is normalized",
+			labels: map[string]string{
+				"dnsweaver.records.mail.hostname": "example.com",
+				"dnsweaver.records.mail.type":     "mx",
+				"dnsweaver.records.mail.target":   "mailsec.protonmail.ch",
+				"dnsweaver.records.mail.priority": "20",
+			},
+			wantTarget:     "mailsec.protonmail.ch",
+			wantPreference: 20,
+		},
+		{
+			name: "unparseable preference falls back to zero",
+			labels: map[string]string{
+				"dnsweaver.records.mail.hostname": "example.com",
+				"dnsweaver.records.mail.type":     "MX",
+				"dnsweaver.records.mail.target":   "mail.protonmail.ch",
+				"dnsweaver.records.mail.priority": "not-a-number",
+			},
+			wantTarget:     "mail.protonmail.ch",
+			wantPreference: 0,
+		},
+		{
+			name: "out-of-range preference falls back to zero",
+			labels: map[string]string{
+				"dnsweaver.records.mail.hostname": "example.com",
+				"dnsweaver.records.mail.type":     "MX",
+				"dnsweaver.records.mail.target":   "mail.protonmail.ch",
+				"dnsweaver.records.mail.priority": "70000",
+			},
+			wantTarget:     "mail.protonmail.ch",
+			wantPreference: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parser := NewParser(WithParserLogger(testLogger()))
+			extractions := parser.ExtractHostnames(tt.labels)
+
+			if len(extractions) != 1 {
+				t.Fatalf("expected 1 extraction, got %d", len(extractions))
+			}
+
+			e := extractions[0]
+			if e.Type != "MX" {
+				t.Errorf("type = %q, want %q", e.Type, "MX")
+			}
+			if e.Target != tt.wantTarget {
+				t.Errorf("target = %q, want %q", e.Target, tt.wantTarget)
+			}
+			if e.MX == nil {
+				t.Fatal("MX data is nil")
+			}
+			if e.MX.Preference != tt.wantPreference {
+				t.Errorf("preference = %d, want %d", e.MX.Preference, tt.wantPreference)
+			}
+			if e.SRV != nil {
+				t.Errorf("SRV data = %+v, want nil for an MX record", e.SRV)
+			}
+		})
+	}
+}
+
+func TestParser_NamedRecord_NS(t *testing.T) {
+	parser := NewParser(WithParserLogger(testLogger()))
+
+	labels := map[string]string{
+		"dnsweaver.records.deleg.hostname": "sub.example.com",
+		"dnsweaver.records.deleg.type":     "NS",
+		"dnsweaver.records.deleg.target":   "ns1.example.net",
+	}
+
+	extractions := parser.ExtractHostnames(labels)
+
+	if len(extractions) != 1 {
+		t.Fatalf("expected 1 extraction, got %d", len(extractions))
+	}
+
+	e := extractions[0]
+	if e.Type != "NS" {
+		t.Errorf("type = %q, want %q", e.Type, "NS")
+	}
+	if e.Target != "ns1.example.net" {
+		t.Errorf("target = %q, want %q", e.Target, "ns1.example.net")
+	}
+	if e.MX != nil {
+		t.Errorf("MX data = %+v, want nil for an NS record", e.MX)
+	}
+	if e.SRV != nil {
+		t.Errorf("SRV data = %+v, want nil for an NS record", e.SRV)
+	}
+}
+
 func TestParser_MultipleRecords(t *testing.T) {
 	parser := NewParser(WithParserLogger(testLogger()))
 

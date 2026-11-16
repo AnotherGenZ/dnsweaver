@@ -14,6 +14,10 @@ const (
 
 	// MaxLabelLength is the maximum length of a single label (63 chars).
 	MaxLabelLength = 63
+
+	// recordTypeSRV is the RecordHints.Type value that selects RFC 2782 SRV
+	// hostname validation instead of RFC 1123.
+	recordTypeSRV = "SRV"
 )
 
 // Common hostname validation errors.
@@ -76,12 +80,14 @@ func (e *HostnameValidationError) Unwrap() error {
 	return e.Err
 }
 
-// ValidateHostname validates a hostname according to RFC 1123.
+// ValidateHostname validates a DNS owner name using RFC 1123 label rules,
+// with optional leading underscores for attribute labels (RFC 8552).
 //
 // Rules:
 //   - Total length <= 253 characters
 //   - Each label (dot-separated part) <= 63 characters
-//   - Labels must start and end with alphanumeric (a-z, A-Z, 0-9)
+//   - Each label may have one leading underscore (RFC 8552)
+//   - The rest must start and end with alphanumeric (a-z, A-Z, 0-9)
 //   - Labels can contain hyphens in the middle
 //   - No empty labels (no ".." or leading/trailing dots after normalization)
 //   - Case insensitive (validation accepts both upper and lower case)
@@ -122,6 +128,14 @@ func ValidateHostname(hostname string) error {
 		// Special case: wildcard in first label
 		if i == 0 && label == "*" {
 			continue
+		}
+
+		// An underscored label scopes an attribute rather than naming a host
+		// (RFC 8552): _dmarc, _domainkey, _acme-challenge, _matrix._tcp. The
+		// rest of the label follows the ordinary rules.
+		label = strings.TrimPrefix(label, "_")
+		if label == "" {
+			return &HostnameValidationError{Hostname: hostname, Label: label, Err: ErrLabelEmpty}
 		}
 
 		// Validate label format
@@ -239,17 +253,23 @@ type SRVHints struct {
 	Port     uint16 // TCP/UDP port number (1-65535)
 }
 
+// MXHints contains MX record-specific hints from source labels.
+type MXHints struct {
+	Preference uint16 // Lower values are tried first (0-65535)
+}
+
 // RecordHints contains optional hints for DNS record creation.
 // These allow sources (particularly native dnsweaver labels) to specify
 // record details that override provider defaults.
 //
 // All fields are optional - nil/zero values mean "use provider defaults".
 type RecordHints struct {
-	// Type overrides the record type (A, AAAA, CNAME, SRV, PTR, TXT).
+	// Type overrides the record type (A, AAAA, CNAME, SRV, MX, NS, PTR, TXT).
 	// Empty means use provider default.
 	Type string
 
-	// Target overrides the record target (IP for A/AAAA, hostname for CNAME/SRV).
+	// Target overrides the record target (IP for A/AAAA, hostname for
+	// CNAME/SRV/MX/NS).
 	// Empty means use provider default.
 	Target string
 
@@ -257,13 +277,20 @@ type RecordHints struct {
 	// Zero means use provider default.
 	TTL int
 
-	// Provider targets one or more provider instances by name.
-	// Use a comma-separated list to target multiple instances.
+	// Provider targets a specific provider instance by name.
 	// Empty means use domain matching as usual.
 	Provider string
 
+	// AdoptExisting overrides adoption for this hostname. nil inherits the
+	// provider-instance/global policy. Enabling is subject to the provider's
+	// explicit workload-override gate.
+	AdoptExisting *bool
+
 	// SRV contains SRV-specific fields when Type is "SRV".
 	SRV *SRVHints
+
+	// MX contains MX-specific fields when Type is "MX".
+	MX *MXHints
 
 	// Metadata carries arbitrary key-value pairs from source labels to providers.
 	// Keys like "proxied" are actionable (trigger provider behavior).
@@ -292,9 +319,28 @@ type Hostname struct {
 	Router string
 
 	// RecordHints contains optional hints for DNS record creation.
-	// These allow per-hostname overrides for record type, target, TTL, and provider.
+	// These allow per-hostname overrides for record type, target, TTL, provider,
+	// and existing-record adoption.
 	// nil means use provider defaults for everything.
 	RecordHints *RecordHints
+
+	// AdoptExisting is the workload-wide adoption hint applied to hostnames
+	// discovered from any source. A record-specific RecordHints.AdoptExisting
+	// value takes precedence.
+	AdoptExisting *bool
+
+	// Metadata carries arbitrary key-value pairs from sources for use by
+	// instance-level filtering (e.g. "traefik.entrypoint" -> "webA"). Unlike
+	// RecordHints.Metadata — which is plumbed through to providers and may
+	// trigger provider-specific behavior — this map is consumed inside
+	// dnsweaver to decide which provider instance claims the hostname.
+	// nil means no metadata.
+	Metadata map[string]string
+
+	// Instances is the workload-wide provider selection. A nil slice leaves
+	// routing unchanged. A record-specific Provider takes precedence, but both
+	// forms remain subject to the operator's domain and metadata scope.
+	Instances []string
 }
 
 // HasRecordHints returns true if this hostname has any record hints set.
@@ -315,7 +361,7 @@ func (h Hostname) String() string {
 // For all other records, uses RFC 1123 validation.
 // Returns nil if valid, or a HostnameValidationError with details.
 func (h Hostname) Validate() error {
-	if h.RecordHints != nil && h.RecordHints.Type == "SRV" {
+	if h.RecordHints != nil && h.RecordHints.Type == recordTypeSRV {
 		return ValidateSRVHostname(h.Name)
 	}
 	return ValidateHostname(h.Name)
@@ -325,7 +371,7 @@ func (h Hostname) Validate() error {
 // For SRV records (RecordHints.Type == "SRV"), uses RFC 2782 validation.
 // For all other records, uses RFC 1123 validation.
 func (h Hostname) IsValid() bool {
-	if h.RecordHints != nil && h.RecordHints.Type == "SRV" {
+	if h.RecordHints != nil && h.RecordHints.Type == recordTypeSRV {
 		return ValidateSRVHostname(h.Name) == nil
 	}
 	return ValidateHostname(h.Name) == nil

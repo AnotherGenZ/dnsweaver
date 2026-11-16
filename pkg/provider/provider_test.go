@@ -74,6 +74,108 @@ func TestRecordEquals(t *testing.T) {
 			expected: false,
 		},
 		{
+			name: "identical MX records",
+			a: Record{
+				Hostname: "example.com",
+				Type:     RecordTypeMX,
+				Target:   "mail.protonmail.ch",
+				TTL:      3600,
+				MX:       &MXData{Preference: 10},
+			},
+			b: Record{
+				Hostname: "example.com",
+				Type:     RecordTypeMX,
+				Target:   "mail.protonmail.ch",
+				TTL:      3600,
+				MX:       &MXData{Preference: 10},
+			},
+			expected: true,
+		},
+		{
+			name: "MX records with different preference",
+			a: Record{
+				Hostname: "example.com",
+				Type:     RecordTypeMX,
+				Target:   "mail.protonmail.ch",
+				TTL:      3600,
+				MX:       &MXData{Preference: 10},
+			},
+			b: Record{
+				Hostname: "example.com",
+				Type:     RecordTypeMX,
+				Target:   "mail.protonmail.ch",
+				TTL:      3600,
+				MX:       &MXData{Preference: 20},
+			},
+			expected: false,
+		},
+		{
+			name: "MX record with nil vs non-nil MX data",
+			a: Record{
+				Hostname: "example.com",
+				Type:     RecordTypeMX,
+				Target:   "mail.protonmail.ch",
+				TTL:      3600,
+				MX:       nil,
+			},
+			b: Record{
+				Hostname: "example.com",
+				Type:     RecordTypeMX,
+				Target:   "mail.protonmail.ch",
+				TTL:      3600,
+				MX:       &MXData{Preference: 10},
+			},
+			expected: false,
+		},
+		{
+			name: "MX records with nil MX data on both sides",
+			a: Record{
+				Hostname: "example.com",
+				Type:     RecordTypeMX,
+				Target:   "mail.protonmail.ch",
+				TTL:      3600,
+			},
+			b: Record{
+				Hostname: "example.com",
+				Type:     RecordTypeMX,
+				Target:   "mail.protonmail.ch",
+				TTL:      3600,
+			},
+			expected: true,
+		},
+		{
+			name: "identical NS records",
+			a: Record{
+				Hostname: "sub.example.com",
+				Type:     RecordTypeNS,
+				Target:   "ns1.example.net",
+				TTL:      3600,
+			},
+			b: Record{
+				Hostname: "sub.example.com",
+				Type:     RecordTypeNS,
+				Target:   "ns1.example.net",
+				TTL:      3600,
+			},
+			expected: true,
+		},
+		{
+			name: "NS records with different target",
+			a: Record{
+				Hostname: "sub.example.com",
+				Type:     RecordTypeNS,
+				Target:   "ns1.example.net",
+				TTL:      3600,
+			},
+			b: Record{
+				Hostname: "sub.example.com",
+				Type:     RecordTypeNS,
+				Target:   "ns2.example.net",
+				TTL:      3600,
+			},
+			expected: false,
+		},
+		{
 			name: "identical SRV records",
 			a: Record{
 				Hostname: "_minecraft._tcp.example.com",
@@ -700,5 +802,148 @@ func TestOwnershipRoundTrip(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMemberOwnershipRoundTrip(t *testing.T) {
+	tests := []struct {
+		name   string
+		record Record
+	}{
+		{name: "A", record: Record{Type: RecordTypeA, Target: "192.0.2.10"}},
+		{name: "AAAA", record: Record{Type: RecordTypeAAAA, Target: "2001:db8::10"}},
+		{name: "CNAME", record: Record{Type: RecordTypeCNAME, Target: "target.example.com."}},
+		{name: "TXT with delimiter", record: Record{Type: RecordTypeTXT, Target: "one,two=three"}},
+		{name: "SRV", record: Record{Type: RecordTypeSRV, Target: "sip.example.com", SRV: &SRVData{Priority: 10, Weight: 20, Port: 5060}}},
+		{name: "HTTPS", record: Record{Type: RecordTypeHTTPS, Target: "", HTTPS: &HTTPSData{Priority: 1, TargetName: ".", ALPN: "h2,h3"}}},
+		{name: "MX", record: Record{Type: RecordTypeMX, Target: "mail.example.net", MX: &MXData{Preference: 10}}},
+		{name: "NS", record: Record{Type: RecordTypeNS, Target: "ns1.example.net"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value := MakeMemberOwnershipValue("instance-a", tt.record, map[string]string{"source": "traefik"})
+			owned, instanceID, member, metadata := ParseMemberOwnershipValue(value)
+			if !owned || instanceID != "instance-a" {
+				t.Fatalf("ownership parse = owned:%v instance:%q", owned, instanceID)
+			}
+			if member == nil || !SameRecordMember(*member, tt.record) {
+				t.Fatalf("member = %+v, want %+v", member, tt.record)
+			}
+			if metadata["source"] != "traefik" {
+				t.Fatalf("metadata = %v, want source=traefik", metadata)
+			}
+		})
+	}
+}
+
+func TestParseMemberOwnershipValue_LegacyIsAmbiguous(t *testing.T) {
+	owned, instanceID, member, metadata := ParseMemberOwnershipValue("heritage=dnsweaver,instance=instance-a,proxied=true")
+	if !owned || instanceID != "instance-a" {
+		t.Fatalf("ownership parse = owned:%v instance:%q", owned, instanceID)
+	}
+	if member != nil {
+		t.Fatalf("legacy marker produced member %+v", member)
+	}
+	if metadata["proxied"] != "true" {
+		t.Fatalf("metadata = %v, want proxied=true", metadata)
+	}
+}
+
+func TestParseMemberOwnershipValue_MalformedV2IsAmbiguous(t *testing.T) {
+	value := "heritage=dnsweaver,instance=instance-a,record-target=not+base64,record-type=A,record-version=2"
+	owned, instanceID, member, _ := ParseMemberOwnershipValue(value)
+	if !owned || instanceID != "instance-a" {
+		t.Fatalf("ownership parse = owned:%v instance:%q", owned, instanceID)
+	}
+	if member != nil {
+		t.Fatalf("malformed marker produced member %+v", member)
+	}
+}
+
+func TestMatchesMemberOwnership(t *testing.T) {
+	record := Record{Type: RecordTypeA, Target: "192.0.2.10"}
+	value := MakeMemberOwnershipValue("instance-a", record, nil)
+	if !MatchesMemberOwnership(value, "instance-a", record) {
+		t.Fatal("exact member ownership did not match")
+	}
+	if MatchesMemberOwnership(value, "instance-b", record) {
+		t.Fatal("member ownership matched another instance")
+	}
+	if MatchesMemberOwnership(value, "instance-a", Record{Type: RecordTypeA, Target: "192.0.2.11"}) {
+		t.Fatal("member ownership matched another target")
+	}
+	if MatchesMemberOwnership("heritage=dnsweaver,instance=instance-a", "instance-a", record) {
+		t.Fatal("legacy ownership marker matched an exact member")
+	}
+}
+
+func TestMatchesLegacyOwnershipRejectsVersionedMarkers(t *testing.T) {
+	if !MatchesLegacyOwnership("heritage=dnsweaver,instance=instance-a", "instance-a") {
+		t.Fatal("legacy marker did not match")
+	}
+	member := Record{Type: RecordTypeA, Target: "192.0.2.10"}
+	if MatchesLegacyOwnership(MakeMemberOwnershipValue("instance-a", member, nil), "instance-a") {
+		t.Fatal("member marker matched as legacy")
+	}
+	malformed := "heritage=dnsweaver,instance=instance-a,record-version=2,record-type=A,record-target=not+base64"
+	if MatchesLegacyOwnership(malformed, "instance-a") {
+		t.Fatal("malformed versioned marker matched as legacy")
+	}
+}
+
+func TestSameRecordMemberCanonicalizesDNSValues(t *testing.T) {
+	if !SameRecordMember(
+		Record{Type: RecordTypeAAAA, Target: "2001:0db8:0:0:0:0:0:1"},
+		Record{Type: RecordTypeAAAA, Target: "2001:db8::1"},
+	) {
+		t.Fatal("equivalent IPv6 values did not match")
+	}
+	if !SameRecordMember(
+		Record{Type: RecordTypeCNAME, Target: "Target.Example.COM."},
+		Record{Type: RecordTypeCNAME, Target: "target.example.com"},
+	) {
+		t.Fatal("equivalent CNAME values did not match")
+	}
+	if SameRecordMember(
+		Record{Type: RecordTypeSRV, Target: "sip.example.com", SRV: &SRVData{Priority: 10, Weight: 20, Port: 5060}},
+		Record{Type: RecordTypeSRV, Target: "sip.example.com", SRV: &SRVData{Priority: 20, Weight: 20, Port: 5060}},
+	) {
+		t.Fatal("different SRV members matched")
+	}
+	if !SameRecordMember(
+		Record{Type: RecordTypeMX, Target: "Mail.Example.NET.", MX: &MXData{Preference: 10}},
+		Record{Type: RecordTypeMX, Target: "mail.example.net", MX: &MXData{Preference: 10}},
+	) {
+		t.Fatal("equivalent MX values did not match")
+	}
+	if SameRecordMember(
+		Record{Type: RecordTypeMX, Target: "mail.example.net", MX: &MXData{Preference: 10}},
+		Record{Type: RecordTypeMX, Target: "mail.example.net", MX: &MXData{Preference: 20}},
+	) {
+		t.Fatal("MX members with different preferences matched")
+	}
+	if !SameRecordMember(
+		Record{Type: RecordTypeMX, Target: "mail.example.net"},
+		Record{Type: RecordTypeMX, Target: "mail.example.net", MX: &MXData{}},
+	) {
+		t.Fatal("missing MX data did not match preference 0")
+	}
+	if !SameRecordMember(
+		Record{Type: RecordTypeNS, Target: "NS1.example.net."},
+		Record{Type: RecordTypeNS, Target: "ns1.example.net"},
+	) {
+		t.Fatal("equivalent NS values did not match")
+	}
+}
+
+func TestMemberOwnershipRecord(t *testing.T) {
+	member := Record{Hostname: "app.example.com", Type: RecordTypeA, Target: "192.0.2.10"}
+	ownership := MemberOwnershipRecord(member.Hostname, 300, "instance-a", member, nil)
+	if ownership.Hostname != "_dnsweaver.app.example.com" || ownership.Type != RecordTypeTXT || ownership.TTL != 300 {
+		t.Fatalf("ownership record = %+v", ownership)
+	}
+	if !MatchesMemberOwnership(ownership.Target, "instance-a", member) {
+		t.Fatalf("ownership target does not identify member: %q", ownership.Target)
 	}
 }

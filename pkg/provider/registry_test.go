@@ -13,14 +13,22 @@ type mockProvider struct {
 	typeName string
 	pingErr  error
 	records  []Record
+	created  []Record
+	deleted  []Record
 }
 
 func (m *mockProvider) Name() string                               { return m.name }
 func (m *mockProvider) Type() string                               { return m.typeName }
 func (m *mockProvider) Ping(ctx context.Context) error             { return m.pingErr }
 func (m *mockProvider) List(ctx context.Context) ([]Record, error) { return m.records, nil }
-func (m *mockProvider) Create(ctx context.Context, r Record) error { return nil }
-func (m *mockProvider) Delete(ctx context.Context, r Record) error { return nil }
+func (m *mockProvider) Create(ctx context.Context, r Record) error {
+	m.created = append(m.created, r)
+	return nil
+}
+func (m *mockProvider) Delete(ctx context.Context, r Record) error {
+	m.deleted = append(m.deleted, r)
+	return nil
+}
 func (m *mockProvider) Capabilities() Capabilities {
 	return Capabilities{
 		SupportsOwnershipTXT: true,
@@ -202,54 +210,6 @@ func TestRegistry_MatchingProviders(t *testing.T) {
 				t.Errorf("first match name = %q, want %q", matches[0].Name(), tt.wantName)
 			}
 		})
-	}
-}
-
-func TestRegistry_MatchingProviders_SkipsMatchLabeledOnlyInstances(t *testing.T) {
-	r := NewRegistry(testLogger())
-	r.RegisterFactory("test", func(cfg FactoryConfig) (Provider, error) {
-		return &mockProvider{name: cfg.Name, typeName: "test"}, nil
-	})
-
-	err := r.CreateInstance(ProviderInstanceConfig{
-		Name:             "internal",
-		TypeName:         "test",
-		RecordType:       RecordTypeA,
-		Target:           "10.0.0.1",
-		TTL:              300,
-		MatchLabeledOnly: true,
-		Domains:          []string{"*.example.com"},
-	})
-	if err != nil {
-		t.Fatalf("create internal failed: %v", err)
-	}
-
-	err = r.CreateInstance(ProviderInstanceConfig{
-		Name:       "external",
-		TypeName:   "test",
-		RecordType: RecordTypeA,
-		Target:     "203.0.113.1",
-		TTL:        300,
-		Domains:    []string{"*.example.com"},
-	})
-	if err != nil {
-		t.Fatalf("create external failed: %v", err)
-	}
-
-	matches := r.MatchingProviders("app.example.com")
-	if len(matches) != 1 {
-		t.Fatalf("MatchingProviders(app.example.com) = %d matches, want 1", len(matches))
-	}
-	if matches[0].Name() != "external" {
-		t.Errorf("match name = %q, want %q", matches[0].Name(), "external")
-	}
-
-	first := r.FirstMatchingProvider("app.example.com")
-	if first == nil {
-		t.Fatal("FirstMatchingProvider(app.example.com) = nil, want non-nil")
-	}
-	if first.Name() != "external" {
-		t.Errorf("first match name = %q, want %q", first.Name(), "external")
 	}
 }
 

@@ -65,6 +65,8 @@ Only records with matching TXT ownership records are deleted when containers sto
     - "*.apps.internal.example.com"  # Only use on dedicated subdomains
 ```
 
+**Conflicting record types:** a pre-existing record whose type cannot coexist with the configured one (for example a CNAME where an A record is configured, or the reverse) is deleted and replaced by the configured record. In managed mode the same record is replaced only when `DNSWEAVER_ADOPT_EXISTING=true` or when dnsweaver already owns the hostname; otherwise it is skipped and a warning is logged once. Additive mode never replaces it.
+
 **When to use:**
 
 - Dedicated zones exclusively for container DNS
@@ -140,9 +142,23 @@ These global settings interact with operational modes:
 | Setting | Effect |
 |---------|--------|
 | `DNSWEAVER_CLEANUP_ORPHANS` | If `false`, disables deletion globally (overrides managed/authoritative) |
-| `DNSWEAVER_CLEANUP_ON_STOP` | If `false`, only delete records when containers are removed, not stopped |
+| `DNSWEAVER_CLEANUP_ON_STOP` | Docker only: if `false`, retain records for every existing container until removal. With the default `true`, paused and restarting containers still count as running. Proxmox and Incus use their own state filters. |
 | `DNSWEAVER_OWNERSHIP_TRACKING` | If `false`, dnsweaver can't distinguish its own records from others |
-| `DNSWEAVER_ADOPT_EXISTING` | If `true`, dnsweaver claims ownership of pre-existing records |
+| `DNSWEAVER_ADOPT_EXISTING` | Global default for claiming pre-existing records. Managed mode without adoption leaves unowned records untouched, including records with the wrong target or a conflicting type. |
+| `DNSWEAVER_{NAME}_ADOPT_EXISTING` | Overrides the global adoption policy for one provider instance. |
+| `DNSWEAVER_{NAME}_ADOPT_EXISTING_ALLOW_OVERRIDES` | Lets workload labels enable adoption for one provider instance. Defaults to `false`. Workload labels may always disable adoption. |
+
+### Adoption precedence and workload trust
+
+The effective adoption policy is global, then provider instance, then workload,
+then named record. `dnsweaver.adopt` applies to hostnames found by any source on
+the workload. `dnsweaver.records.<name>.adopt` is more specific and wins for
+that named record.
+
+Workload configuration is not trusted to claim existing DNS records by
+default. An `adopt=true` label or annotation is ignored unless the matching
+provider sets `ADOPT_EXISTING_ALLOW_OVERRIDES=true`. An `adopt=false` value is
+always honored because it only narrows dnsweaver's authority.
 
 ## Choosing the Right Mode
 

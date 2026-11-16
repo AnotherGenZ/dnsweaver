@@ -3,7 +3,7 @@ package resources
 import (
 	corev1 "k8s.io/api/core/v1"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/workload"
+	"github.com/maxfield-allison/dnsweaver/pkg/workload"
 )
 
 // Well-known annotations for hostname extraction from Services.
@@ -17,6 +17,10 @@ const (
 	// AnnotationDNSWeaverHostnames is the dnsweaver native annotation (comma-separated).
 	AnnotationDNSWeaverHostnames = "dnsweaver.dev/hostnames"
 )
+
+// metaKeyResourceVersion is the Workload.Metadata key used to record the
+// Kubernetes resourceVersion of the source object.
+const metaKeyResourceVersion = "resourceVersion"
 
 // ConvertService converts a core/v1 Service to a workload.Workload.
 //
@@ -58,8 +62,8 @@ func ConvertService(svc *corev1.Service) workload.Workload {
 	}
 
 	meta := map[string]string{
-		"resourceVersion": svc.ResourceVersion,
-		"type":            string(svc.Spec.Type),
+		metaKeyResourceVersion: svc.ResourceVersion,
+		"type":                 string(svc.Spec.Type),
 	}
 	if svc.Spec.ClusterIP != "" {
 		meta["clusterIP"] = svc.Spec.ClusterIP

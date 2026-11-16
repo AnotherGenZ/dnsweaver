@@ -12,7 +12,10 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
+
+	"github.com/maxfield-allison/dnsweaver/pkg/httputil"
 )
 
 // Config holds the complete application configuration.
@@ -98,7 +101,7 @@ func Load() (*Config, error) {
 		for _, fp := range fileProviders {
 			providerNames = append(providerNames, fp.Name)
 			// Apply env var overrides to file-based provider config
-			mergeProviderEnvOverrides(fp)
+			allErrors = append(allErrors, mergeProviderEnvOverrides(fp)...)
 			instances = append(instances, fp)
 		}
 	} else {
@@ -204,27 +207,6 @@ func (c *Config) AdoptExisting() bool {
 	return c.Global.AdoptExisting
 }
 
-// DetachedCleanupAllowMassDelete returns whether detached cleanup circuit
-// breaker safeguards are bypassed for large planned migrations.
-func (c *Config) DetachedCleanupAllowMassDelete() bool {
-	return c.Global.DetachedCleanupAllowMassDelete
-}
-
-// DetachedCleanupRatioThreshold returns the detached cleanup ratio threshold.
-func (c *Config) DetachedCleanupRatioThreshold() float64 {
-	return c.Global.DetachedCleanupRatioThreshold
-}
-
-// DetachedCleanupRatioMinHostnames returns the minimum detached hostnames for ratio breaker.
-func (c *Config) DetachedCleanupRatioMinHostnames() int {
-	return c.Global.DetachedCleanupRatioMinHostnames
-}
-
-// DetachedCleanupAbsoluteMaxHostnames returns the absolute detached hostname cap.
-func (c *Config) DetachedCleanupAbsoluteMaxHostnames() int {
-	return c.Global.DetachedCleanupAbsoluteMaxHostnames
-}
-
 // ReconcileInterval returns the reconciliation interval.
 func (c *Config) ReconcileInterval() time.Duration {
 	return c.Global.ReconcileInterval
@@ -240,9 +222,27 @@ func (c *Config) HealthPort() int {
 	return c.Global.HealthPort
 }
 
+// HealthAddress returns the management listener IP address.
+func (c *Config) HealthAddress() string {
+	return c.Global.HealthAddress
+}
+
+// HealthAllowNetwork reports whether non-loopback management binding was
+// explicitly enabled by the operator.
+func (c *Config) HealthAllowNetwork() bool {
+	return c.Global.HealthAllowNetwork
+}
+
 // DockerHost returns the Docker socket/host path.
 func (c *Config) DockerHost() string {
 	return c.Global.DockerHost
+}
+
+// DockerConnectTimeout returns the maximum time to keep retrying the initial
+// Docker connection before failing hard. Zero means fail immediately on the
+// first connection error.
+func (c *Config) DockerConnectTimeout() time.Duration {
+	return c.Global.DockerConnectTimeout
 }
 
 // DockerMode returns the Docker mode (auto/swarm/standalone).
@@ -314,6 +314,225 @@ func (c *Config) K8sLabelSelector() string {
 // K8sAnnotationFilter returns the annotation filter for K8s resource filtering.
 func (c *Config) K8sAnnotationFilter() string {
 	return c.Global.K8sAnnotationFilter
+}
+
+// UseProxmox returns true if a Proxmox VE URL is configured.
+func (c *Config) UseProxmox() bool {
+	return c.Global.ProxmoxURL != ""
+}
+
+// ProxmoxURL returns the Proxmox VE API base URL.
+func (c *Config) ProxmoxURL() string {
+	return c.Global.ProxmoxURL
+}
+
+// ProxmoxTokenID returns the Proxmox API token ID.
+func (c *Config) ProxmoxTokenID() string {
+	return c.Global.ProxmoxTokenID
+}
+
+// ProxmoxTokenSecret returns the Proxmox API token secret.
+func (c *Config) ProxmoxTokenSecret() string {
+	return c.Global.ProxmoxTokenSecret
+}
+
+// ProxmoxNodeFilter returns the optional node name filter.
+func (c *Config) ProxmoxNodeFilter() string {
+	return c.Global.ProxmoxNodeFilter
+}
+
+// ProxmoxTagFilter returns the optional tag prefix filter.
+func (c *Config) ProxmoxTagFilter() string {
+	return c.Global.ProxmoxTagFilter
+}
+
+// ProxmoxStateFilter returns the resource state filter (default: "running").
+func (c *Config) ProxmoxStateFilter() string {
+	return c.Global.ProxmoxStateFilter
+}
+
+// ProxmoxDomainSuffix returns the domain suffix appended to VM names.
+func (c *Config) ProxmoxDomainSuffix() string {
+	return c.Global.ProxmoxDomainSuffix
+}
+
+// ProxmoxHostnameTagPrefix returns the optional tag prefix used to derive an
+// explicit hostname from Proxmox tags.
+func (c *Config) ProxmoxHostnameTagPrefix() string {
+	return c.Global.ProxmoxHostnameTagPrefix
+}
+
+// ProxmoxInterfaceTagPrefix returns the optional tag prefix used to derive an
+// interface name preference from Proxmox tags.
+func (c *Config) ProxmoxInterfaceTagPrefix() string {
+	return c.Global.ProxmoxInterfaceTagPrefix
+}
+
+// ProxmoxAllowedInterfaces returns the optional allow-list of guest interface names.
+func (c *Config) ProxmoxAllowedInterfaces() []string {
+	return c.Global.ProxmoxAllowedInterfaces
+}
+
+// ProxmoxTargetMode returns the configured target resolution mode
+// ("guest-ip" or "instance"). Empty string means use the default.
+func (c *Config) ProxmoxTargetMode() string {
+	return c.Global.ProxmoxTargetMode
+}
+
+// ProxmoxIPVersion returns the configured address families to resolve
+// ("ipv4", "ipv6", or "dual"). Empty string means use the default (ipv4).
+func (c *Config) ProxmoxIPVersion() string {
+	return c.Global.ProxmoxIPVersion
+}
+
+// ProxmoxVerifyTLS returns whether to verify TLS on the PVE API endpoint.
+//
+// Deprecated: prefer ProxmoxTLS().InsecureSkip (inverted polarity). Retained
+// so the legacy env var DNSWEAVER_PROXMOX_VERIFY_TLS continues to flow through
+// the same Config accessor; will be removed in a future major release.
+func (c *Config) ProxmoxVerifyTLS() bool {
+	return c.Global.ProxmoxVerifyTLS
+}
+
+// ProxmoxTLS returns the unified TLS configuration for the PVE API client.
+// Returns nil when no DNSWEAVER_PROXMOX_TLS_* env vars are set AND the legacy
+// DNSWEAVER_PROXMOX_VERIFY_TLS was also unset — in that case the client uses
+// stdlib defaults (system roots, verification on, TLS 1.2 floor).
+func (c *Config) ProxmoxTLS() *httputil.TLSConfig {
+	g := c.Global
+	tls := httputil.TLSConfig{
+		CAFile:       g.ProxmoxTLSCAFile,
+		CertFile:     g.ProxmoxTLSCertFile,
+		KeyFile:      g.ProxmoxTLSKeyFile,
+		ServerName:   g.ProxmoxTLSServerName,
+		InsecureSkip: g.ProxmoxTLSSkipVerify,
+	}
+	if g.ProxmoxTLSMinVersion != "" {
+		if parsed, err := httputil.ParseTLSMinVersion(g.ProxmoxTLSMinVersion); err == nil {
+			tls.MinVersion = parsed
+		} else {
+			slog.Warn("ignoring invalid DNSWEAVER_PROXMOX_TLS_MIN_VERSION, using default",
+				slog.String("value", g.ProxmoxTLSMinVersion),
+				slog.String("error", err.Error()),
+			)
+		}
+	}
+	if tls.IsZero() {
+		return nil
+	}
+	return &tls
+}
+
+// UseIncus returns true if Incus is configured (either a remote URL or a local
+// Unix socket path is set).
+func (c *Config) UseIncus() bool {
+	return c.Global.IncusURL != "" || c.Global.IncusSocketPath != ""
+}
+
+// IncusURL returns the remote Incus API base URL (empty for socket mode).
+func (c *Config) IncusURL() string {
+	return c.Global.IncusURL
+}
+
+// IncusSocketPath returns the local Incus Unix socket path (empty for remote mode).
+func (c *Config) IncusSocketPath() string {
+	return c.Global.IncusSocketPath
+}
+
+// IncusProject returns the Incus project to query. Empty string means use the
+// Incus default project.
+func (c *Config) IncusProject() string {
+	return c.Global.IncusProject
+}
+
+// IncusAllProjects reports whether dnsweaver should watch every Incus project
+// via the API's all-projects mode. True when DNSWEAVER_INCUS_ALL_PROJECTS is
+// set, or when DNSWEAVER_INCUS_PROJECTS contains a wildcard ("*" or "all").
+func (c *Config) IncusAllProjects() bool {
+	if c.Global.IncusAllProjects {
+		return true
+	}
+	for _, p := range c.Global.IncusProjects {
+		if p == "*" || strings.EqualFold(p, "all") {
+			return true
+		}
+	}
+	return false
+}
+
+// IncusProjects returns the explicit list of Incus projects to watch, in order,
+// with any wildcard entries ("*"/"all") removed. Empty when no explicit list is
+// configured or when all-projects mode is active. See IncusAllProjects.
+func (c *Config) IncusProjects() []string {
+	if c.IncusAllProjects() {
+		return nil
+	}
+	out := make([]string, 0, len(c.Global.IncusProjects))
+	for _, p := range c.Global.IncusProjects {
+		if p == "*" || strings.EqualFold(p, "all") {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// IncusStateFilter returns the instance state filter (default: "running").
+func (c *Config) IncusStateFilter() string {
+	return c.Global.IncusStateFilter
+}
+
+// IncusDomainSuffix returns the domain suffix appended to instance names.
+func (c *Config) IncusDomainSuffix() string {
+	return c.Global.IncusDomainSuffix
+}
+
+// IncusTargetMode returns the configured target resolution mode
+// ("guest-ip" or "instance"). Empty string means use the default.
+func (c *Config) IncusTargetMode() string {
+	return c.Global.IncusTargetMode
+}
+
+// IncusTrustToken returns the one-time Incus trust token used to enroll a
+// client certificate. Empty when not configured.
+func (c *Config) IncusTrustToken() string {
+	return c.Global.IncusTrustToken
+}
+
+// IncusCertStore returns the writable directory where an enrolled Incus client
+// keypair is persisted. Empty when not configured.
+func (c *Config) IncusCertStore() string {
+	return c.Global.IncusCertStore
+}
+
+// IncusTLS returns the unified TLS configuration for the remote Incus API
+// client. Returns nil when no DNSWEAVER_INCUS_TLS_* env vars are set — in that
+// case the client uses stdlib defaults (system roots, verification on, TLS 1.2
+// floor). Socket mode does not use TLS.
+func (c *Config) IncusTLS() *httputil.TLSConfig {
+	g := c.Global
+	tls := httputil.TLSConfig{
+		CAFile:       g.IncusTLSCAFile,
+		CertFile:     g.IncusTLSCertFile,
+		KeyFile:      g.IncusTLSKeyFile,
+		ServerName:   g.IncusTLSServerName,
+		InsecureSkip: g.IncusTLSSkipVerify,
+		PinnedSHA256: g.IncusTLSPinSHA256,
+	}
+	if g.IncusTLSMinVersion != "" {
+		if parsed, err := httputil.ParseTLSMinVersion(g.IncusTLSMinVersion); err == nil {
+			tls.MinVersion = parsed
+		} else {
+			slog.Warn("ignoring invalid DNSWEAVER_INCUS_TLS_MIN_VERSION, using default",
+				slog.String("value", g.IncusTLSMinVersion),
+				slog.String("error", err.Error()),
+			)
+		}
+	}
+	if tls.IsZero() {
+		return nil
+	}
+	return &tls
 }
 
 // GetProviderInstance returns the configuration for a specific provider instance.

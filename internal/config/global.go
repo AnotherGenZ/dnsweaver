@@ -2,6 +2,9 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
+	"net"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -10,30 +13,30 @@ import (
 
 // Global configuration defaults.
 const (
-	DefaultLogLevel                            = "info"
-	DefaultLogFormat                           = "json"
-	DefaultLogMaxSize                          = 100  // megabytes
-	DefaultLogMaxBackups                       = 5    // number of old log files to keep
-	DefaultLogMaxAge                           = 30   // days to retain old logs
-	DefaultLogCompress                         = true // compress rotated log files
-	DefaultDryRun                              = false
-	DefaultCleanupOrphans                      = true
-	DefaultCleanupOnStop                       = true
-	DefaultOwnershipTracking                   = true
-	DefaultAdoptExisting                       = false
-	DefaultDetachedCleanupAllowMassDelete      = false
-	DefaultDetachedCleanupRatioThreshold       = 0.5
-	DefaultDetachedCleanupRatioMinHostnames    = 10
-	DefaultDetachedCleanupAbsoluteMaxHostnames = 100
-	DefaultTTL                                 = 300
-	DefaultReconcileInterval                   = 60 * time.Second
-	DefaultShutdownTimeout                     = 30 * time.Second
-	DefaultHealthPort                          = 8080
-	DefaultDockerHost                          = "unix:///var/run/docker.sock"
-	DefaultDockerMode                          = "auto"
-	DefaultSource                              = "traefik"
-	DefaultInstanceID                          = ""
-	DefaultPlatform                            = "docker"
+	DefaultLogLevel             = "info"
+	DefaultLogFormat            = "json"
+	DefaultLogMaxSize           = 100  // megabytes
+	DefaultLogMaxBackups        = 5    // number of old log files to keep
+	DefaultLogMaxAge            = 30   // days to retain old logs
+	DefaultLogCompress          = true // compress rotated log files
+	DefaultDryRun               = false
+	DefaultCleanupOrphans       = true
+	DefaultCleanupOnStop        = true
+	DefaultOwnershipTracking    = true
+	DefaultOwnershipStorage     = "legacy"
+	DefaultAdoptExisting        = false
+	DefaultTTL                  = 300
+	DefaultReconcileInterval    = 60 * time.Second
+	DefaultShutdownTimeout      = 30 * time.Second
+	DefaultHealthPort           = 8080
+	DefaultHealthAddress        = "127.0.0.1"
+	DefaultHealthAllowNetwork   = false
+	DefaultDockerHost           = "unix:///var/run/docker.sock"
+	DefaultDockerMode           = "auto"
+	DefaultDockerConnectTimeout = 30 * time.Second
+	DefaultSource               = "traefik"
+	DefaultInstanceID           = ""
+	DefaultPlatform             = "docker"
 )
 
 // InstanceID validation constraints.
@@ -54,26 +57,26 @@ type GlobalConfig struct {
 	LogCompress   bool   // Compress rotated log files with gzip
 
 	// Behavior
-	DryRun                              bool          // If true, don't make actual DNS changes
-	CleanupOrphans                      bool          // If true, delete DNS records for removed workloads
-	CleanupOnStop                       bool          // If true, delete DNS records when containers stop; if false, only when removed
-	OwnershipTracking                   bool          // If true, use TXT records to track record ownership
-	AdoptExisting                       bool          // If true, adopt existing DNS records by creating ownership TXT records
-	DetachedCleanupAllowMassDelete      bool          // If true, bypass detached cleanup circuit breaker safeguards
-	DetachedCleanupRatioThreshold       float64       // Detached cleanup breaker ratio threshold (0 < value <= 1)
-	DetachedCleanupRatioMinHostnames    int           // Minimum hostnames before ratio-based detached breaker applies
-	DetachedCleanupAbsoluteMaxHostnames int           // Absolute detached hostname cap per cycle
-	DefaultTTL                          int           // Default TTL for records if not specified per-provider
-	ReconcileInterval                   time.Duration // How often to reconcile DNS records
-	ShutdownTimeout                     time.Duration // Max time to wait for in-flight operations during shutdown
-	HealthPort                          int           // Port for health/metrics endpoints
+	DryRun             bool          // If true, don't make actual DNS changes
+	CleanupOrphans     bool          // If true, delete DNS records for removed workloads
+	CleanupOnStop      bool          // If true, delete DNS records when containers stop; if false, only when removed
+	OwnershipTracking  bool          // If true, use TXT records to track record ownership
+	OwnershipStorage   string        // compact DNS pages or legacy per-member TXT
+	AdoptExisting      bool          // If true, adopt existing DNS records by creating ownership TXT records
+	DefaultTTL         int           // Default TTL for records if not specified per-provider
+	ReconcileInterval  time.Duration // How often to reconcile DNS records
+	ShutdownTimeout    time.Duration // Max time to wait for in-flight operations during shutdown
+	HealthPort         int           // Port for health/metrics endpoints
+	HealthAddress      string        // IP address for the management listener
+	HealthAllowNetwork bool          // Explicit opt-in for non-loopback management binding
 
 	// Platform selection
 	Platform string // docker, kubernetes, both
 
 	// Docker connection
-	DockerHost string // Docker socket path or TCP URL
-	DockerMode string // auto, swarm, standalone
+	DockerHost           string        // Docker socket path or TCP URL
+	DockerMode           string        // auto, swarm, standalone
+	DockerConnectTimeout time.Duration // Max time to keep retrying the initial Docker connect before failing hard; 0 = fail immediately
 
 	// Kubernetes settings
 	K8sKubeconfig        string // Path to kubeconfig file; empty = in-cluster
@@ -88,8 +91,74 @@ type GlobalConfig struct {
 	// Source
 	Source string // traefik, labels, or custom source name
 
+	// Proxmox VE settings
+	ProxmoxURL                string   // PVE API base URL (e.g., https://pve-00:8006)
+	ProxmoxTokenID            string   // PVE API token ID (e.g., user@pam!dnsweaver)
+	ProxmoxTokenSecret        string   // PVE API token secret (UUID); supports _FILE suffix
+	ProxmoxNodeFilter         string   // Optional: limit to a specific node (empty = all nodes)
+	ProxmoxTagFilter          string   // Optional: prefix match on PVE tags to filter workloads
+	ProxmoxStateFilter        string   // Filter by PVE resource status (default: "running")
+	ProxmoxDomainSuffix       string   // Domain suffix to append to VM names (e.g., "home.example.com")
+	ProxmoxHostnameTagPrefix  string   // Optional: tag prefix for hostname override tags (e.g. "dnsweaver")
+	ProxmoxInterfaceTagPrefix string   // Optional: tag prefix for interface selection tags (e.g. "dnsweaver")
+	ProxmoxAllowedInterfaces  []string // Optional allow-list of guest interface names for IP resolution
+	ProxmoxVerifyTLS          bool     // Verify TLS certificate on PVE API endpoint (DEPRECATED in v1.5: prefer ProxmoxTLSSkipVerify)
+	ProxmoxTargetMode         string   // Target resolution mode: "guest-ip" (default) or "instance"
+	ProxmoxIPVersion          string   // Address families to resolve: "ipv4" (default), "ipv6", or "dual"
+
+	// Unified PVE TLS configuration (v1.5+). Populated from DNSWEAVER_PROXMOX_TLS_*
+	// env vars and consumed by internal/proxmox via httputil.TLSConfig.
+	ProxmoxTLSCAFile     string
+	ProxmoxTLSCertFile   string
+	ProxmoxTLSKeyFile    string
+	ProxmoxTLSServerName string
+	ProxmoxTLSSkipVerify bool
+	ProxmoxTLSMinVersion string
+
+	// Incus settings
+	IncusURL          string   // Remote Incus API base URL (e.g., https://incus.example.com:8443)
+	IncusSocketPath   string   // Local Incus Unix socket path (e.g., /var/lib/incus/unix.socket)
+	IncusProject      string   // Incus project to query (default: "default")
+	IncusProjects     []string // Explicit list of Incus projects to watch (DNSWEAVER_INCUS_PROJECTS)
+	IncusAllProjects  bool     // Watch all projects via all-projects=true (DNSWEAVER_INCUS_ALL_PROJECTS)
+	IncusStateFilter  string   // Filter by instance status (default: "running")
+	IncusDomainSuffix string   // Domain suffix to append to instance names (e.g., "home.example.com")
+	IncusTargetMode   string   // Target resolution mode: "guest-ip" (default) or "instance"
+
+	// Unified Incus TLS configuration for remote HTTPS endpoints. Populated from
+	// DNSWEAVER_INCUS_TLS_* env vars and consumed by internal/incus via httputil.TLSConfig.
+	// Incus remote authentication uses a TLS client certificate/key pair.
+	IncusTLSCAFile     string
+	IncusTLSCertFile   string
+	IncusTLSKeyFile    string
+	IncusTLSServerName string
+	IncusTLSSkipVerify bool
+	IncusTLSPinSHA256  string
+	IncusTLSMinVersion string
+
+	// Incus trust-token enrollment (#134). When IncusTrustToken is set and no
+	// persisted certificate exists in IncusCertStore, dnsweaver generates a
+	// client keypair, registers it with the token, and persists it to the
+	// cert store for reuse.
+	IncusTrustToken string
+	IncusCertStore  string
+
 	// Multi-instance coordination
 	InstanceID string // Unique identifier for this dnsweaver instance (for shared zone management)
+}
+
+// normalizePlatform lowercases the platform value and maps recognized aliases
+// to their canonical form. "standalone" is an alias for "none" — both mean
+// "create no container-runtime client" so dnsweaver can run as a bare binary
+// on a host, VM, or LXC using only non-container sources (Proxmox, file
+// discovery). Unknown values are returned lowercased for the caller to reject.
+func normalizePlatform(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "standalone":
+		return "none"
+	default:
+		return strings.ToLower(strings.TrimSpace(v))
+	}
 }
 
 // loadGlobalConfig loads global configuration from environment variables.
@@ -115,7 +184,7 @@ func loadGlobalConfig() (*GlobalConfig, []*ConfigError) {
 		cfg.LogFormat = DefaultLogFormat
 	}
 	if cfg.DockerHost == "" {
-		cfg.DockerHost = DefaultDockerHost
+		cfg.DockerHost = defaultDockerHost()
 	}
 	if cfg.DockerMode == "" {
 		cfg.DockerMode = DefaultDockerMode
@@ -128,12 +197,12 @@ func loadGlobalConfig() (*GlobalConfig, []*ConfigError) {
 	if cfg.Platform == "" {
 		cfg.Platform = DefaultPlatform
 	}
-	cfg.Platform = strings.ToLower(cfg.Platform)
+	cfg.Platform = normalizePlatform(cfg.Platform)
 	switch cfg.Platform {
-	case "docker", "kubernetes", "both":
+	case "docker", "kubernetes", "both", "none":
 		// Valid
 	default:
-		errs = append(errs, configErrFull("DNSWEAVER_PLATFORM", fmt.Sprintf("invalid value %q", cfg.Platform), "Must be one of: docker, kubernetes, both", "DNSWEAVER_PLATFORM=docker"))
+		errs = append(errs, configErrFull("DNSWEAVER_PLATFORM", fmt.Sprintf("invalid value %q", cfg.Platform), "Must be one of: docker, kubernetes, both, none", "DNSWEAVER_PLATFORM=docker"))
 	}
 
 	// Validate log level
@@ -237,57 +306,19 @@ func loadGlobalConfig() (*GlobalConfig, []*ConfigError) {
 		cfg.OwnershipTracking = DefaultOwnershipTracking
 	}
 
+	cfg.OwnershipStorage = getEnv("DNSWEAVER_OWNERSHIP_STORAGE")
+	if cfg.OwnershipStorage == "" {
+		cfg.OwnershipStorage = DefaultOwnershipStorage
+	}
+	if cfg.OwnershipStorage != "compact" && cfg.OwnershipStorage != "legacy" {
+		errs = append(errs, configErr("DNSWEAVER_OWNERSHIP_STORAGE", "must be compact or legacy"))
+	}
+
 	// Parse ADOPT_EXISTING
 	if adoptStr := getEnv("DNSWEAVER_ADOPT_EXISTING"); adoptStr != "" {
 		cfg.AdoptExisting = parseBool(adoptStr, DefaultAdoptExisting)
 	} else {
 		cfg.AdoptExisting = DefaultAdoptExisting
-	}
-
-	// Parse DETACHED_CLEANUP_ALLOW_MASS_DELETE
-	if allowMassDeleteStr := getEnv("DNSWEAVER_DETACHED_CLEANUP_ALLOW_MASS_DELETE"); allowMassDeleteStr != "" {
-		cfg.DetachedCleanupAllowMassDelete = parseBool(allowMassDeleteStr, DefaultDetachedCleanupAllowMassDelete)
-	} else {
-		cfg.DetachedCleanupAllowMassDelete = DefaultDetachedCleanupAllowMassDelete
-	}
-
-	if ratioStr := getEnv("DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD"); ratioStr != "" {
-		ratio, err := strconv.ParseFloat(ratioStr, 64)
-		if err != nil {
-			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD", fmt.Sprintf("invalid float %q", ratioStr), "Must be a decimal between 0 and 1 (exclusive of 0, inclusive of 1)", "DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD=0.5"))
-		} else if ratio <= 0 || ratio > 1 {
-			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD", fmt.Sprintf("must be > 0 and <= 1, got %v", ratio), "Use a ratio like 0.5 for 50%", "DNSWEAVER_DETACHED_CLEANUP_RATIO_THRESHOLD=0.5"))
-		} else {
-			cfg.DetachedCleanupRatioThreshold = ratio
-		}
-	} else {
-		cfg.DetachedCleanupRatioThreshold = DefaultDetachedCleanupRatioThreshold
-	}
-
-	if minStr := getEnv("DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES"); minStr != "" {
-		minHostnames, err := strconv.Atoi(minStr)
-		if err != nil {
-			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES", fmt.Sprintf("invalid integer %q", minStr), "Must be an integer >= 1", "DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES=10"))
-		} else if minHostnames < 1 {
-			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES", "must be at least 1", "Use at least 1 to avoid always-on ratio breaker", "DNSWEAVER_DETACHED_CLEANUP_RATIO_MIN_HOSTNAMES=10"))
-		} else {
-			cfg.DetachedCleanupRatioMinHostnames = minHostnames
-		}
-	} else {
-		cfg.DetachedCleanupRatioMinHostnames = DefaultDetachedCleanupRatioMinHostnames
-	}
-
-	if absoluteStr := getEnv("DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES"); absoluteStr != "" {
-		absoluteMax, err := strconv.Atoi(absoluteStr)
-		if err != nil {
-			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES", fmt.Sprintf("invalid integer %q", absoluteStr), "Must be an integer >= 1", "DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES=100"))
-		} else if absoluteMax < 1 {
-			errs = append(errs, configErrFull("DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES", "must be at least 1", "Use at least 1 to keep detached cleanup bounded", "DNSWEAVER_DETACHED_CLEANUP_ABSOLUTE_MAX_HOSTNAMES=100"))
-		} else {
-			cfg.DetachedCleanupAbsoluteMaxHostnames = absoluteMax
-		}
-	} else {
-		cfg.DetachedCleanupAbsoluteMaxHostnames = DefaultDetachedCleanupAbsoluteMaxHostnames
 	}
 
 	// Parse DEFAULT_TTL
@@ -332,19 +363,35 @@ func loadGlobalConfig() (*GlobalConfig, []*ConfigError) {
 		cfg.ShutdownTimeout = DefaultShutdownTimeout
 	}
 
-	// Parse HEALTH_PORT
-	if portStr := getEnv("DNSWEAVER_HEALTH_PORT"); portStr != "" {
-		port, err := strconv.Atoi(portStr)
+	// Parse DOCKER_CONNECT_TIMEOUT (supports Go duration format: 30s, 1m, etc.)
+	// This bounds how long dnsweaver retries the initial Docker connection before
+	// failing hard. A value of 0 disables retrying (fail immediately on the first
+	// error) for operators who want strict fail-fast behavior. It exists so a
+	// label-driven socket proxy (which only authorizes dnsweaver a few seconds
+	// after its container starts) doesn't lose a startup race (#125).
+	if timeoutStr := getEnv("DNSWEAVER_DOCKER_CONNECT_TIMEOUT"); timeoutStr != "" {
+		timeout, err := time.ParseDuration(timeoutStr)
 		if err != nil {
-			errs = append(errs, configErrFull("DNSWEAVER_HEALTH_PORT", fmt.Sprintf("invalid integer %q", portStr), "Must be a valid TCP port number", "DNSWEAVER_HEALTH_PORT=8080"))
-		} else if port < 1 || port > 65535 {
-			errs = append(errs, configErrFull("DNSWEAVER_HEALTH_PORT", fmt.Sprintf("must be between 1 and 65535, got %d", port), "Choose an unprivileged port (1024-65535)", "DNSWEAVER_HEALTH_PORT=8080"))
+			errs = append(errs, configErrFull("DNSWEAVER_DOCKER_CONNECT_TIMEOUT", fmt.Sprintf("invalid duration %q", timeoutStr), "Use Go duration format: 30s, 1m; 0 to fail immediately", "DNSWEAVER_DOCKER_CONNECT_TIMEOUT=30s"))
+		} else if timeout < 0 {
+			errs = append(errs, configErrFull("DNSWEAVER_DOCKER_CONNECT_TIMEOUT", "must not be negative", "Use 0 to fail immediately, or a positive duration to retry", "DNSWEAVER_DOCKER_CONNECT_TIMEOUT=30s"))
 		} else {
-			cfg.HealthPort = port
+			cfg.DockerConnectTimeout = timeout
 		}
 	} else {
-		cfg.HealthPort = DefaultHealthPort
+		cfg.DockerConnectTimeout = DefaultDockerConnectTimeout
 	}
+
+	// Parse HEALTH_PORT
+	var healthPortErr *ConfigError
+	cfg.HealthPort, healthPortErr = healthPortFromEnvironment(DefaultHealthPort)
+	if healthPortErr != nil {
+		errs = append(errs, healthPortErr)
+	}
+	healthAddress, healthAllowNetwork, healthListenerErrs := healthListenerFromEnvironment(DefaultHealthAddress, DefaultHealthAllowNetwork)
+	cfg.HealthAddress = healthAddress
+	cfg.HealthAllowNetwork = healthAllowNetwork
+	errs = append(errs, healthListenerErrs...)
 
 	// Parse INSTANCE_ID
 	if instanceID := getEnv("DNSWEAVER_INSTANCE_ID"); instanceID != "" {
@@ -383,7 +430,183 @@ func loadGlobalConfig() (*GlobalConfig, []*ConfigError) {
 		cfg.K8sWatchServices = false
 	}
 
+	// Proxmox VE settings
+	cfg.ProxmoxURL = getEnv("DNSWEAVER_PROXMOX_URL")
+	cfg.ProxmoxTokenID = getEnv("DNSWEAVER_PROXMOX_TOKEN_ID")
+	var proxmoxSecretErr error
+	cfg.ProxmoxTokenSecret, _, proxmoxSecretErr = readEnvOrFile("DNSWEAVER_PROXMOX_TOKEN_SECRET", "DNSWEAVER_PROXMOX_TOKEN_SECRET_FILE")
+	if proxmoxSecretErr != nil {
+		errs = append(errs, configErrHelp("DNSWEAVER_PROXMOX_TOKEN_SECRET_FILE", proxmoxSecretErr.Error(), "Ensure the configured secret file exists and is readable by the dnsweaver process"))
+	}
+	cfg.ProxmoxNodeFilter = getEnv("DNSWEAVER_PROXMOX_NODE_FILTER")
+	cfg.ProxmoxTagFilter = getEnv("DNSWEAVER_PROXMOX_TAG_FILTER")
+	cfg.ProxmoxStateFilter = getEnv("DNSWEAVER_PROXMOX_STATE_FILTER")
+	cfg.ProxmoxDomainSuffix = getEnv("DNSWEAVER_PROXMOX_DOMAIN_SUFFIX")
+	cfg.ProxmoxHostnameTagPrefix = getEnv("DNSWEAVER_PROXMOX_HOSTNAME_TAG_PREFIX")
+	cfg.ProxmoxInterfaceTagPrefix = getEnv("DNSWEAVER_PROXMOX_INTERFACE_TAG_PREFIX")
+	cfg.ProxmoxAllowedInterfaces = splitPatterns(getEnv("DNSWEAVER_PROXMOX_ALLOWED_INTERFACES"))
+	cfg.ProxmoxTargetMode = getEnv("DNSWEAVER_PROXMOX_TARGET_MODE")
+	if cfg.ProxmoxTargetMode != "" {
+		switch strings.ToLower(strings.TrimSpace(cfg.ProxmoxTargetMode)) {
+		case "guest-ip", "instance":
+			// valid
+		default:
+			errs = append(errs, configErrFull(
+				"DNSWEAVER_PROXMOX_TARGET_MODE",
+				fmt.Sprintf("invalid value %q", cfg.ProxmoxTargetMode),
+				"Must be one of: guest-ip (default, A record per guest IP), instance (defer to instance TARGET/RECORD_TYPE)",
+				"DNSWEAVER_PROXMOX_TARGET_MODE=instance",
+			))
+		}
+	}
+	cfg.ProxmoxIPVersion = getEnv("DNSWEAVER_PROXMOX_IP_VERSION")
+	if cfg.ProxmoxIPVersion != "" {
+		switch strings.ToLower(strings.TrimSpace(cfg.ProxmoxIPVersion)) {
+		case "ipv4", "4", "v4", "ipv6", "6", "v6", "dual", "both", "dualstack", "dual-stack":
+			// valid
+		default:
+			errs = append(errs, configErrFull(
+				"DNSWEAVER_PROXMOX_IP_VERSION",
+				fmt.Sprintf("invalid value %q", cfg.ProxmoxIPVersion),
+				"Must be one of: ipv4 (default, A records), ipv6 (AAAA records), dual (both)",
+				"DNSWEAVER_PROXMOX_IP_VERSION=dual",
+			))
+		}
+	}
+	if v := getEnv("DNSWEAVER_PROXMOX_VERIFY_TLS"); v != "" {
+		cfg.ProxmoxVerifyTLS = parseBool(v, false)
+	}
+
+	// Unified PVE TLS env vars (v1.5+). The legacy DNSWEAVER_PROXMOX_VERIFY_TLS
+	// is honored as a back-compat alias (inverted polarity) with a deprecation
+	// warning. When both are set, the new TLS_SKIP_VERIFY wins and a conflict
+	// warning is emitted. Legacy alias is scheduled for removal in a future
+	// major release.
+	cfg.ProxmoxTLSCAFile = getEnv("DNSWEAVER_PROXMOX_TLS_CA_FILE")
+	cfg.ProxmoxTLSCertFile = getEnv("DNSWEAVER_PROXMOX_TLS_CERT_FILE")
+	cfg.ProxmoxTLSKeyFile = getEnv("DNSWEAVER_PROXMOX_TLS_KEY_FILE")
+	cfg.ProxmoxTLSServerName = getEnv("DNSWEAVER_PROXMOX_TLS_SERVER_NAME")
+	cfg.ProxmoxTLSMinVersion = getEnv("DNSWEAVER_PROXMOX_TLS_MIN_VERSION")
+
+	skipNew, hasNew := os.LookupEnv("DNSWEAVER_PROXMOX_TLS_SKIP_VERIFY")
+	_, hasLegacy := os.LookupEnv("DNSWEAVER_PROXMOX_VERIFY_TLS")
+	switch {
+	case hasNew && hasLegacy:
+		slog.Warn("both DNSWEAVER_PROXMOX_VERIFY_TLS (deprecated) and DNSWEAVER_PROXMOX_TLS_SKIP_VERIFY are set; the new TLS_SKIP_VERIFY value wins. Remove VERIFY_TLS — it will be removed in a future major release.")
+		cfg.ProxmoxTLSSkipVerify = parseBool(skipNew, false)
+	case hasNew:
+		cfg.ProxmoxTLSSkipVerify = parseBool(skipNew, false)
+	case hasLegacy:
+		slog.Warn("DNSWEAVER_PROXMOX_VERIFY_TLS is deprecated; use DNSWEAVER_PROXMOX_TLS_SKIP_VERIFY instead (legacy alias will be removed in a future major release)")
+		// Invert polarity: VERIFY_TLS=true → TLS_SKIP_VERIFY=false
+		cfg.ProxmoxTLSSkipVerify = !cfg.ProxmoxVerifyTLS
+	}
+
+	// Incus settings
+	cfg.IncusURL = getEnv("DNSWEAVER_INCUS_URL")
+	cfg.IncusSocketPath = getEnv("DNSWEAVER_INCUS_SOCKET_PATH")
+	cfg.IncusProject = getEnv("DNSWEAVER_INCUS_PROJECT")
+	cfg.IncusProjects = splitCommaList(getEnv("DNSWEAVER_INCUS_PROJECTS"))
+	cfg.IncusAllProjects = parseBool(getEnv("DNSWEAVER_INCUS_ALL_PROJECTS"), false)
+	cfg.IncusStateFilter = getEnv("DNSWEAVER_INCUS_STATE_FILTER")
+	cfg.IncusDomainSuffix = getEnv("DNSWEAVER_INCUS_DOMAIN_SUFFIX")
+	cfg.IncusTargetMode = getEnv("DNSWEAVER_INCUS_TARGET_MODE")
+	if cfg.IncusTargetMode != "" {
+		switch strings.ToLower(strings.TrimSpace(cfg.IncusTargetMode)) {
+		case "guest-ip", "instance":
+			// valid
+		default:
+			errs = append(errs, configErrFull(
+				"DNSWEAVER_INCUS_TARGET_MODE",
+				fmt.Sprintf("invalid value %q", cfg.IncusTargetMode),
+				"Must be one of: guest-ip (default, A record per guest IP), instance (defer to instance TARGET/RECORD_TYPE)",
+				"DNSWEAVER_INCUS_TARGET_MODE=instance",
+			))
+		}
+	}
+	if cfg.IncusURL != "" && cfg.IncusSocketPath != "" {
+		errs = append(errs, configErrFull(
+			"DNSWEAVER_INCUS_URL",
+			"both DNSWEAVER_INCUS_URL and DNSWEAVER_INCUS_SOCKET_PATH are set",
+			"Set exactly one: URL for a remote HTTPS endpoint, or SOCKET_PATH for the local Unix socket.",
+			"DNSWEAVER_INCUS_SOCKET_PATH=/var/lib/incus/unix.socket",
+		))
+	}
+
+	// Unified Incus TLS env vars for remote HTTPS endpoints. Remote Incus
+	// authentication uses a TLS client certificate/key pair (CERT_FILE/KEY_FILE).
+	cfg.IncusTLSCAFile = getEnv("DNSWEAVER_INCUS_TLS_CA_FILE")
+	cfg.IncusTLSCertFile = getEnv("DNSWEAVER_INCUS_TLS_CERT_FILE")
+	cfg.IncusTLSKeyFile = getEnv("DNSWEAVER_INCUS_TLS_KEY_FILE")
+	cfg.IncusTLSServerName = getEnv("DNSWEAVER_INCUS_TLS_SERVER_NAME")
+	cfg.IncusTLSMinVersion = getEnv("DNSWEAVER_INCUS_TLS_MIN_VERSION")
+	cfg.IncusTLSPinSHA256 = getEnv("DNSWEAVER_INCUS_TLS_PIN_SHA256")
+	if v := getEnv("DNSWEAVER_INCUS_TLS_SKIP_VERIFY"); v != "" {
+		cfg.IncusTLSSkipVerify = parseBool(v, false)
+	}
+
+	// Incus trust-token enrollment (#134).
+	cfg.IncusTrustToken = getEnv("DNSWEAVER_INCUS_TRUST_TOKEN")
+	cfg.IncusCertStore = getEnv("DNSWEAVER_INCUS_CERT_STORE")
+
 	return cfg, errs
+}
+
+func healthListenerFromEnvironment(fallbackAddress string, fallbackAllowNetwork bool) (string, bool, []*ConfigError) {
+	address := fallbackAddress
+	allowNetwork := fallbackAllowNetwork
+	var errs []*ConfigError
+
+	if configured := strings.TrimSpace(getEnv("DNSWEAVER_HEALTH_ADDRESS")); configured != "" {
+		address = configured
+	}
+	if configured := getEnv("DNSWEAVER_HEALTH_ALLOW_NETWORK"); configured != "" {
+		parsed, ok := parseBoolValue(configured)
+		if !ok {
+			errs = append(errs, configErrFull(
+				"DNSWEAVER_HEALTH_ALLOW_NETWORK",
+				fmt.Sprintf("invalid boolean %q", configured),
+				"Use true only when a non-loopback listener is required and network access is separately restricted",
+				"DNSWEAVER_HEALTH_ALLOW_NETWORK=false",
+			))
+		} else {
+			allowNetwork = parsed
+		}
+	}
+
+	if err := validateHealthListener(address, allowNetwork); err != nil {
+		errs = append(errs, err)
+	}
+	return address, allowNetwork, errs
+}
+
+func validateHealthListener(address string, allowNetwork bool) *ConfigError {
+	ip := net.ParseIP(strings.TrimSpace(address))
+	if ip == nil {
+		return configErrFull(
+			"DNSWEAVER_HEALTH_ADDRESS",
+			fmt.Sprintf("must be an IP address without a port, got %q", address),
+			"Use 127.0.0.1 or ::1 for local-only access; non-loopback addresses also require DNSWEAVER_HEALTH_ALLOW_NETWORK=true",
+			"DNSWEAVER_HEALTH_ADDRESS=127.0.0.1",
+		)
+	}
+	if ip.IsMulticast() {
+		return configErrFull(
+			"DNSWEAVER_HEALTH_ADDRESS",
+			fmt.Sprintf("multicast address %q cannot be used for the management listener", address),
+			"Use a loopback, unicast, or wildcard address",
+			"DNSWEAVER_HEALTH_ADDRESS=127.0.0.1",
+		)
+	}
+	if !ip.IsLoopback() && !allowNetwork {
+		return configErrFull(
+			"DNSWEAVER_HEALTH_ALLOW_NETWORK",
+			fmt.Sprintf("must be true before binding the management listener to non-loopback address %q", address),
+			"Non-loopback management access is not authenticated; restrict it with firewall or network policy controls",
+			"DNSWEAVER_HEALTH_ADDRESS=0.0.0.0 DNSWEAVER_HEALTH_ALLOW_NETWORK=true",
+		)
+	}
+	return nil
 }
 
 // instanceIDPattern matches valid instance IDs: alphanumeric, hyphens, underscores, dots.
@@ -403,4 +626,15 @@ func validateInstanceID(id string) error {
 		return fmt.Errorf("invalid format %q (must be alphanumeric, hyphens, underscores, dots; must start with alphanumeric)", id)
 	}
 	return nil
+}
+
+// defaultDockerHost is the standard DOCKER_HOST (e.g. tcp://host:2375) when set,
+// else the local socket. It is only a fallback: DNSWEAVER_DOCKER_HOST and an
+// explicit YAML docker.host both override it. TLS comes from DOCKER_CERT_PATH
+// and DOCKER_TLS_VERIFY via the Docker SDK.
+func defaultDockerHost() string {
+	if v := getEnv("DOCKER_HOST"); v != "" {
+		return v
+	}
+	return DefaultDockerHost
 }

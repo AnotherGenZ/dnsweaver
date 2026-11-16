@@ -1,3 +1,8 @@
+---
+title: Pi-hole DNS Provider
+description: Automatically create and delete Pi-hole local DNS records from Docker containers and Kubernetes with dnsweaver — Pi-hole v6 API or file mode.
+---
+
 # Pi-hole
 
 Pi-hole is a network-wide ad blocker that also serves as a local DNS server. dnsweaver supports Pi-hole through its API or by direct file manipulation.
@@ -62,7 +67,7 @@ volumes:
 | `RELOAD_COMMAND` | File mode | `pihole restartdns reload-lists` | Command to reload after file changes |
 | `ZONE` | No | - | DNS zone for record filtering |
 | `TTL` | No | `300` | Record TTL in seconds |
-| `RECORD_TYPE` | Yes | - | `A`, `AAAA`, or `CNAME` |
+| `RECORD_TYPE` | Yes | - | `A` or `CNAME` |
 | `TARGET` | Yes | - | Record value |
 | `DOMAINS` | Yes | - | Glob patterns to match |
 | `EXCLUDE_DOMAINS` | No | - | Patterns to exclude |
@@ -147,11 +152,31 @@ services:
 
 In file mode, dnsweaver manages these files:
 
-- `custom.list` - A/AAAA records
+- `custom.list` - A records
 - `05-pihole-custom-cname.conf` - CNAME records
 
 !!! warning
     File mode requires dnsweaver to have write access to Pi-hole's config directory. Changes may require restarting Pi-hole's FTL service.
+
+## TLS Configuration (API Mode)
+
+When using API mode against a Pi-hole instance served over HTTPS — typically through a reverse proxy with a private CA — dnsweaver supports the unified TLS surface:
+
+| Env key | Purpose |
+|---------|---------|
+| `DNSWEAVER_PIHOLE_TLS_CA_FILE` | Trust a private CA bundle (PEM) |
+| `DNSWEAVER_PIHOLE_TLS_CERT_FILE` / `_TLS_KEY_FILE` | Present a client certificate (mTLS) |
+| `DNSWEAVER_PIHOLE_TLS_SERVER_NAME` | Override SNI / hostname verification |
+| `DNSWEAVER_PIHOLE_TLS_SKIP_VERIFY` | Disable verification (development only) |
+| `DNSWEAVER_PIHOLE_TLS_MIN_VERSION` | `1.2` (default) or `1.3` |
+
+The legacy `DNSWEAVER_PIHOLE_INSECURE_SKIP_VERIFY` variable still works but emits a deprecation warning and will be removed in a future major release. File mode does not perform HTTP requests so these keys have no effect there.
+
+!!! warning "Mounted certs must be readable by uid/gid 1000"
+    The container drops privileges to the unprivileged `dnsweaver` user, so a
+    client key mounted `root:root 0600` yields `permission denied`. See
+    [TLS Certificate File Permissions](../configuration/environment.md#tls-certificate-file-permissions).
+
 
 ## Troubleshooting
 

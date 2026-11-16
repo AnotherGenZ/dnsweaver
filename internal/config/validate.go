@@ -6,7 +6,8 @@ import (
 	"regexp"
 	"strings"
 
-	"gitlab.bluewillows.net/root/dnsweaver/pkg/provider"
+	"github.com/maxfield-allison/dnsweaver/internal/target"
+	"github.com/maxfield-allison/dnsweaver/pkg/provider"
 )
 
 // validateConfig performs cross-field validation on the complete configuration.
@@ -55,7 +56,7 @@ func validateConfig(cfg *Config) []*ConfigError {
 
 	// Validate platform value
 	switch cfg.Global.Platform {
-	case "docker", "kubernetes", "both":
+	case "docker", "kubernetes", "both", "none":
 		// Valid
 	case "":
 		// Will use default
@@ -63,7 +64,7 @@ func validateConfig(cfg *Config) []*ConfigError {
 		errs = append(errs, configErrFull(
 			"platform",
 			fmt.Sprintf("invalid value %q", cfg.Global.Platform),
-			"Must be one of: docker, kubernetes, both",
+			"Must be one of: docker, kubernetes, both, none",
 			"DNSWEAVER_PLATFORM=docker",
 		))
 	}
@@ -99,6 +100,33 @@ func validateTargetRecordType(inst *ProviderInstanceConfig) []*ConfigError {
 	var errs []*ConfigError
 	prefix := envPrefix(inst.Name)
 	field := prefix + "TARGET"
+
+	// When a dynamic target mode is configured, the literal TARGET is only an
+	// optional fallback and is validated against the record type when present;
+	// the resolved value's family is enforced at runtime. Dynamic modes resolve
+	// IP addresses, so they are incompatible with CNAME records.
+	if inst.TargetMode != "" {
+		if _, err := target.Parse(inst.TargetMode, target.FamilyIPv4); err != nil {
+			errs = append(errs, configErrFull(
+				prefix+"TARGET_MODE",
+				err.Error(),
+				"Use 'public' or 'interface:<name>' (e.g. interface:eth0)",
+				prefix+"TARGET_MODE=public",
+			))
+		}
+		if inst.RecordType == provider.RecordTypeCNAME {
+			errs = append(errs, configErrFull(
+				prefix+"TARGET_MODE",
+				fmt.Sprintf("TARGET_MODE %q cannot be used with CNAME records", inst.TargetMode),
+				"Dynamic target modes resolve IP addresses; use an A or AAAA record type",
+				prefix+"RECORD_TYPE=A",
+			))
+		}
+		if inst.Target == "" {
+			// No fallback to validate; runtime resolution enforces the family.
+			return errs
+		}
+	}
 
 	switch inst.RecordType {
 	case provider.RecordTypeA:
@@ -137,7 +165,7 @@ func validateTargetRecordType(inst *ProviderInstanceConfig) []*ConfigError {
 				prefix+"TARGET=host.example.com",
 			))
 		}
-	case provider.RecordTypeTXT, provider.RecordTypeSRV:
+	case provider.RecordTypeTXT, provider.RecordTypeSRV, provider.RecordTypeMX, provider.RecordTypeNS:
 		// Flexible targets, no validation needed
 	case provider.RecordTypeHTTPS:
 		// HTTPS records are managed automatically as companion records; no target validation needed
